@@ -62,7 +62,7 @@ async function adminUnlockFlow_(){
   if(ok){
     adminSet_(key);
     setStatus("管理员模式已开启 ✅", true);
-    alert("管理员模式已开启 ✅现在可以在【总控台】看到【劳效/工时汇总】按钮。");
+    alert("管理员模式已开启 ✅\n现在可以在【总控台】看到【劳效/工时汇总】按钮。");
   }else{
     adminClear_();
     setStatus("口令错误 ❌", false);
