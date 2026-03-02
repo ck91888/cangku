@@ -623,6 +623,17 @@ async function submitEventSync_(o, silent){
   if(er === "task_not_started"){
     throw new Error("该环节还没点【开始】。\n请先点击【开始理货/开始拣货/开始换单/开始批量出库】再扫码加入。");
   }
+    if(er === "device_has_open_session"){
+  const ob = (res && res.open_biz) ? res.open_biz : "";
+  const ot = (res && res.open_task) ? res.open_task : "";
+  const os = (res && res.open_session) ? res.open_session : "";
+  throw new Error(
+    "本机还有未结束趟次：\n" +
+    (ob && ot ? (ob + " / " + ot) : "") +
+    (os ? ("\n" + os) : "") +
+    "\n\n请先点击【结束】把上一趟结束后，再开始新的。"
+  );
+}
   throw new Error(er);
 }
 
