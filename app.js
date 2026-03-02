@@ -12,6 +12,7 @@ var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
 /** ===== Router ===== */
 var pages = [
   "home","badge","global_menu","b2c_menu",
+  "import_menu","import_unload","import_scan_pallet","import_loadout",
   "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
   "active_now",
   "report"
@@ -126,9 +127,13 @@ function renderPages(){
   if(cur==="b2c_qc"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2c_disposal"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2c_relabel"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="import_unload"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="import_scan_pallet"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="import_loadout"){ restoreState(); renderActiveLists(); refreshUI(); }
 
   if(cur==="active_now"){ refreshActiveNow(); }
   if(cur==="b2c_menu"){ refreshUI(); }
+  if(cur==="import_menu"){ refreshUI(); }
 }
 window.addEventListener("hashchange", renderPages);
 
@@ -168,6 +173,9 @@ var activeBulkOut = new Set();
 var activeReturn = new Set();
 var activeQc = new Set();
 var activeDisposal = new Set();
+var activeImportUnload = new Set();
+var activeImportScanPallet = new Set();
+var activeImportLoadout = new Set();
 
 var relabelTimerHandle = null;
 var relabelStartTs = null;
@@ -277,6 +285,9 @@ function keyActiveBulkOut(){ return "activeBulkOut_" + (currentSessionId || "NA"
 function keyActiveReturn(){ return "activeReturn_" + (currentSessionId || "NA"); }
 function keyActiveQc(){ return "activeQc_" + (currentSessionId || "NA"); }
 function keyActiveDisposal(){ return "activeDisposal_" + (currentSessionId || "NA"); }
+function keyActiveImportUnload(){ return "activeImportUnload_" + (currentSessionId || "NA"); }
+function keyActiveImportScanPallet(){ return "activeImportScanPallet_" + (currentSessionId || "NA"); }
+function keyActiveImportLoadout(){ return "activeImportLoadout_" + (currentSessionId || "NA"); }
 
 function keyInbounds(){ return "inbounds_" + (currentSessionId || "NA"); }
 function keyBulkOutOrders(){ return "bulkoutOrders_" + (currentSessionId || "NA"); }
@@ -322,6 +333,9 @@ function persistState(){
   localStorage.setItem(keyActiveReturn(), JSON.stringify(Array.from(activeReturn)));
   localStorage.setItem(keyActiveQc(), JSON.stringify(Array.from(activeQc)));
   localStorage.setItem(keyActiveDisposal(), JSON.stringify(Array.from(activeDisposal)));
+  localStorage.setItem(keyActiveImportUnload(), JSON.stringify(Array.from(activeImportUnload)));
+  localStorage.setItem(keyActiveImportScanPallet(), JSON.stringify(Array.from(activeImportScanPallet)));
+  localStorage.setItem(keyActiveImportLoadout(), JSON.stringify(Array.from(activeImportLoadout)));
   localStorage.setItem(keyInbounds(), JSON.stringify(Array.from(scannedInbounds)));
   localStorage.setItem(keyBulkOutOrders(), JSON.stringify(Array.from(scannedBulkOutOrders)));
 }
@@ -338,6 +352,9 @@ function restoreState(){
   try{ activeReturn = new Set(JSON.parse(localStorage.getItem(keyActiveReturn()) || "[]")); }catch(e){ activeReturn = new Set(); }
   try{ activeQc = new Set(JSON.parse(localStorage.getItem(keyActiveQc()) || "[]")); }catch(e){ activeQc = new Set(); }
   try{ activeDisposal = new Set(JSON.parse(localStorage.getItem(keyActiveDisposal()) || "[]")); }catch(e){ activeDisposal = new Set(); }
+  try{ activeImportUnload = new Set(JSON.parse(localStorage.getItem(keyActiveImportUnload()) || "[]")); }catch(e){ activeImportUnload = new Set(); }
+  try{ activeImportScanPallet = new Set(JSON.parse(localStorage.getItem(keyActiveImportScanPallet()) || "[]")); }catch(e){ activeImportScanPallet = new Set(); }
+  try{ activeImportLoadout = new Set(JSON.parse(localStorage.getItem(keyActiveImportLoadout()) || "[]")); }catch(e){ activeImportLoadout = new Set(); }
   try{ scannedInbounds = new Set(JSON.parse(localStorage.getItem(keyInbounds()) || "[]")); }catch(e){ scannedInbounds = new Set(); }
   try{ scannedBulkOutOrders = new Set(JSON.parse(localStorage.getItem(keyBulkOutOrders()) || "[]")); }catch(e){ scannedBulkOutOrders = new Set(); }
 }
@@ -535,8 +552,12 @@ async function submitEventSync_(o, silent){
   var res = await jsonp(LOCK_URL, params);
 
   if(!res || res.ok !== true){
-    throw new Error((res && res.error) ? res.error : "提交失败：event_submit failed");
+  var er = (res && res.error) ? String(res.error) : "提交失败：event_submit failed";
+  if(er === "task_not_started"){
+    throw new Error("该环节还没点【开始】。\n请先点击【开始理货/开始拣货/开始换单/开始批量出库】再扫码加入。");
   }
+  throw new Error(er);
+}
 
   if(res.locked === false){
     var lk = res.lock || {};
@@ -587,6 +608,9 @@ function cleanupLocalSession_(){
   localStorage.removeItem(keyActiveReturn());
   localStorage.removeItem(keyActiveQc());
   localStorage.removeItem(keyActiveDisposal());
+  localStorage.removeItem(keyActiveImportUnload());
+  localStorage.removeItem(keyActiveImportScanPallet());
+  localStorage.removeItem(keyActiveImportLoadout());
   localStorage.removeItem(keyInbounds());
   localStorage.removeItem(keyBulkOutOrders());
   localStorage.removeItem(keyRecent());
@@ -624,7 +648,7 @@ async function endSessionGlobal_(){
 }
 
 function taskAutoSession_(task){
-  return task === "PACK" || task === "退件入库" || task === "质检" || task === "废弃处理";
+  return task === "PACK" || task === "退件入库" || task === "质检" || task === "废弃处理" || task === "卸货" || task === "过机扫描码托" || task === "装柜/出货";
 }
 
 async function tryAutoEndSessionAfterLeave_(){
@@ -678,6 +702,9 @@ function isAlreadyActive(task, badge){
   if(task==="退件入库") return activeReturn.has(badge);
   if(task==="质检") return activeQc.has(badge);
   if(task==="废弃处理") return activeDisposal.has(badge);
+  if(task==="卸货") return activeImportUnload.has(badge);
+  if(task==="过机扫描码托") return activeImportScanPallet.has(badge);
+  if(task==="装柜/出货") return activeImportLoadout.has(badge);
   return false;
 }
 function applyActive(task, action, badge){
@@ -689,6 +716,9 @@ function applyActive(task, action, badge){
   if(task==="退件入库"){ if(action==="join") activeReturn.add(badge); if(action==="leave") activeReturn.delete(badge); }
   if(task==="质检"){ if(action==="join") activeQc.add(badge); if(action==="leave") activeQc.delete(badge); }
   if(task==="废弃处理"){ if(action==="join") activeDisposal.add(badge); if(action==="leave") activeDisposal.delete(badge); }
+  if(task==="卸货"){ if(action==="join") activeImportUnload.add(badge); if(action==="leave") activeImportUnload.delete(badge); }
+  if(task==="过机扫描码托"){ if(action==="join") activeImportScanPallet.add(badge); if(action==="leave") activeImportScanPallet.delete(badge); }
+  if(task==="装柜/出货"){ if(action==="join") activeImportLoadout.add(badge); if(action==="leave") activeImportLoadout.delete(badge); }
 }
 
 /** ===== Render lists ===== */
@@ -732,6 +762,21 @@ function renderActiveLists(){
   var xl = document.getElementById("returnActiveList");
   if(xc) xc.textContent = String(activeReturn.size);
   if(xl) xl.innerHTML = renderSetToHtml(activeReturn);
+
+  var ic = document.getElementById("importUnloadCount");
+  var il = document.getElementById("importUnloadActiveList");
+  if(ic) ic.textContent = String(activeImportUnload.size);
+  if(il) il.innerHTML = renderSetToHtml(activeImportUnload);
+
+  var sc = document.getElementById("importScanPalletCount");
+  var sl = document.getElementById("importScanPalletActiveList");
+  if(sc) sc.textContent = String(activeImportScanPallet.size);
+  if(sl) sl.innerHTML = renderSetToHtml(activeImportScanPallet);
+
+  var lc = document.getElementById("importLoadoutCount");
+  var ll = document.getElementById("importLoadoutActiveList");
+  if(lc) lc.textContent = String(activeImportLoadout.size);
+  if(ll) ll.innerHTML = renderSetToHtml(activeImportLoadout);
 }
 
 function renderInboundCountUI(){
@@ -840,33 +885,31 @@ async function refreshActiveNow(){
 async function startTally(){
   try{
     if(currentSessionId){
-      // 若 session 已关闭，提示重新开始
       if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始理货】重新开新趟次，或扫码加入别的趟次。"))) return;
-
       restoreState(); renderActiveLists(); renderInboundCountUI(); refreshUI();
-      setStatus("检测到未结束趟次：已恢复现场 ✅（如需重开请先结束）", false);
-      return;
+    }else{
+      currentSessionId = makePickSessionId();
+      localStorage.setItem("pick_session_id", currentSessionId);
+
+      activeTally = new Set();
+      scannedInbounds = new Set();
+      persistState();
     }
 
-    currentSessionId = makePickSessionId();
-    localStorage.setItem("pick_session_id", currentSessionId);
-
-    activeTally = new Set();
-    scannedInbounds = new Set();
-    persistState();
-
+    // ✅ 无论是否已有趟次，都补发一次 start（同步确认）
     var evId = makeEventId({ event:"start", biz:"B2C", task:"TALLY", wave_id:"", badgeRaw:"" });
     if(!hasRecent(evId)){
-      submitEvent({ event:"start", event_id: evId, biz:"B2C", task:"TALLY", pick_session_id: currentSessionId });
+      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"TALLY", pick_session_id: currentSessionId }, true);
       addRecent(evId);
     }
 
     refreshUI();
     renderActiveLists();
     renderInboundCountUI();
-    setStatus("理货开始已记录（待上传）✅", true);
+    setStatus("理货开始已记录 ✅ 现在可以扫码加入", true);
   }catch(e){
     setStatus("理货开始失败 ❌ " + e, false);
+    alert(String(e));
   }
 }
 async function endTally(){ return endSessionGlobal_(); }
@@ -875,31 +918,29 @@ async function startBulkOut(){
   try{
     if(currentSessionId){
       if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始批量出库】重新开新趟次，或扫码加入别的趟次。"))) return;
-
       restoreState(); renderActiveLists(); renderBulkOutUI(); refreshUI();
-      setStatus("检测到未结束趟次：已恢复现场 ✅（如需重开请先结束）", false);
-      return;
+    }else{
+      currentSessionId = makePickSessionId();
+      localStorage.setItem("pick_session_id", currentSessionId);
+
+      activeBulkOut = new Set();
+      scannedBulkOutOrders = new Set();
+      persistState();
     }
-
-    currentSessionId = makePickSessionId();
-    localStorage.setItem("pick_session_id", currentSessionId);
-
-    activeBulkOut = new Set();
-    scannedBulkOutOrders = new Set();
-    persistState();
 
     var evId = makeEventId({ event:"start", biz:"B2C", task:"批量出库", wave_id:"", badgeRaw:"" });
     if(!hasRecent(evId)){
-      submitEvent({ event:"start", event_id: evId, biz:"B2C", task:"批量出库", pick_session_id: currentSessionId });
+      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"批量出库", pick_session_id: currentSessionId }, true);
       addRecent(evId);
     }
 
     refreshUI();
     renderActiveLists();
     renderBulkOutUI();
-    setStatus("批量出库开始已记录（待上传）✅", true);
+    setStatus("批量出库开始已记录 ✅ 现在可以扫码加入", true);
   }catch(e){
     setStatus("批量出库开始失败 ❌ " + e, false);
+    alert(String(e));
   }
 }
 async function endBulkOut(){ return endSessionGlobal_(); }
@@ -908,32 +949,30 @@ async function startPicking(){
   try{
     if(currentSessionId){
       if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始拣货】重新开新趟次，或扫码加入别的趟次。"))) return;
-
       restoreState(); renderActiveLists(); refreshUI();
-      setStatus("检测到未结束趟次：已恢复现场 ✅（如需重开请先结束）", false);
-      return;
+    }else{
+      currentSessionId = makePickSessionId();
+      localStorage.setItem("pick_session_id", currentSessionId);
+
+      scannedWaves = new Set();
+      activePick = new Set();
+      persistState();
+
+      leaderPickOk = false;
+      syncLeaderPickUI();
     }
-
-    currentSessionId = makePickSessionId();
-    localStorage.setItem("pick_session_id", currentSessionId);
-
-    scannedWaves = new Set();
-    activePick = new Set();
-    persistState();
-
-    leaderPickOk = false;
-    syncLeaderPickUI();
 
     var evId = makeEventId({ event:"start", biz:"B2C", task:"PICK", wave_id:"", badgeRaw:"" });
     if(!hasRecent(evId)){
-      submitEvent({ event:"start", event_id: evId, biz:"B2C", task:"PICK", pick_session_id: currentSessionId });
+      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"PICK", pick_session_id: currentSessionId }, true);
       addRecent(evId);
     }
 
     refreshUI();
-    setStatus("拣货开始已记录（待上传）✅ 现在可立即��码加入", true);
+    setStatus("拣货开始已记录 ✅ 现在可以扫码加入", true);
   }catch(e){
     setStatus("拣货开始失败 ❌ " + e, false);
+    alert(String(e));
   }
 }
 
@@ -956,32 +995,26 @@ async function startRelabel(){
   try{
     if(currentSessionId){
       if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始换单】重新开新趟次，或扫码加入别的趟次。"))) return;
-
       restoreState(); renderActiveLists(); refreshUI();
-      setStatus("检测到未结束趟次：已恢复现场 ✅（如需重开请先结束）", false);
-      return;
+    }else{
+      currentSessionId = makePickSessionId();
+      localStorage.setItem("pick_session_id", currentSessionId);
+
+      activeRelabel = new Set();
+      persistState();
     }
-
-    currentSessionId = makePickSessionId();
-    localStorage.setItem("pick_session_id", currentSessionId);
-
-    activeRelabel = new Set();
-    persistState();
-
-    relabelStartTs = Date.now();
-    setRelabelTimerText("进行中: 00:00");
-    startRelabelTimer();
 
     var evId = makeEventId({ event:"start", biz:"B2C", task:"RELABEL", wave_id:"", badgeRaw:"" });
     if(!hasRecent(evId)){
-      submitEvent({ event:"start", event_id: evId, biz:"B2C", task:"RELABEL", pick_session_id: currentSessionId });
+      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"RELABEL", pick_session_id: currentSessionId }, true);
       addRecent(evId);
     }
 
     refreshUI();
-    setStatus("换单开始已记录（待上传）✅", true);
+    setStatus("换单开始已记录 ✅ 现在可以扫码加入", true);
   }catch(e){
     setStatus("换单开始失败 ❌ " + e, false);
+    alert(String(e));
   }
 }
 async function endRelabel(){ return endSessionGlobal_(); }
@@ -1091,6 +1124,9 @@ async function leaveWork(biz, task){
   if(task === "退件入库" && activeReturn.size === 0){ alert("当前没有人在退件入库作业中（无需退出）。"); return; }
   if(task === "质检" && activeQc.size === 0){ alert("当前没有人在质检作业中（无需退出）。"); return; }
   if(task === "废弃处理" && activeDisposal.size === 0){ alert("当前没有人在废弃处理作业中（无需退出）。"); return; }
+  if(task === "卸货" && activeImportUnload.size === 0){ alert("当前没有人在卸货作业中（无需退出）。"); return; }
+  if(task === "过机扫描码托" && activeImportScanPallet.size === 0){ alert("当前没有人在过机扫描码托作业中（无需退出）。"); return; }
+  if(task === "装柜/出货" && activeImportLoadout.size === 0){ alert("当前没有人在装柜/出货作业中（无需退出）。"); return; }
 
   laborAction = "leave"; laborBiz = biz; laborTask = task;
   scanMode = "labor";
@@ -1554,16 +1590,36 @@ function comingSoon(msg){
 
 
 /** ===== Report (Admin-only) ===== */
-var REPORT_CACHE = { header:[], rows:[], summary:[], meta:{} };
+var REPORT_CACHE = { header:[], rows:[], summary:[], people:[], timeline:[], anomalies_list:[], meta:{} };
 
 function pad2_(n){ n=String(n); return n.length<2 ? ("0"+n) : n; }
 function kstDayKey_(ms){
   var d = new Date(ms + 9*3600*1000);
   return d.getUTCFullYear() + "-" + pad2_(d.getUTCMonth()+1) + "-" + pad2_(d.getUTCDate());
 }
+function kstDayStartMs_(dayKey){
+  return Date.parse(dayKey + "T00:00:00.000Z") - 9*3600*1000;
+}
+function kstDayEndMs_(dayKey){
+  return kstDayStartMs_(dayKey) + 24*3600*1000 - 1;
+}
 function msToMin_(ms){ return Math.round((ms||0)/60000); }
+function fmtTs_(ms){
+  if(!ms) return "-";
+  try{ return new Date(ms).toLocaleString(); }catch(e){ return String(ms); }
+}
 
-function reportLoadToday(){
+function setReportDefaultDates_(){
+  var fromEl = document.getElementById("reportDateFrom");
+  var toEl = document.getElementById("reportDateTo");
+  if(!fromEl || !toEl) return;
+
+  var today = kstDayKey_(Date.now());
+  if(!fromEl.value) fromEl.value = today;
+  if(!toEl.value) toEl.value = today;
+}
+
+function reportLoadRange(){
   if(!adminIsUnlocked_()){
     alert("管理员功能：请先解锁（标题连点 7 次）");
     return;
@@ -1571,17 +1627,31 @@ function reportLoadToday(){
   var k = adminKey_();
   if(!k){ alert("未检测到管理员口令，请重新解锁"); return; }
 
-  var now = Date.now();
-  var dayKey = kstDayKey_(now);
-  var startMs = Date.parse(dayKey + "T00:00:00.000Z") - 9*3600*1000;
+  var fromEl = document.getElementById("reportDateFrom");
+  var toEl = document.getElementById("reportDateTo");
+  var dayFrom = String((fromEl && fromEl.value) || "").trim();
+  var dayTo = String((toEl && toEl.value) || "").trim();
+  if(!dayFrom || !dayTo){
+    alert("请选择开始和结束日期（KST）");
+    return;
+  }
+  if(dayFrom > dayTo){
+    alert("开始日期不能晚于结束日期");
+    return;
+  }
 
-  setStatus("拉取今天数据中... ⏳", true);
+  var startMs = kstDayStartMs_(dayFrom);
+  var endMs = kstDayEndMs_(dayTo);
+  var rangeLabel = dayFrom + " ~ " + dayTo + " (KST)";
+
+  setStatus("拉取区间数据中... ⏳", true);
 
   jsonp(LOCK_URL, {
     action: "admin_events_tail",
     k: k,
     limit: 20000,
-    since_ms: String(startMs)
+    since_ms: String(startMs),
+    until_ms: String(endMs)
   }).then(function(res){
     if(!res || res.ok !== true){
       setStatus("拉取失败 ❌ " + (res && res.error ? res.error : "unknown"), false);
@@ -1591,7 +1661,12 @@ function reportLoadToday(){
 
     REPORT_CACHE.header = res.header || [];
     REPORT_CACHE.rows = res.rows || [];
-    REPORT_CACHE.meta = { asof: res.asof || Date.now(), dayKey: dayKey };
+    REPORT_CACHE.meta = {
+      asof: res.asof || Date.now(),
+      dayFrom: dayFrom,
+      dayTo: dayTo,
+      rangeLabel: rangeLabel
+    };
 
     buildReportSummary_();
     renderReport_();
@@ -1600,6 +1675,15 @@ function reportLoadToday(){
     setStatus("拉取异常 ❌", false);
     alert("拉取异常：" + String(e && e.message ? e.message : e));
   });
+}
+
+function reportLoadToday(){
+  var dayKey = kstDayKey_(Date.now());
+  var fromEl = document.getElementById("reportDateFrom");
+  var toEl = document.getElementById("reportDateTo");
+  if(fromEl) fromEl.value = dayKey;
+  if(toEl) toEl.value = dayKey;
+  reportLoadRange();
 }
 
 function buildReportSummary_(){
@@ -1616,13 +1700,36 @@ function buildReportSummary_(){
 
   var active = {}; // badge -> {t, biz, task}
   var acc = {};    // badge -> { total_ms, tasks: {biz|task:ms} }
-  var anomalies = { open:0, leave_without_join:0 };
+  var timelineByBadge = {}; // badge -> [{biz,task,start_ms,end_ms,duration_ms,status}]
+  var anomalies = { open:0, leave_without_join:0, rejoin_without_leave:0 };
+  var anomaliesList = [];
 
   function addDur(badge, biz, task, dur){
     if(!acc[badge]) acc[badge] = { total_ms:0, tasks:{} };
     acc[badge].total_ms += dur;
     var k = biz + "|" + task;
     acc[badge].tasks[k] = (acc[badge].tasks[k]||0) + dur;
+  }
+  function addTimeline(badge, biz, task, startMs, endMs, status){
+    if(!timelineByBadge[badge]) timelineByBadge[badge] = [];
+    timelineByBadge[badge].push({
+      biz: biz || "",
+      task: task || "",
+      start_ms: startMs || 0,
+      end_ms: endMs || 0,
+      duration_ms: Math.max(0, (endMs||0) - (startMs||0)),
+      status: status || "NORMAL"
+    });
+  }
+  function addAnomaly(type, badge, biz, task, atMs, note){
+    anomaliesList.push({
+      type: type || "unknown",
+      badge: badge || "",
+      biz: biz || "",
+      task: task || "",
+      at_ms: atMs || 0,
+      note: note || ""
+    });
   }
 
   var now = Date.now();
@@ -1646,15 +1753,22 @@ function buildReportSummary_(){
     if(ev==="join"){
       // 若已有未结束，先按当前时间截断
       if(active[badge]){
-        addDur(badge, active[badge].biz, active[badge].task, Math.max(0, t - active[badge].t));
+        var durRejoin = Math.max(0, t - active[badge].t);
+        addDur(badge, active[badge].biz, active[badge].task, durRejoin);
+        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "AUTO_CLOSE_REJOIN");
+        anomalies.rejoin_without_leave++;
+        addAnomaly("rejoin_without_leave", badge, active[badge].biz, active[badge].task, t, "join 前未 leave，已自动截断上一段");
       }
       active[badge] = { t:t, biz:biz, task:task };
     }else if(ev==="leave"){
       if(active[badge]){
-        addDur(badge, active[badge].biz, active[badge].task, Math.max(0, t - active[badge].t));
+        var durLeave = Math.max(0, t - active[badge].t);
+        addDur(badge, active[badge].biz, active[badge].task, durLeave);
+        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "NORMAL");
         delete active[badge];
       }else{
         anomalies.leave_without_join++;
+        addAnomaly("leave_without_join", badge, biz, task, t, "leave 无对应 join");
       }
     }
   }
@@ -1662,44 +1776,152 @@ function buildReportSummary_(){
   // 还在岗的按 now 结算
   Object.keys(active).forEach(function(b){
     anomalies.open++;
-    addDur(b, active[b].biz, active[b].task, Math.max(0, now - active[b].t));
+    var durOpen = Math.max(0, now - active[b].t);
+    addDur(b, active[b].biz, active[b].task, durOpen);
+    addTimeline(b, active[b].biz, active[b].task, active[b].t, now, "OPEN");
+    addAnomaly("open_not_left", b, active[b].biz, active[b].task, now, "统计截止时仍在岗");
   });
 
   // 展平成表格
   var out = [];
+  var people = [];
   Object.keys(acc).sort().forEach(function(badge){
     var obj = acc[badge];
     var tasks = obj.tasks || {};
+
+    var taskRows = [];
     Object.keys(tasks).sort().forEach(function(k){
       var parts = k.split("|");
+      var mins = msToMin_(tasks[k]);
+      taskRows.push({
+        biz: parts[0]||"",
+        task: parts[1]||"",
+        minutes: mins
+      });
+
       out.push({
         badge: badge,
         biz: parts[0]||"",
         task: parts[1]||"",
-        minutes: msToMin_(tasks[k]),
+        minutes: mins,
         total_minutes: msToMin_(obj.total_ms)
       });
     });
+
+    taskRows.sort(function(a,b){ return b.minutes - a.minutes; });
+    people.push({
+      badge: badge,
+      total_minutes: msToMin_(obj.total_ms),
+      tasks: taskRows
+    });
   });
 
+  people.sort(function(a,b){ return b.total_minutes - a.total_minutes; });
+
+  var timeline = Object.keys(timelineByBadge).sort().map(function(badge){
+    var items = (timelineByBadge[badge] || []).slice().sort(function(a,b){
+      return (a.start_ms||0) - (b.start_ms||0);
+    }).map(function(x){
+      return {
+        biz: x.biz,
+        task: x.task,
+        start_ms: x.start_ms,
+        end_ms: x.end_ms,
+        minutes: msToMin_(x.duration_ms),
+        status: x.status
+      };
+    });
+    return { badge: badge, items: items };
+  });
+
+  anomaliesList.sort(function(a,b){ return (b.at_ms||0) - (a.at_ms||0); });
+
   REPORT_CACHE.summary = out;
+  REPORT_CACHE.people = people;
+  REPORT_CACHE.timeline = timeline;
+  REPORT_CACHE.anomalies_list = anomaliesList;
   REPORT_CACHE.meta.anomalies = anomalies;
 }
 
 function renderReport_(){
   var metaEl = document.getElementById("reportMeta");
+  var anomaliesEl = document.getElementById("reportAnomalies");
+  var peopleEl = document.getElementById("reportPeople");
+  var timelineEl = document.getElementById("reportTimeline");
   var tableEl = document.getElementById("reportTable");
-  if(!metaEl || !tableEl) return;
+  if(!metaEl || !anomaliesEl || !peopleEl || !timelineEl || !tableEl) return;
 
   var m = REPORT_CACHE.meta || {};
   var anomalies = (m.anomalies || {});
   var sum = REPORT_CACHE.summary || [];
+  var people = REPORT_CACHE.people || [];
+  var timeline = REPORT_CACHE.timeline || [];
+  var anomaliesList = REPORT_CACHE.anomalies_list || [];
 
   metaEl.textContent =
-    "日期(KST): " + (m.dayKey||"-") +
+    "区间(KST): " + (m.rangeLabel||"-") +
     " ｜ rows=" + (REPORT_CACHE.rows||[]).length +
     " ｜ open=" + (anomalies.open||0) +
-    " ｜ leave无join=" + (anomalies.leave_without_join||0);
+    " ｜ leave无join=" + (anomalies.leave_without_join||0) +
+    " ｜ 重复join=" + (anomalies.rejoin_without_leave||0);
+
+  if(anomaliesList.length===0){
+    anomaliesEl.innerHTML = '<div class="muted">异常列表：无</div>';
+  }else{
+    anomaliesEl.innerHTML =
+      '<div style="font-weight:700;margin-bottom:6px;">异常列表</div>' +
+      anomaliesList.map(function(a){
+        return (
+          '<div style="border:1px solid #ffe2a8;background:#fffaf0;border-radius:12px;padding:10px;margin:8px 0;">' +
+            '<div style="font-weight:700;">' + esc(a.badge || "未知工牌") + ' ｜ ' + esc(a.type) + '</div>' +
+            '<div class="muted" style="margin-top:4px;">' + esc(a.biz + '/' + a.task) + ' ｜ ' + esc(fmtTs_(a.at_ms)) + '</div>' +
+            '<div class="muted" style="margin-top:4px;">' + esc(a.note || "") + '</div>' +
+          '</div>'
+        );
+      }).join('');
+  }
+
+  if(people.length===0){
+    peopleEl.innerHTML = '<div class="muted">暂无人员汇总</div>';
+  }else{
+    peopleEl.innerHTML = people.map(function(p){
+      var taskText = (p.tasks||[]).map(function(t){
+        return esc(t.biz + "/" + t.task) + ": " + esc(String(t.minutes)) + " 分";
+      }).join(" ｜ ");
+
+      return (
+        '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
+          '<div style="font-weight:700;">' + esc(p.badge) + ' ｜ 总工时 ' + esc(String(p.total_minutes)) + ' 分</div>' +
+          '<div class="muted" style="margin-top:6px;">' + (taskText || "无任务") + '</div>' +
+        '</div>'
+      );
+    }).join("");
+  }
+
+  if(timeline.length===0){
+    timelineEl.innerHTML = '<div class="muted">时间线：暂无</div>';
+  }else{
+    timelineEl.innerHTML =
+      '<div style="font-weight:700;margin-bottom:6px;">每人时间线（join → leave）</div>' +
+      timeline.map(function(x){
+        var lines = (x.items || []).map(function(it){
+          var statusText = it.status === "OPEN" ? "（未退出）" : (it.status === "AUTO_CLOSE_REJOIN" ? "（重复join自动截断）" : "");
+          return (
+            '<div style="border-top:1px dashed #eee;padding:6px 0;">' +
+              '<div>' + esc(it.biz + '/' + it.task) + ' ｜ ' + esc(String(it.minutes)) + ' 分 ' + esc(statusText) + '</div>' +
+              '<div class="muted">' + esc(fmtTs_(it.start_ms)) + ' → ' + esc(fmtTs_(it.end_ms)) + '</div>' +
+            '</div>'
+          );
+        }).join("");
+
+        return (
+          '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
+            '<div style="font-weight:700;">' + esc(x.badge) + '</div>' +
+            (lines || '<div class="muted" style="margin-top:6px;">无时间段</div>') +
+          '</div>'
+        );
+      }).join("");
+  }
 
   if(sum.length===0){
     tableEl.innerHTML = '<div class="muted">暂无数据（今天还没有 join/leave）</div>';
@@ -1758,7 +1980,8 @@ function reportExportCSV(){
   var blob = new Blob([csv.join("\\n")], {type:"text/csv;charset=utf-8;"});
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "ck_report_" + (REPORT_CACHE.meta.dayKey||"day") + "_" + Date.now() + ".csv";
+  var rangeText = (REPORT_CACHE.meta.rangeLabel || "range").replace(/[^0-9A-Za-z_-]+/g, "_");
+  a.download = "ck_report_" + rangeText + "_" + Date.now() + ".csv";
   a.click();
 }
 
@@ -1776,5 +1999,6 @@ restoreState();
 renderActiveLists();
 bindAdminEasterEgg_();
 adminApplyUI_();
+setReportDefaultDates_();
 renderPages();
 flushQueue_();
