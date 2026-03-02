@@ -110,6 +110,7 @@ function getHashPage(){
 }
 
 function renderPages(){
+  applyPageSession_();
   var cur = getHashPage();
   for(var i=0;i<pages.length;i++){
     var p = pages[i];
@@ -145,7 +146,67 @@ if(!location.hash) setHash("home");
 var scanner = null;
 var scanMode = null;
 
-var currentSessionId = localStorage.getItem("pick_session_id") || null;
+var currentSessionId = null; // ✅ 每任务独立趟次：进入页面时按任务切换
+
+// ===== Per-task session (A: every START creates a new session) =====
+var CUR_CTX = { biz:null, task:null, page:null };
+function ctxKey_(biz, task){
+  return "session_id_" + encodeURIComponent(String(biz||"NA")) + "__" + encodeURIComponent(String(task||"NA"));
+}
+function getSess_(biz, task){
+  return localStorage.getItem(ctxKey_(biz,task)) || null;
+}
+function setSess_(biz, task, sid){
+  localStorage.setItem(ctxKey_(biz,task), String(sid||"").trim());
+  // remember last ctx for menus
+  localStorage.setItem("last_ctx_page", String(CUR_CTX.page||""));
+  localStorage.setItem("last_ctx_biz", String(biz||""));
+  localStorage.setItem("last_ctx_task", String(task||""));
+}
+function clearSess_(biz, task){
+  localStorage.removeItem(ctxKey_(biz,task));
+}
+function getLastCtx_(){
+  try{
+    return {
+      biz: localStorage.getItem("last_ctx_biz") || "",
+      task: localStorage.getItem("last_ctx_task") || "",
+      page: localStorage.getItem("last_ctx_page") || ""
+    };
+  }catch(e){ return {biz:"",task:"",page:""}; }
+}
+
+// page -> biz/task (must match your index.html page ids)
+var PAGE_CTX = {
+  // ===== B2C =====
+  "b2c_tally":   { biz:"B2C", task:"TALLY" },
+  "b2c_pick":    { biz:"B2C", task:"PICK" },
+  "b2c_relabel": { biz:"B2C", task:"RELABEL" },
+  "b2c_bulkout": { biz:"B2C", task:"批量出库" },
+  "b2c_pack":    { biz:"B2C", task:"PACK" },
+  "b2c_return":  { biz:"B2C", task:"退件入库" },
+  "b2c_qc":      { biz:"B2C", task:"质检" },
+  "b2c_disposal":{ biz:"B2C", task:"废弃处理" },
+
+  // ===== 进口快件 =====
+  "import_unload":      { biz:"IMPORT", task:"卸货" },
+  "import_scan_pallet": { biz:"IMPORT", task:"过机扫描码托" },
+  "import_loadout":     { biz:"IMPORT", task:"装柜/出货" }
+};
+
+function applyPageSession_(){
+  var cur = getHashPage();
+  var ctx = PAGE_CTX[cur];
+  if(ctx){
+    CUR_CTX = { biz: ctx.biz, task: ctx.task, page: cur };
+    currentSessionId = getSess_(ctx.biz, ctx.task);
+  }else{
+    CUR_CTX = { biz:null, task:null, page: cur };
+    // menus: show last task session (read-only)
+    var last = getLastCtx_();
+    currentSessionId = (last.biz && last.task) ? getSess_(last.biz, last.task) : null;
+  }
+}
 
 var scannedWaves = new Set();
 var scannedInbounds = new Set();
@@ -251,7 +312,7 @@ function showSessionQr(){
 
   box.innerHTML = "";
   if(!currentSessionId){
-    box.innerHTML = '<div class="muted">本机没有 session（请先在任一作业页点开始，或先扫码加入）。</div>';
+    box.innerHTML = '<div class="muted">当前任务没有 session（请先点【开始】生成新趟次，或扫码加入）。</div>';
     return;
   }
 
@@ -405,7 +466,13 @@ function refreshUI(){
   var dev = document.getElementById("device");
   var ses = document.getElementById("session");
   if(dev) dev.textContent = makeDeviceId();
-  if(ses) ses.textContent = currentSessionId || "无 / 없음";
+  if(ses){
+    if(CUR_CTX && CUR_CTX.biz && CUR_CTX.task){
+      ses.textContent = (currentSessionId || "无 / 없음") + "  [" + CUR_CTX.biz + "/" + CUR_CTX.task + "]";
+    }else{
+      ses.textContent = currentSessionId || "无 / 없음";
+    }
+  }
 }
 
 /** ===== Network pill ===== */
@@ -615,8 +682,10 @@ function cleanupLocalSession_(){
   localStorage.removeItem(keyBulkOutOrders());
   localStorage.removeItem(keyRecent());
 
+  if(CUR_CTX && CUR_CTX.biz && CUR_CTX.task){
+    clearSess_(CUR_CTX.biz, CUR_CTX.task);
+  }
   currentSessionId = null;
-  localStorage.removeItem("pick_session_id");
   refreshUI();
 }
 
@@ -884,29 +953,27 @@ async function refreshActiveNow(){
 /** ===== Start / End: B2C tasks ===== */
 async function startTally(){
   try{
-    if(currentSessionId){
-      if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始理货】重新开新趟次，或扫码加入别的趟次。"))) return;
-      restoreState(); renderActiveLists(); renderInboundCountUI(); refreshUI();
-    }else{
-      currentSessionId = makePickSessionId();
-      localStorage.setItem("pick_session_id", currentSessionId);
+    var biz = "B2C", task = "TALLY";
 
-      activeTally = new Set();
-      scannedInbounds = new Set();
-      persistState();
-    }
+    // ✅ A：每次开始都新建本任务趟次
+    currentSessionId = makePickSessionId();
+    CUR_CTX = { biz: biz, task: task, page: "b2c_tally" };
+    setSess_(biz, task, currentSessionId);
 
-    // ✅ 无论是否已有趟次，都补发一次 start（同步确认）
-    var evId = makeEventId({ event:"start", biz:"B2C", task:"TALLY", wave_id:"", badgeRaw:"" });
-    if(!hasRecent(evId)){
-      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"TALLY", pick_session_id: currentSessionId }, true);
-      addRecent(evId);
-    }
-
+    // ✅ 清空本任务本地状态（避免上一趟数据带入）
+    scannedInbounds = new Set();
+    activeTally = new Set();
+    persistState();
     refreshUI();
+
+    // ✅ start 必须同步确认（后端会强制：没 start 不允许 join）
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
+    addRecent(evId);
+
     renderActiveLists();
     renderInboundCountUI();
-    setStatus("理货开始已记录 ✅ 现在可以扫码加入", true);
+    setStatus("理货开始 ✅ 新趟次: " + currentSessionId, true);
   }catch(e){
     setStatus("理货开始失败 ❌ " + e, false);
     alert(String(e));
@@ -916,28 +983,24 @@ async function endTally(){ return endSessionGlobal_(); }
 
 async function startBulkOut(){
   try{
-    if(currentSessionId){
-      if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始批量出库】重新开新趟次，或扫码加入别的趟次。"))) return;
-      restoreState(); renderActiveLists(); renderBulkOutUI(); refreshUI();
-    }else{
-      currentSessionId = makePickSessionId();
-      localStorage.setItem("pick_session_id", currentSessionId);
+    var biz = "B2C", task = "批量出库";
 
-      activeBulkOut = new Set();
-      scannedBulkOutOrders = new Set();
-      persistState();
-    }
+    currentSessionId = makePickSessionId();
+    CUR_CTX = { biz: biz, task: task, page: "b2c_bulkout" };
+    setSess_(biz, task, currentSessionId);
 
-    var evId = makeEventId({ event:"start", biz:"B2C", task:"批量出库", wave_id:"", badgeRaw:"" });
-    if(!hasRecent(evId)){
-      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"批量出库", pick_session_id: currentSessionId }, true);
-      addRecent(evId);
-    }
-
+    scannedBulkOutOrders = new Set();
+    activeBulkOut = new Set();
+    persistState();
     refreshUI();
+
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
+    addRecent(evId);
+
     renderActiveLists();
     renderBulkOutUI();
-    setStatus("批量出库开始已记录 ✅ 现在可以扫码加入", true);
+    setStatus("批量出库开始 ✅ 新趟次: " + currentSessionId, true);
   }catch(e){
     setStatus("批量出库开始失败 ❌ " + e, false);
     alert(String(e));
@@ -947,34 +1010,31 @@ async function endBulkOut(){ return endSessionGlobal_(); }
 
 async function startPicking(){
   try{
-    if(currentSessionId){
-      if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始拣货】重新开新趟次，或扫码加入别的趟次。"))) return;
-      restoreState(); renderActiveLists(); refreshUI();
-    }else{
-      currentSessionId = makePickSessionId();
-      localStorage.setItem("pick_session_id", currentSessionId);
+    var biz = "B2C", task = "PICK";
 
-      scannedWaves = new Set();
-      activePick = new Set();
-      persistState();
+    currentSessionId = makePickSessionId();
+    CUR_CTX = { biz: biz, task: task, page: "b2c_pick" };
+    setSess_(biz, task, currentSessionId);
 
-      leaderPickOk = false;
-      syncLeaderPickUI();
-    }
-
-    var evId = makeEventId({ event:"start", biz:"B2C", task:"PICK", wave_id:"", badgeRaw:"" });
-    if(!hasRecent(evId)){
-      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"PICK", pick_session_id: currentSessionId }, true);
-      addRecent(evId);
-    }
-
+    scannedWaves = new Set();
+    activePick = new Set();
+    leaderPickOk = false;
+    syncLeaderPickUI();
+    persistState();
     refreshUI();
-    setStatus("拣货开始已记录 ✅ 现在可以扫码加入", true);
+
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
+    addRecent(evId);
+
+    renderActiveLists();
+    setStatus("拣货开始 ✅ 新趟次: " + currentSessionId, true);
   }catch(e){
     setStatus("拣货开始失败 ❌ " + e, false);
     alert(String(e));
   }
 }
+
 
 function setRelabelTimerText(text){
   var el = document.getElementById("relabelTimer");
@@ -993,25 +1053,24 @@ function startRelabelTimer(){
 
 async function startRelabel(){
   try{
-    if(currentSessionId){
-      if(!(await guardSessionOpenOrAlert_("检测到本机 session 已结束，请点【开始换单】重新开新趟次，或扫码加入别的趟次。"))) return;
-      restoreState(); renderActiveLists(); refreshUI();
-    }else{
-      currentSessionId = makePickSessionId();
-      localStorage.setItem("pick_session_id", currentSessionId);
+    var biz = "B2C", task = "RELABEL";
 
-      activeRelabel = new Set();
-      persistState();
-    }
+    currentSessionId = makePickSessionId();
+    CUR_CTX = { biz: biz, task: task, page: "b2c_relabel" };
+    setSess_(biz, task, currentSessionId);
 
-    var evId = makeEventId({ event:"start", biz:"B2C", task:"RELABEL", wave_id:"", badgeRaw:"" });
-    if(!hasRecent(evId)){
-      await submitEventSync_({ event:"start", event_id: evId, biz:"B2C", task:"RELABEL", pick_session_id: currentSessionId }, true);
-      addRecent(evId);
-    }
-
+    activeRelabel = new Set();
+    relabelStartTs = Date.now();
+    startRelabelTimer();
+    persistState();
     refreshUI();
-    setStatus("换单开始已记录 ✅ 现在可以扫码加入", true);
+
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
+    addRecent(evId);
+
+    renderActiveLists();
+    setStatus("换单开始 ✅ 新趟次: " + currentSessionId, true);
   }catch(e){
     setStatus("换单开始失败 ❌ " + e, false);
     alert(String(e));
@@ -1079,28 +1138,49 @@ async function openScannerBulkOutOrder(){
 
 /** ===== Labor (join/leave) ===== */
 async function joinWork(biz, task){
-  if(!currentSessionId){
-    if(taskAutoSession_(task)){
-      currentSessionId = makePickSessionId();
-      localStorage.setItem("pick_session_id", currentSessionId);
-      persistState();
-      refreshUI();
+  biz = String(biz||"").trim();
+  task = String(task||"").trim();
 
-      try{
-        var evIdStart = makeEventId({ event:"start", biz:biz, task: task, wave_id:"", badgeRaw:"" });
-        if(!hasRecent(evIdStart)){
-          submitEvent({ event:"start", event_id: evIdStart, biz: biz, task: task, pick_session_id: currentSessionId });
-          addRecent(evIdStart);
-        }
-      }catch(e){}
-    }else{
-      setStatus("请先加入趟次（扫码）或先点开始 / 세션 참여 필요", false);
-      alert("请先在 B2C 菜单点【加入已有趟次（扫码）】\n或在本作业页点【开始】创建新趟次。");
-      return;
+  // ✅ 每任务独立 session：先拿到该任务的 session
+  var sid = getSess_(biz, task);
+
+  // 自动 session 的任务：第一次 join 时自动开新趟次，并同步发送 start
+  if(!sid && taskAutoSession_(task)){
+    sid = makePickSessionId();
+    currentSessionId = sid;
+    CUR_CTX = { biz: biz, task: task, page: getHashPage() };
+    setSess_(biz, task, sid);
+
+    // 清空该任务的本地状态
+    if(task==="PACK") activePack = new Set();
+    if(task==="退件入库") activeReturn = new Set();
+    if(task==="质检") activeQc = new Set();
+    if(task==="废弃处理") activeDisposal = new Set();
+    if(task==="卸货") activeImportUnload = new Set();
+    if(task==="过机扫描码托") activeImportScanPallet = new Set();
+    if(task==="装柜/出货") activeImportLoadout = new Set();
+    persistState(); refreshUI();
+
+    // ✅ start 必须同步确认（否则后端会拒绝 join）
+    var evIdStart = makeEventId({ event:"start", biz:biz, task: task, wave_id:"", badgeRaw:"" });
+    if(!hasRecent(evIdStart)){
+      await submitEventSync_({ event:"start", event_id: evIdStart, biz: biz, task: task, pick_session_id: sid }, true);
+      addRecent(evIdStart);
     }
-  } else {
-    if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再加入作业，请重新开始或加入新趟次。"))) return;
   }
+
+  if(!sid){
+    // 非自动任务（TALLY/PICK/RELABEL/批量出库）：必须先点“开始”生成新趟次
+    setStatus("请先点【开始】生成新趟次", false);
+    alert("该环节必须先点【开始】生成新趟次（session），再扫码加入。");
+    return;
+  }
+
+  currentSessionId = sid;
+  CUR_CTX = { biz: biz, task: task, page: getHashPage() };
+  refreshUI();
+
+  if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再加入作业，请重新开始或加入新趟次。"))) return;
 
   laborAction = "join"; laborBiz = biz; laborTask = task;
   scanMode = "labor";
@@ -1108,12 +1188,22 @@ async function joinWork(biz, task){
   await openScannerCommon();
 }
 
+
 async function leaveWork(biz, task){
-  if(!currentSessionId){
-    setStatus("请先加入趟次（扫码）或先点开始", false);
-    alert("当前没有进行中的趟次。\n请先加入趟次或开始作业。");
+  biz = String(biz||"").trim();
+  task = String(task||"").trim();
+
+  var sid = getSess_(biz, task);
+  if(!sid){
+    setStatus("该任务没有 session（请先开始/加入）", false);
+    alert("该任务还没有开始过（没有 session）。\n请先点【开始】或先加入趟次。");
     return;
   }
+
+  currentSessionId = sid;
+  CUR_CTX = { biz: biz, task: task, page: getHashPage() };
+  refreshUI();
+
   if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再退出作业，请重新开始或加入新趟次。"))) return;
 
   if(task === "PICK" && activePick.size === 0){ alert("当前没有人在拣货作业中（无需退出）。"); return; }
@@ -1133,6 +1223,7 @@ async function leaveWork(biz, task){
   document.getElementById("scanTitle").textContent = "扫码工牌（退出）";
   await openScannerCommon();
 }
+
 
 /** ===== Badge / Employee / Bind ===== */
 function setDaStatus(msg, ok){
@@ -1348,8 +1439,43 @@ async function openScannerCommon(){
       scanBusy = true;
       await pauseScanner();
       try{
-        currentSessionId = sid;
-        localStorage.setItem("pick_session_id", currentSessionId);
+        
+// ✅ A：扫码加入趟次时，需要绑定到具体任务（每任务独立 session）
+var ctx = PAGE_CTX[getHashPage()] || null;
+if(!ctx){
+  // 在菜单页扫码：让你选择要绑定到哪个任务
+  var pick = prompt(
+    "把这个趟次绑定到哪个任务？\n" +
+    "输入数字：\n" +
+    "1=TALLY 入库理货\n" +
+    "2=PICK 拣货\n" +
+    "3=批量出库\n" +
+    "4=RELABEL 换单\n" +
+    "5=进口快件-卸货\n" +
+    "6=进口快件-过机扫描码托\n" +
+    "7=进口快件-装柜/出货"
+  ) || "";
+  pick = String(pick).trim();
+  var map = {
+    "1": {biz:"B2C", task:"TALLY"},
+    "2": {biz:"B2C", task:"PICK"},
+    "3": {biz:"B2C", task:"批量出库"},
+    "4": {biz:"B2C", task:"RELABEL"},
+    "5": {biz:"IMPORT", task:"卸货"},
+    "6": {biz:"IMPORT", task:"过机扫描码托"},
+    "7": {biz:"IMPORT", task:"装柜/出货"}
+  };
+  ctx = map[pick] || null;
+  if(!ctx){
+    alert("未选择任务，已取消绑定。");
+    await closeScanner();
+    scanBusy = false;
+    return;
+  }
+}
+CUR_CTX = { biz: ctx.biz, task: ctx.task, page: getHashPage() };
+currentSessionId = sid;
+setSess_(ctx.biz, ctx.task, currentSessionId);
 
         // 切换 session，清空 session_info 缓存，避免误判
         SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
@@ -1994,6 +2120,7 @@ function adminLogout(){
 
 /** ===== init ===== */
 refreshNet();
+applyPageSession_();
 refreshUI();
 restoreState();
 renderActiveLists();
@@ -2002,3 +2129,4 @@ adminApplyUI_();
 setReportDefaultDates_();
 renderPages();
 flushQueue_();
+
