@@ -13,8 +13,86 @@ var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
 var pages = [
   "home","badge","global_menu","b2c_menu",
   "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
-  "active_now","report"
+  "active_now",
+  "report"
 ];
+
+
+
+/** ===== Admin (Hidden) =====
+ * - 7 clicks on title => unlock
+ * - report page/button hidden unless unlocked
+ * - report data fetch requires admin key (sent as k)
+ */
+var ADMIN_DENY_ONCE = {};
+function adminKey_(){ try{ return String(sessionStorage.getItem("admin_k")||""); }catch(e){ return ""; } }
+function adminIsUnlocked_(){
+  try{ return sessionStorage.getItem("admin_unlocked")==="1" && !!adminKey_(); }catch(e){ return false; }
+}
+function adminSet_(key){
+  try{
+    sessionStorage.setItem("admin_k", String(key||"").trim());
+    sessionStorage.setItem("admin_unlocked","1");
+  }catch(e){}
+  adminApplyUI_();
+}
+function adminClear_(){
+  try{
+    sessionStorage.removeItem("admin_k");
+    sessionStorage.removeItem("admin_unlocked");
+  }catch(e){}
+  adminApplyUI_();
+}
+async function adminVerifyKey_(key){
+  key = String(key||"").trim();
+  if(!key) return false;
+  try{
+    var res = await jsonp(LOCK_URL, { action:"admin_events_tail", k:key, limit: 1 });
+    return !!(res && res.ok===true);
+  }catch(e){
+    return false;
+  }
+}
+async function adminUnlockFlow_(){
+  var key = prompt("管理员口令（仅你自己知道）：") || "";
+  key = String(key).trim();
+  if(!key) return;
+  setStatus("验证口令中... ⏳", true);
+  var ok = await adminVerifyKey_(key);
+  if(ok){
+    adminSet_(key);
+    setStatus("管理员模式已开启 ✅", true);
+    alert("管理员模式已开启 ✅
+现在可以在【总控台】看到【劳效/工时汇总】按钮。");
+  }else{
+    adminClear_();
+    setStatus("口令错误 ❌", false);
+    alert("口令不正确（或后端未设置 ADMINKEY）。");
+  }
+}
+function adminApplyUI_(){
+  var btn = document.getElementById("btnReport");
+  if(btn) btn.style.display = adminIsUnlocked_() ? "block" : "none";
+}
+function bindAdminEasterEgg_(){
+  var el = document.querySelector(".title");
+  if(!el) return;
+
+  var cnt = 0;
+  var last = 0;
+
+  el.style.cursor = "pointer";
+  el.addEventListener("click", function(){
+    var now = Date.now();
+    if(now - last > 2000) cnt = 0; // 2秒内连点
+    last = now;
+    cnt++;
+    if(cnt >= 7){
+      cnt = 0;
+      adminUnlockFlow_();
+    }
+  });
+}
 
 function setHash(page){ location.hash = "#/" + page; }
 function getHashPage(){
@@ -23,6 +101,11 @@ function getHashPage(){
   var m = h.match(/^#\/(.+)$/);
   if(!m) return "home";
   var p = m[1];
+  // admin-only pages
+  if(p==="report" && !adminIsUnlocked_()){
+    if(!ADMIN_DENY_ONCE[p]){ ADMIN_DENY_ONCE[p]=1; alert("管理员功能：请在标题处连续点击 7 次解锁"); }
+    return "home";
+  }
   return pages.indexOf(p) >= 0 ? p : "home";
 }
 
@@ -44,7 +127,6 @@ function renderPages(){
   if(cur==="b2c_qc"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2c_disposal"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2c_relabel"){ restoreState(); renderActiveLists(); refreshUI(); }
-  if(cur==="report"){ if(REPORT_CACHE && REPORT_CACHE.rows) renderReport_(); }
 
   if(cur==="active_now"){ refreshActiveNow(); }
   if(cur==="b2c_menu"){ refreshUI(); }
@@ -108,7 +190,7 @@ async function sessionInfoServer_(sid){
     return SESSION_INFO_CACHE.data;
   }
 
-  var res = await jsonpQ(LOCK_URL, { action: "session_info", session: session });
+  var res = await jsonp(LOCK_URL, { action: "session_info", session: session });
   if(!res || res.ok !== true) throw new Error((res && res.error) ? res.error : "session_info_failed");
 
   SESSION_INFO_CACHE = { sid: session, ts: now, data: res };
@@ -291,15 +373,6 @@ function setStatus(msg, ok){
 }
 // ===== Anti double-click / Net busy guard =====
 var NET_BUSY = false;
-// ✅ 网络请求排队：让所有网络请求顺序执行，避免 busy 报错
-var NET_QUEUE = Promise.resolve();
-
-function jsonpQ(url, params){
-  NET_QUEUE = NET_QUEUE.then(function(){
-    return jsonp(url, params);
-  });
-  return NET_QUEUE;
-}
 
 function netBusyOn_(action){
   NET_BUSY = true;
@@ -338,7 +411,6 @@ if(NET_BUSY){
   reject(new Error("busy: previous request not finished"));
   return;
 }
-
 netBusyOn_(action);
     var cb = "cb_" + Math.random().toString(16).slice(2);
     var qs = [];
@@ -461,7 +533,7 @@ async function submitEventSync_(o, silent){
     client_ms: (o.client_ms || Date.now())
   };
 
-  var res = await jsonpQ(LOCK_URL, params);
+  var res = await jsonp(LOCK_URL, params);
 
   if(!res || res.ok !== true){
     throw new Error((res && res.error) ? res.error : "提交失败：event_submit failed");
@@ -490,7 +562,7 @@ async function submitEvent(o){
 /** ===== Global session close helpers ===== */
 async function sessionCloseServer_(){
   if(!currentSessionId) throw new Error("missing session");
-  var res = await jsonpQ(LOCK_URL, {
+  var res = await jsonp(LOCK_URL, {
     action: "session_close",
     session: currentSessionId,
     device_id: makeDeviceId()
@@ -711,7 +783,7 @@ function fmtDur(ms){
 async function refreshActiveNow(){
   try{
     setStatus("拉取在岗中... ⏳", true);
-    var res = await jsonpQ(LOCK_URL, { action:"active_now" });
+    var res = await jsonp(LOCK_URL, { action:"active_now" });
 
     if(!res || res.ok !== true){
       setStatus("在岗拉取失败 ❌ " + (res && res.error ? res.error : ""), false);
@@ -1280,9 +1352,9 @@ async function openScannerCommon(){
         persistState();
         renderInboundCountUI();
 
-        var evIdX = makeEventId({ event:"scan", biz:"B2C", task:"TALLY", wave_id: code2, badgeRaw:"" });
+        var evIdX = makeEventId({ event:"wave", biz:"B2C", task:"TALLY", wave_id: code2, badgeRaw:"" });
         if(!hasRecent(evIdX)){
-          submitEvent({ event:"scan", event_id: evIdX, biz:"B2C", task:"TALLY", pick_session_id: currentSessionId, wave_id: code2 });
+          submitEvent({ event:"wave", event_id: evIdX, biz:"B2C", task:"TALLY", pick_session_id: currentSessionId, wave_id: code2 });
           addRecent(evIdX);
         }
 
@@ -1312,9 +1384,9 @@ async function openScannerCommon(){
         persistState();
         renderBulkOutUI();
 
-        var evIdB = makeEventId({ event:"scan", biz:"B2C", task:"批量出库", wave_id: code3, badgeRaw:"" });
+        var evIdB = makeEventId({ event:"wave", biz:"B2C", task:"批量出库", wave_id: code3, badgeRaw:"" });
         if(!hasRecent(evIdB)){
-          submitEvent({ event:"scan", event_id: evIdB, biz:"B2C", task:"批量出库", pick_session_id: currentSessionId, wave_id: code3 });
+          submitEvent({ event:"wave", event_id: evIdB, biz:"B2C", task:"批量出库", pick_session_id: currentSessionId, wave_id: code3 });
           addRecent(evIdB);
         }
 
@@ -1481,166 +1553,229 @@ function comingSoon(msg){
   alert((msg||"准备中") + "\n\n我们会逐步上线。");
 }
 
-/** ===== REPORT: 工时/劳效（本地计算） ===== */
-var REPORT_CACHE = { header: null, rows: null, kstDay: null };
 
+/** ===== Report (Admin-only) ===== */
+var REPORT_CACHE = { header:[], rows:[], summary:[], meta:{} };
+
+function pad2_(n){ n=String(n); return n.length<2 ? ("0"+n) : n; }
 function kstDayKey_(ms){
-  var x = new Date((Number(ms)||0) + 9*3600*1000); // KST
-  return x.toISOString().slice(0,10); // YYYY-MM-DD
+  var d = new Date(ms + 9*3600*1000);
+  return d.getUTCFullYear() + "-" + pad2_(d.getUTCMonth()+1) + "-" + pad2_(d.getUTCDate());
 }
+function msToMin_(ms){ return Math.round((ms||0)/60000); }
 
-function rowsToObjects_(header, rows){
-  return rows.map(function(r){
-    var o = {};
-    for(var i=0;i<header.length;i++) o[header[i]] = r[i];
-    return o;
-  });
-}
-
-async function reportLoadToday(){
-  // KST 今天 00:00 的 server_ms 起点
-  var now = Date.now();
-  var todayKey = kstDayKey_(now);
-  var startMs = Date.parse(todayKey + "T00:00:00.000Z") - 9*3600*1000;
-
-  setStatus("拉取今日事件中... ⏳", true);
-
-  var res = await jsonpQ(LOCK_URL, {
-    action:"events_tail",
-    limit: 20000,
-    since_ms: String(startMs)
-  });
-
-  if(!res || res.ok !== true){
-    setStatus("拉取失败 ❌ " + (res && res.error ? res.error : "unknown"), false);
-    alert("拉取失败: " + (res && res.error ? res.error : "unknown"));
+function reportLoadToday(){
+  if(!adminIsUnlocked_()){
+    alert("管理员功能：请先解锁（标题连点 7 次）");
     return;
   }
+  var k = adminKey_();
+  if(!k){ alert("未检测到管理员口令，请重新解锁"); return; }
 
-  REPORT_CACHE = { header: res.header, rows: res.rows, kstDay: todayKey };
-  renderReport_();
-  setStatus("拉取完成 ✅", true);
+  var now = Date.now();
+  var dayKey = kstDayKey_(now);
+  var startMs = Date.parse(dayKey + "T00:00:00.000Z") - 9*3600*1000;
+
+  setStatus("拉取今天数据中... ⏳", true);
+
+  jsonp(LOCK_URL, {
+    action: "admin_events_tail",
+    k: k,
+    limit: 20000,
+    since_ms: String(startMs)
+  }).then(function(res){
+    if(!res || res.ok !== true){
+      setStatus("拉取失败 ❌ " + (res && res.error ? res.error : "unknown"), false);
+      alert("拉取失败：" + (res && res.error ? res.error : "unknown"));
+      return;
+    }
+
+    REPORT_CACHE.header = res.header || [];
+    REPORT_CACHE.rows = res.rows || [];
+    REPORT_CACHE.meta = { asof: res.asof || Date.now(), dayKey: dayKey };
+
+    buildReportSummary_();
+    renderReport_();
+    setStatus("拉取完成 ✅", true);
+  }).catch(function(e){
+    setStatus("拉取异常 ❌", false);
+    alert("拉取异常：" + String(e && e.message ? e.message : e));
+  });
 }
 
-function calcWorkMinutes_(events){
-  // 只算 join/leave
-  events.sort(function(a,b){ return (a.server_ms||0) - (b.server_ms||0); });
+function buildReportSummary_(){
+  var header = REPORT_CACHE.header || [];
+  var rows = REPORT_CACHE.rows || [];
 
-  var open = {};      // key -> join_ms
-  var sum = {};       // badge -> { biz/task -> ms }
-  var scanCount = {}; // badge -> { biz/task -> count }
+  var iServer = header.indexOf("server_ms");
+  var iEvent = header.indexOf("event");
+  var iBadge = header.indexOf("badge");
+  var iBiz = header.indexOf("biz");
+  var iTask = header.indexOf("task");
+  var iOk = header.indexOf("ok");
+  if(iOk < 0) iOk = header.indexOf("ok"); // just in case
 
-  events.forEach(function(e){
-    var ok = String(e.ok||"").toLowerCase();
-    if(ok === "false") return;
+  var active = {}; // badge -> {t, biz, task}
+  var acc = {};    // badge -> { total_ms, tasks: {biz|task:ms} }
+  var anomalies = { open:0, leave_without_join:0 };
 
-    var ev = String(e.event||"").trim();
-    var badge = String(e.badge||"").trim();
-    var biz = String(e.biz||"").trim();
-    var task = String(e.task||"").trim();
-    var session = String(e.session||"").trim();
-    var t = Number(e.server_ms||0) || 0;
+  function addDur(badge, biz, task, dur){
+    if(!acc[badge]) acc[badge] = { total_ms:0, tasks:{} };
+    acc[badge].total_ms += dur;
+    var k = biz + "|" + task;
+    acc[badge].tasks[k] = (acc[badge].tasks[k]||0) + dur;
+  }
 
-    if(!badge || !biz || !task) return;
-
-    var taskKey = biz + "/" + task;
-    var k = badge + "|" + biz + "|" + task + "|" + session;
-
-    if(ev === "join"){
-      if(!open[k]) open[k] = t;
-      return;
+  var now = Date.now();
+  for(var r=0;r<rows.length;r++){
+    var row = rows[r];
+    if(!row) continue;
+    if(iOk >= 0){
+      var okv = row[iOk];
+      if(String(okv).toLowerCase()==="false" || Number(okv)===0) continue;
     }
-    if(ev === "leave"){
-      if(open[k]){
-        var dt = Math.max(0, t - open[k]);
-        delete open[k];
 
-        if(!sum[badge]) sum[badge] = {};
-        sum[badge][taskKey] = (sum[badge][taskKey]||0) + dt;
+    var ev = String(row[iEvent]||"").trim();
+    if(ev!=="join" && ev!=="leave") continue;
+
+    var badge = String(row[iBadge]||"").trim();
+    if(!badge) continue;
+    var biz = String(row[iBiz]||"").trim();
+    var task = String(row[iTask]||"").trim();
+    var t = Number(row[iServer]||0) || 0;
+
+    if(ev==="join"){
+      // 若已有未结束，先按当前时间截断
+      if(active[badge]){
+        addDur(badge, active[badge].biz, active[badge].task, Math.max(0, t - active[badge].t));
       }
-      return;
+      active[badge] = { t:t, biz:biz, task:task };
+    }else if(ev==="leave"){
+      if(active[badge]){
+        addDur(badge, active[badge].biz, active[badge].task, Math.max(0, t - active[badge].t));
+        delete active[badge];
+      }else{
+        anomalies.leave_without_join++;
+      }
     }
+  }
 
-    if(ev === "scan"){
-      if(!scanCount[badge]) scanCount[badge] = {};
-      scanCount[badge][taskKey] = (scanCount[badge][taskKey]||0) + 1;
-    }
+  // 还在岗的按 now 结算
+  Object.keys(active).forEach(function(b){
+    anomalies.open++;
+    addDur(b, active[b].biz, active[b].task, Math.max(0, now - active[b].t));
   });
 
-  return { sum: sum, scanCount: scanCount };
+  // 展平成表格
+  var out = [];
+  Object.keys(acc).sort().forEach(function(badge){
+    var obj = acc[badge];
+    var tasks = obj.tasks || {};
+    Object.keys(tasks).sort().forEach(function(k){
+      var parts = k.split("|");
+      out.push({
+        badge: badge,
+        biz: parts[0]||"",
+        task: parts[1]||"",
+        minutes: msToMin_(tasks[k]),
+        total_minutes: msToMin_(obj.total_ms)
+      });
+    });
+  });
+
+  REPORT_CACHE.summary = out;
+  REPORT_CACHE.meta.anomalies = anomalies;
 }
 
 function renderReport_(){
-  var meta = document.getElementById("reportMeta");
-  var table = document.getElementById("reportTable");
-  if(!meta || !table) return;
+  var metaEl = document.getElementById("reportMeta");
+  var tableEl = document.getElementById("reportTable");
+  if(!metaEl || !tableEl) return;
 
-  var header = REPORT_CACHE.header || [];
-  var rows = REPORT_CACHE.rows || [];
-  var objs = rowsToObjects_(header, rows);
+  var m = REPORT_CACHE.meta || {};
+  var anomalies = (m.anomalies || {});
+  var sum = REPORT_CACHE.summary || [];
 
-  var day = REPORT_CACHE.kstDay || kstDayKey_(Date.now());
-  var todayEvents = objs.filter(function(e){
-    return kstDayKey_(e.server_ms) === day;
-  });
+  metaEl.textContent =
+    "日期(KST): " + (m.dayKey||"-") +
+    " ｜ rows=" + (REPORT_CACHE.rows||[]).length +
+    " ｜ open=" + (anomalies.open||0) +
+    " ｜ leave无join=" + (anomalies.leave_without_join||0);
 
-  var r = calcWorkMinutes_(todayEvents);
-
-  meta.textContent = "KST日期: " + day + " ｜ 事件数: " + todayEvents.length;
-
-  var badges = Object.keys(r.sum).sort();
-  if(badges.length === 0){
-    table.innerHTML = '<div class="muted">今天暂无 join/leave 数据</div>';
+  if(sum.length===0){
+    tableEl.innerHTML = '<div class="muted">暂无数据（今天还没有 join/leave）</div>';
     return;
   }
 
-  var html = "";
-  badges.forEach(function(b){
-    html += '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">';
-    html += '<div style="font-weight:800;">' + esc(b) + '</div>';
+  // table
+  var html = '<div style="overflow:auto;border:1px solid #eee;border-radius:12px;">';
+  html += '<table style="border-collapse:collapse;width:100%;min-width:700px;">';
+  html += '<tr>' +
+    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">badge</th>' +
+    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">biz</th>' +
+    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">task</th>' +
+    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">minutes</th>' +
+    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">badge total</th>' +
+    '</tr>';
 
-    var tasks = r.sum[b];
-    var keys = Object.keys(tasks).sort();
-    keys.forEach(function(k){
-      var mins = Math.round(tasks[k] / 60000);
-      var cnt = (r.scanCount[b] && r.scanCount[b][k]) ? r.scanCount[b][k] : 0;
-      html += '<div class="muted" style="margin-top:4px;">' + esc(k) + " ：" + mins + " 分钟" + (cnt? (" ｜ 扫码数: "+cnt):"") + '</div>';
-    });
-
-    html += "</div>";
-  });
-
-  table.innerHTML = html;
+  for(var i=0;i<sum.length;i++){
+    var r = sum[i];
+    html += '<tr>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.badge) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.biz) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.task) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;text-align:right;">' + esc(r.minutes) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;text-align:right;">' + esc(r.total_minutes) + '</td>' +
+      '</tr>';
+  }
+  html += '</table></div>';
+  tableEl.innerHTML = html;
 }
 
 function reportExportCSV(){
-  var header = REPORT_CACHE.header || [];
-  var rows = REPORT_CACHE.rows || [];
-  if(rows.length === 0){
-    alert("没有数据可导出（先点：拉取今天数据）");
+  if(!adminIsUnlocked_()){
+    alert("管理员功能：请先解锁（标题连点 7 次）");
+    return;
+  }
+  var sum = REPORT_CACHE.summary || [];
+  if(sum.length===0){
+    alert("没有可导出的数据（先点：拉取今天数据）");
     return;
   }
 
   var csv = [];
-  csv.push(header.join(","));
-  rows.forEach(function(r){
-    csv.push(r.map(function(x){
-      var s = String(x==null?"":x).replace(/"/g,'""');
-      return '"' + s + '"';
-    }).join(","));
-  });
+  csv.push(["badge","biz","task","minutes","badge_total_minutes"].join(","));
+  for(var i=0;i<sum.length;i++){
+    var r = sum[i];
+    csv.push([
+      '"' + String(r.badge).replace(/"/g,'""') + '"',
+      '"' + String(r.biz).replace(/"/g,'""') + '"',
+      '"' + String(r.task).replace(/"/g,'""') + '"',
+      String(r.minutes||0),
+      String(r.total_minutes||0)
+    ].join(","));
+  }
 
-  var blob = new Blob([csv.join("\n")], {type:"text/csv;charset=utf-8;"});
+  var blob = new Blob([csv.join("\\n")], {type:"text/csv;charset=utf-8;"});
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "ck_events_" + (REPORT_CACHE.kstDay || "day") + ".csv";
+  a.download = "ck_report_" + (REPORT_CACHE.meta.dayKey||"day") + "_" + Date.now() + ".csv";
   a.click();
 }
+
+function adminLogout(){
+  adminClear_();
+  alert("已退出管理员模式");
+  setHash("home");
+}
+
 
 /** ===== init ===== */
 refreshNet();
 refreshUI();
 restoreState();
 renderActiveLists();
+bindAdminEasterEgg_();
+adminApplyUI_();
 renderPages();
 flushQueue_();
