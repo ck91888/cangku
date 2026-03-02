@@ -1,4 +1,4 @@
-// app.js - CK Warehouse FE (single file)
+// app.js - CK Warehouse FE (single file)     
 // ✅ Multi-device session: scan to join session (CKSESSION|PS-...)
 // ✅ Cross-device badge lock: join/leave is SYNC (server confirms lock)
 // ✅ Fast UX: start/wave/end are queued (async)
