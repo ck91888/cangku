@@ -45,7 +45,7 @@
         <button class="primary" onclick="go('b2c_menu')">
           B2C<br><small>拣货 / 换单 / 打包贴单</small>
         </button>
-        <button class="primary" onclick="comingSoon('进口快件（待上线）')">
+        <button class="primary" onclick="go('import_menu')">
           进口快件 <small>수입 택배</small><br><small>卸货/过机/装柜</small>
         </button>
         <button class="primary" onclick="comingSoon('B2B（待上线）')">
@@ -67,8 +67,84 @@
       <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 <small>Report</small></button>
       <button class="primary" onclick="go('badge')">工牌 / Badge <small>명찰</small></button>
       <button class="primary" onclick="go('b2c_menu')">B2C <small>피킹/라벨/포장</small></button>
-      <button class="ghost" onclick="comingSoon('进口快件（待上线）')">进口快件（待上线）</button>
+      <button class="primary" onclick="go('import_menu')">进口快件 <small>수입 택배</small></button>
       <button class="ghost" onclick="comingSoon('B2B（待上线）')">B2B（待上线）</button>
+    </div>
+  </div>
+
+  <!-- IMPORT MENU -->
+  <div id="page-import_menu" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <div class="grow pill">进口快件 / 수입 택배</div>
+    </div>
+
+    <div class="card">
+      <div class="muted">入口已开通：下一步按流程继续开发卸货、过机、装柜。</div>
+
+      <button class="primary" onclick="go('import_unload')">卸货（开始/结束扫工牌） <small>하차</small></button>
+      <button class="primary" onclick="go('import_scan_pallet')">过机扫描码托（开始/结束扫工牌） <small>스캔</small></button>
+      <button class="primary" onclick="go('import_loadout')">装柜/出货（开始/结束扫工牌） <small>적재/출고</small></button>
+    </div>
+  </div>
+
+  <!-- IMPORT UNLOAD -->
+  <div id="page-import_unload" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <div class="grow pill">进口快件 卸货 / 하차</div>
+    </div>
+
+    <div class="card">
+      <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
+
+      <button class="primary" onclick="joinWork('IMPORT','卸货')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
+      <button class="primary" onclick="leaveWork('IMPORT','卸货')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+
+      <div class="listBox">
+        <div><b>当前在岗 / 작업중</b>：<span id="importUnloadCount">0</span></div>
+        <div id="importUnloadActiveList" class="muted">无 / 없음</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT SCAN PALLET -->
+  <div id="page-import_scan_pallet" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <div class="grow pill">进口快件 过机扫描码托 / 스캔</div>
+    </div>
+
+    <div class="card">
+      <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
+
+      <button class="primary" onclick="joinWork('IMPORT','过机扫描码托')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
+      <button class="primary" onclick="leaveWork('IMPORT','过机扫描码托')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+
+      <div class="listBox">
+        <div><b>当前在岗 / 작업중</b>：<span id="importScanPalletCount">0</span></div>
+        <div id="importScanPalletActiveList" class="muted">无 / 없음</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT LOADOUT -->
+  <div id="page-import_loadout" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <div class="grow pill">进口快件 装柜/出货 / 적재·출고</div>
+    </div>
+
+    <div class="card">
+      <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
+
+      <button class="primary" onclick="joinWork('IMPORT','装柜/出货')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
+      <button class="primary" onclick="leaveWork('IMPORT','装柜/出货')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+
+      <div class="listBox">
+        <div><b>当前在岗 / 작업중</b>：<span id="importLoadoutCount">0</span></div>
+        <div id="importLoadoutActiveList" class="muted">无 / 없음</div>
+      </div>
     </div>
   </div>
 
@@ -98,10 +174,25 @@
     </div>
 
     <div class="card">
-      <button class="primary" onclick="reportLoadToday()">拉取今天数据</button>
+      <div class="row">
+        <div>
+          <small>开始日期（KST）</small>
+          <input id="reportDateFrom" type="date" />
+        </div>
+        <div>
+          <small>结束日期（KST）</small>
+          <input id="reportDateTo" type="date" />
+        </div>
+      </div>
+
+      <button class="primary" onclick="reportLoadRange()">拉取区间数据</button>
+      <button onclick="reportLoadToday()">快捷：今天（KST）</button>
       <button class="primary" onclick="reportExportCSV()">导出 CSV</button>
 
       <div id="reportMeta" class="muted" style="margin-top:8px;"></div>
+      <div id="reportAnomalies" style="margin-top:10px;"></div>
+      <div id="reportPeople" style="margin-top:10px;"></div>
+      <div id="reportTimeline" style="margin-top:10px;"></div>
       <div id="reportTable" style="margin-top:10px;"></div>
     </div>
   </div>
