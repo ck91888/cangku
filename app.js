@@ -15,7 +15,8 @@ var pages = [
   "import_menu","import_unload","import_scan_pallet","import_loadout",
   "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
   "active_now",
-  "report"
+  "report",
+  "global_sessions"
 ];
 
 
@@ -73,6 +74,8 @@ async function adminUnlockFlow_(){
 function adminApplyUI_(){
   var btn = document.getElementById("btnReport");
   if(btn) btn.style.display = adminIsUnlocked_() ? "block" : "none";
+  var btnS = document.getElementById("btnSessions");
+  if(btnS) btnS.style.display = adminIsUnlocked_() ? "block" : "none";
 }
 function bindAdminEasterEgg_(){
   var el = document.querySelector(".title");
@@ -102,7 +105,7 @@ function getHashPage(){
   if(!m) return "home";
   var p = m[1];
   // admin-only pages
-  if(p==="report" && !adminIsUnlocked_()){
+  if((p==="report" || p==="global_sessions") && !adminIsUnlocked_()){
     if(!ADMIN_DENY_ONCE[p]){ ADMIN_DENY_ONCE[p]=1; alert("管理员功能：请在标题处连续点击 7 次解锁"); }
     return "home";
   }
@@ -133,6 +136,7 @@ function renderPages(){
   if(cur==="import_loadout"){ restoreState(); renderActiveLists(); refreshUI(); }
 
   if(cur==="active_now"){ refreshActiveNow(); }
+  if(cur==="global_sessions"){ refreshGlobalSessions(); }
   if(cur==="b2c_menu"){ refreshUI(); }
   if(cur==="import_menu"){ refreshUI(); }
 }
@@ -974,8 +978,13 @@ async function refreshActiveNow(){
       return;
     }
 
-    var active = res.active || [];
+    var allActive = res.active || [];
     var asof = res.asof || Date.now();
+
+    // 筛选
+    var filterEl = document.getElementById("activeNowFilterBiz");
+    var filterBiz = filterEl ? filterEl.value : "";
+    var active = filterBiz ? allActive.filter(function(x){ return (x.biz||"") === filterBiz; }) : allActive;
 
     var meta = document.getElementById("activeNowMeta");
     if(meta) meta.textContent = "人数: " + active.length + " ｜ " + new Date(asof).toLocaleString();
@@ -1000,23 +1009,126 @@ async function refreshActiveNow(){
         listEl.innerHTML = '<div class="muted">当前无人在岗</div>';
       }else{
         var now = Date.now();
+        var isAdmin = adminIsUnlocked_();
         listEl.innerHTML = active.map(function(x){
           var dur = fmtDur(now - (x.since||now));
+          var forceBtn = isAdmin
+            ? '<button class="small bad" style="margin-top:6px;width:auto;" ' +
+                'data-badge="'+esc(x.badge)+'" data-task="'+esc(x.task||"")+'" data-session="'+esc(x.session||"")+'" data-biz="'+esc(x.biz||"")+'" data-device="'+esc(x.device_id||"")+'" ' +
+                'onclick="adminForceLeave(this)">强制下线 / 강제 퇴장</button>'
+            : "";
           return (
             '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
               '<div style="font-weight:700;">'+esc(x.badge)+'</div>' +
               '<div class="muted" style="margin-top:4px;">作业: '+esc(x.biz)+' / '+esc(x.task)+' ｜ 在岗: '+esc(dur)+'</div>' +
               '<div class="muted" style="margin-top:4px;">session: '+esc(x.session||"")+' ｜ device: '+esc(x.device_id||"")+'</div>' +
+              forceBtn +
             '</div>'
           );
         }).join("");
       }
     }
 
-    setStatus("在岗��更新 ✅", true);
+    setStatus("在岗已更新 ✅", true);
   }catch(e){
     setStatus("在岗拉取异常 ❌ " + e, false);
     alert("在岗拉取异常：" + e);
+  }
+}
+
+async function adminForceLeave(btn){
+  if(!adminIsUnlocked_()){ alert("请先解锁管理员模式"); return; }
+  var badge = btn.getAttribute("data-badge") || "";
+  var task = btn.getAttribute("data-task") || "";
+  var session = btn.getAttribute("data-session") || "";
+  var biz = btn.getAttribute("data-biz") || "";
+  var device_id = btn.getAttribute("data-device") || "";
+  var ok = confirm("强制下线 / 강제 퇴장\n\n工牌：" + badge + "\n任务：" + biz + " / " + task + "\n\n确定要强制下线吗？\n정말 강제 퇴장하시겠습니까?");
+  if(!ok) return;
+  try{
+    setStatus("强制下线中... ⏳", true);
+    var res = await jsonp(LOCK_URL, { action:"admin_force_leave", k:adminKey_(), badge:badge, task:task, session:session, biz:biz, device_id:device_id });
+    if(!res || res.ok !== true){
+      setStatus("强制下线失败 ❌ " + (res && res.error ? res.error : ""), false);
+      alert("强制下线失败：" + (res && res.error ? res.error : "unknown"));
+      return;
+    }
+    setStatus("强制下线成功 ✅", true);
+    refreshActiveNow();
+  }catch(e){
+    setStatus("强制下线异常 ❌ " + e, false);
+    alert("强制下线异常：" + e);
+  }
+}
+
+async function refreshGlobalSessions(){
+  var filterEl = document.getElementById("sessionFilterBiz");
+  var filterBiz = filterEl ? filterEl.value : "";
+  var metaEl = document.getElementById("sessionListMeta");
+  var contentEl = document.getElementById("sessionListContent");
+  if(metaEl) metaEl.textContent = "加载中... ⏳";
+  if(contentEl) contentEl.innerHTML = "";
+  try{
+    var params = { action:"admin_sessions_list", k:adminKey_() };
+    if(filterBiz) params.biz = filterBiz;
+    var res = await jsonp(LOCK_URL, params);
+    if(!res || res.ok !== true){
+      if(metaEl) metaEl.textContent = "加载失败 ❌ " + (res && res.error ? res.error : "");
+      return;
+    }
+    var sessions = res.sessions || [];
+    if(metaEl) metaEl.textContent = "共 " + sessions.length + " 条 ｜ " + new Date(res.asof||Date.now()).toLocaleString();
+    if(!contentEl) return;
+    if(sessions.length===0){
+      contentEl.innerHTML = '<div class="muted">暂无Session记录</div>';
+      return;
+    }
+    contentEl.innerHTML = sessions.map(function(s){
+      var statusClass = s.status==="OPEN" ? "ok" : "muted";
+      var activeList = (s.active||[]).map(function(lk){ return esc(lk.badge||""); }).join(", ");
+      var forceEndBtn = "";
+      if(s.status==="OPEN" && (!s.active || s.active.length===0)){
+        forceEndBtn = '<button class="small bad" style="margin-top:6px;width:auto;" data-session="'+esc(s.session)+'" onclick="adminForceEndSession(this)">强制结束 / 강제 종료</button>';
+      }
+      return (
+        '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
+          '<div style="font-weight:700;font-size:13px;">'+esc(s.session)+'</div>' +
+          '<div class="muted" style="margin-top:4px;">'+
+            '状态: <span class="'+statusClass+'">'+esc(s.status)+'</span> ｜ ' +
+            'biz: '+esc(s.biz||"-")+' ｜ task: '+esc(s.task||"-")+
+          '</div>' +
+          '<div class="muted" style="margin-top:4px;">创建: '+new Date(s.created_ms||0).toLocaleString()+'</div>' +
+          (s.active && s.active.length>0
+            ? '<div class="muted" style="margin-top:4px;">在岗('+s.active.length+'): '+activeList+'</div>'
+            : '<div class="muted" style="margin-top:4px;">当前无在岗人员</div>') +
+          forceEndBtn +
+        '</div>'
+      );
+    }).join("");
+  }catch(e){
+    if(metaEl) metaEl.textContent = "加载异常 ❌ " + e;
+  }
+}
+
+async function adminForceEndSession(btn){
+  if(!adminIsUnlocked_()){ alert("请先解锁管理员模式"); return; }
+  var session = btn.getAttribute("data-session") || "";
+  if(!session){ alert("session 参数缺失"); return; }
+  var ok = confirm("强制结束Session / 강제 종료\n\nSession：" + session + "\n\n确定要强制结束吗？\n정말 강제 종료하시겠습니까?");
+  if(!ok) return;
+  try{
+    setStatus("强制结束中... ⏳", true);
+    var res = await jsonp(LOCK_URL, { action:"admin_force_end_session", k:adminKey_(), session:session });
+    if(!res || res.ok !== true){
+      setStatus("强制结束失败 ❌ " + (res && res.error ? res.error : ""), false);
+      alert("强制结束失败：" + (res && res.error ? res.error : "unknown"));
+      return;
+    }
+    setStatus("强制结束成功 ✅", true);
+    refreshGlobalSessions();
+  }catch(e){
+    setStatus("强制结束异常 ❌ " + e, false);
+    alert("强制结束异常：" + e);
   }
 }
 
