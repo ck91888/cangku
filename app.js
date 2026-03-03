@@ -717,10 +717,11 @@ async function endSessionGlobal_(){
     return;
   }
 
-  var evId = makeEventId({ event:"end", biz:"B2C", task:"SESSION", wave_id:"", badgeRaw:"" });
-  if(!hasRecent(evId)){
-    submitEvent({ event:"end", event_id: evId, biz:"B2C", task:"SESSION", pick_session_id: currentSessionId });
-    addRecent(evId);
+  var endBiz = (CUR_CTX && CUR_CTX.biz) ? String(CUR_CTX.biz) : "B2C"; // ✅ 用当前任务的 biz
+  var evId = makeEventId({ event:"end", biz: endBiz, task:"SESSION", wave_id:"", badgeRaw:"" });
+   if(!hasRecent(evId)){
+    submitEvent({ event:"end", event_id: evId, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId });
+     addRecent(evId);
   }
 
   setStatus("趟次结束已记录（待上传）✅", true);
@@ -745,9 +746,11 @@ async function tryAutoEndSessionAfterLeave_(){
     }
 
     if(r && r.closed){
-      var evIdEnd = makeEventId({ event:"end", biz:"B2C", task:"SESSION", wave_id:"", badgeRaw:"" });
+      var endBiz = (laborBiz && String(laborBiz).trim()) ? String(laborBiz).trim()
+           : ((CUR_CTX && CUR_CTX.biz) ? String(CUR_CTX.biz) : "B2C"); // ✅ 优先用本次 leave 的 biz
+      var evIdEnd = makeEventId({ event:"end", biz: endBiz, task:"SESSION", wave_id:"", badgeRaw:"" });
       if(!hasRecent(evIdEnd)){
-        submitEvent({ event:"end", event_id: evIdEnd, biz:"B2C", task:"SESSION", pick_session_id: currentSessionId });
+        submitEvent({ event:"end", event_id: evIdEnd, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId });
         addRecent(evIdEnd);
       }
       cleanupLocalSession_();
