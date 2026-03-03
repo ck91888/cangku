@@ -65,6 +65,7 @@
     <div class="card">
       <button class="primary" onclick="go('active_now')">全局在岗 <small>Active Now</small></button>
       <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 <small>Report</small></button>
+      <button class="primary" id="btnSessions" style="display:none;" onclick="go('global_sessions')">全局Session <small>Sessions</small></button>
     </div>
   </div>
 
@@ -154,11 +155,37 @@
     <div class="card">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <button class="primary" onclick="refreshActiveNow()">刷新 <small>새로고침</small></button>
+        <select id="activeNowFilterBiz" onchange="refreshActiveNow()">
+          <option value="">全部 / All</option>
+          <option value="B2C">B2C</option>
+          <option value="IMPORT">IMPORT</option>
+        </select>
         <div id="activeNowMeta" class="muted"></div>
       </div>
 
       <div id="activeNowSummary" style="margin-top:10px;"></div>
       <div id="activeNowList" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <!-- GLOBAL SESSIONS (Admin-only) -->
+  <div id="page-global_sessions" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <div class="grow pill">全局Session / Sessions</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button class="primary" onclick="refreshGlobalSessions()">刷新 <small>새로고침</small></button>
+        <select id="sessionFilterBiz" onchange="refreshGlobalSessions()">
+          <option value="">全部 / All</option>
+          <option value="B2C">B2C</option>
+          <option value="IMPORT">IMPORT</option>
+        </select>
+      </div>
+      <div id="sessionListMeta" class="muted" style="margin-top:8px;"></div>
+      <div id="sessionListContent" style="margin-top:10px;"></div>
     </div>
   </div>
 
@@ -504,6 +531,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=35"></script>
+  <script src="./app.js?v=36"></script>
 </body>
 </html>

@@ -145,6 +145,17 @@ export class LocksDO {
       return Response.json({ ok:true, asof: now, active: out });
     }
 
+    if (action === "lock_force_release") {
+      const badge = String(body.badge || "").trim();
+      if (!badge) return Response.json({ ok:false, error:"missing badge" });
+
+      const locks = this._locks;
+      if (!locks[badge]) return Response.json({ ok:true, released:false, reason:"not_found" });
+      delete locks[badge];
+      await this._save();
+      return Response.json({ ok:true, released:true });
+    }
+
     if (action === "ping") {
       return Response.json({ ok:true, asof: now, pong:true });
     }
@@ -563,6 +574,109 @@ export default {
 
       if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
       return jsonpOrJson({ ok:true, saved:true }, callback);
+    }
+
+    if (action === "admin_force_leave") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const badge = String(p.badge || "").trim();
+      if (!badge) return jsonpOrJson({ ok:false, error:"missing badge" }, callback);
+      const task = String(p.task || "").trim();
+      const session = String(p.session || "").trim();
+      const device_id = String(p.device_id || "").trim();
+      const biz = String(p.biz || "").trim();
+      const server_ms = now;
+      const event_id = "admin-fl-" + badge + "-" + now;
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(server_ms, server_ms, event_id, "leave", badge, biz||"ADMIN", task||"ADMIN", session||"", "", device_id||"", 1, "admin_force_leave").run();
+      const stub = locksStub(env);
+      await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ action:"lock_force_release", badge })
+      }).catch(() => {});
+      return jsonpOrJson({ ok:true, released:true }, callback);
+    }
+
+    if (action === "admin_sessions_list") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const biz = String(p.biz || "").trim();
+      let sessionsSql = `SELECT session,status,created_ms,created_by_device,closed_ms,closed_by_device FROM sessions ORDER BY created_ms DESC LIMIT 50`;
+      const sessionRows = (await env.DB.prepare(sessionsSql).all()).results || [];
+      const stub = locksStub(env);
+      const allLocksR = await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ action:"locks_all" })
+      });
+      const allLocksData = await allLocksR.json();
+      const allLocks = allLocksData.active || [];
+      const locksBySession = {};
+      for (const lk of allLocks) {
+        const s = String(lk.session || "");
+        if (!locksBySession[s]) locksBySession[s] = [];
+        locksBySession[s].push(lk);
+      }
+      const result = [];
+      for (const s of sessionRows) {
+        const firstEvt = await env.DB.prepare(
+          `SELECT biz,task FROM events WHERE session=? AND event='start' ORDER BY server_ms ASC LIMIT 1`
+        ).bind(String(s.session)).first();
+        const sessionBiz = firstEvt ? String(firstEvt.biz || "") : "";
+        const sessionTask = firstEvt ? String(firstEvt.task || "") : "";
+        if (biz && sessionBiz && sessionBiz !== biz) continue;
+        const activeLocks = locksBySession[String(s.session)] || [];
+        result.push({
+          session: s.session,
+          status: String(s.status || "OPEN").toUpperCase(),
+          biz: sessionBiz,
+          task: sessionTask,
+          created_ms: s.created_ms || 0,
+          closed_ms: s.closed_ms || 0,
+          active: activeLocks
+        });
+      }
+      return jsonpOrJson({ ok:true, asof: now, sessions: result }, callback);
+    }
+
+    if (action === "admin_force_end_session") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const session = String(p.session || "").trim();
+      if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
+      const stub = locksStub(env);
+      const locksR = await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ action:"locks_by_session", session })
+      });
+      const locksData = await locksR.json();
+      const activeLocks = locksData.active || [];
+      const released = [];
+      for (const lk of activeLocks) {
+        const badge = String(lk.badge || "").trim();
+        if (!badge) continue;
+        await stub.fetch("https://locks/do", {
+          method: "POST",
+          headers: { "content-type":"application/json" },
+          body: JSON.stringify({ action:"lock_force_release", badge })
+        }).catch(() => {});
+        const evId = "admin-force-end-" + badge + "-" + now;
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(now, now, evId, "leave", badge, String(lk.biz||""), String(lk.task||""), session, "", String(lk.device_id||""), 1, "admin_force_end").run();
+        released.push(badge);
+      }
+      await env.DB.prepare(
+        `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_device='admin' WHERE session=?`
+      ).bind(now, session).run();
+      const endEvId = "admin-force-end-session-" + session + "-" + now;
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(now, now, endEvId, "end", "", "ADMIN", "SESSION", session, "", "", 1, "admin_force_end_session").run();
+      return jsonpOrJson({ ok:true, released, session }, callback);
     }
 
     return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);
