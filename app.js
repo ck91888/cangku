@@ -1007,6 +1007,13 @@ async function refreshActiveNow(){
 async function endTally(){ return endSessionGlobal_(); }
 
 async function startBulkOut(){
+  if(currentSessionId){
+    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
+    if(!ok) return;
+  }
+  var btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
+
   try{
     var biz = "B2C", task = "批量出库";
 
@@ -1036,6 +1043,13 @@ async function startBulkOut(){
 async function endBulkOut(){ return endSessionGlobal_(); }
 
 async function startPicking(){
+  if(currentSessionId){
+    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
+    if(!ok) return;
+  }
+  var btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
+
   try{
     var biz = "B2C", task = "PICK";
 
@@ -1080,6 +1094,13 @@ function startRelabelTimer(){
 }
 
 async function startRelabel(){
+  if(currentSessionId){
+    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
+    if(!ok) return;
+  }
+  var btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
+
   try{
     var biz = "B2C", task = "RELABEL";
 
