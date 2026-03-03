@@ -286,8 +286,9 @@ async function guardSessionOpenOrAlert_(msgWhenClosed){
   var closed = await isSessionClosedAsync_();
   if(!closed) return true;
 
+  cleanupLocalSession_();
   alert(msgWhenClosed || "该趟次已结束，请重新开始或扫码加入新的趟次。");
-  setStatus("该趟次已结束（请重新开始）", false);
+  setStatus("该趟次已结束（已自动清除，请重新开始）", false);
   return false;
 }
 
@@ -682,6 +683,10 @@ async function submitEventSync_(o, silent){
   var er = (res && res.error) ? String(res.error) : "提交失败：event_submit failed";
   if(er === "task_not_started"){
     throw new Error("该环节还没点【开始】。\n请先点击【开始理货/开始拣货/开始换单/开始批量出库】再扫码加入。");
+  }
+  if(er === "session_closed"){
+    cleanupLocalSession_();
+    throw new Error("该趟次已被关闭（可能是管理员强制结束）。\n本地已自动清除，请重新开始新的趟次。");
   }
     if(er === "device_has_open_session"){
   const ob = (res && res.open_biz) ? res.open_biz : "";
