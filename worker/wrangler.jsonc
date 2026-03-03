@@ -1,0 +1,23 @@
+{
+  "name": "ck-warehouse-api",
+  "main": "index.js",
+  "compatibility_date": "2026-03-03",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ck_warehouse",
+      "database_id": "a07b8671-bde2-4f72-894c-2d17a13081b7"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "LOCKS", "class_name": "LocksDO" }
+    ]
+  },
+
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["LocksDO"] }
+  ]
+}
