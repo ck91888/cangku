@@ -311,6 +311,11 @@ export default {
       await ensureSessionOpen(env, session, "");
       const s = await getSession(env, session);
 
+      // 查该 session 关联的任务（取第一条 start 事件）
+      const firstEvt = await env.DB.prepare(
+        `SELECT biz, task FROM events WHERE session=? AND event='start' ORDER BY server_ms ASC LIMIT 1`
+      ).bind(session).first();
+
       const stub = locksStub(env);
       const r = await stub.fetch("https://locks/do", {
         method: "POST",
@@ -328,6 +333,8 @@ export default {
         created_by_device: s?.created_by_device || "",
         closed_ms: s?.closed_ms || 0,
         closed_by_device: s?.closed_by_device || "",
+        biz: firstEvt ? String(firstEvt.biz||"") : "",
+        task: firstEvt ? String(firstEvt.task||"") : "",
         active: lockInfo.active || []
       }, callback);
     }

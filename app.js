@@ -324,86 +324,66 @@ async function guardSessionOpenOrAlert_(msgWhenClosed){
 }
 
 /** ===== Session join via QR ===== */
-function sessionQrPayload_(sessionId){ return "CKSESSION|" + String(sessionId || "").trim(); }
+function sessionQrPayload_(sessionId){
+  var b = CUR_CTX ? (CUR_CTX.biz || "") : "";
+  var t = CUR_CTX ? (CUR_CTX.task || "") : "";
+  return "CKSESSION|" + String(sessionId || "").trim() + "|" + b + "|" + t;
+}
 function parseSessionQr_(text){
   var t = String(text || "").trim();
   if(!t) return null;
   if(t.indexOf("CKSESSION|") === 0){
-    var sid = t.split("|").slice(1).join("|").trim();
-    return sid || null;
+    var parts = t.split("|");
+    var sid  = parts[1] ? parts[1].trim() : "";
+    var biz  = parts[2] ? parts[2].trim() : "";
+    var task = parts[3] ? parts[3].trim() : "";
+    return sid ? { sid: sid, biz: biz, task: task } : null;
   }
-  if(t.indexOf("PS-") === 0) return t;
+  if(t.indexOf("PS-") === 0) return { sid: t, biz: "", task: "" };
   return null;
+}
+
+/** 自动绑定 session — biz/task 可来自 QR 或从服务器读取，无需手动选择 */
+async function bindSessionWithCtx_(sid, biz, task){
+  // 1. 若 QR 里没有 biz/task，先从服务器查
+  if(!biz || !task){
+    try{
+      var info = await sessionInfoServer_(sid);
+      biz  = info.biz  || "";
+      task = info.task || "";
+    }catch(e){ /* 网络异常时继续尝试页面上下文 */ }
+  }
+  // 2. 还没有就用当前页面上下文
+  if(!biz || !task){
+    var pageCtx = PAGE_CTX[getHashPage()] || null;
+    if(pageCtx){ biz = pageCtx.biz; task = pageCtx.task; }
+  }
+  if(!biz || !task){
+    alert("无法自动识别该趟次的任务类型，请在对应任务页面内扫码加入。");
+    return false;
+  }
+  CUR_CTX = { biz: biz, task: task, page: getHashPage() };
+  currentSessionId = sid;
+  setSess_(biz, task, currentSessionId);
+  SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
+  restoreState();
+  renderActiveLists();
+  refreshUI();
+  alert("已加入趟次 ✅\n" + sid + "\n任务：" + biz + " / " + task);
+  setStatus("已加入趟次 ✅ " + sid, true);
+  return true;
 }
 
 async function joinExistingSessionByInput(){
   var input = prompt("请输入趟次 ID（例如 PS-20260303-001）：\n세션 ID를 입력하세요:") || "";
   input = String(input).trim();
-  if(!input){
-    return;
-  }
+  if(!input) return;
 
-  // 尝试解析 CKSESSION|xxx 格式，如果不是就直接当 session id
-  var sid = parseSessionQr_(input);
-  if(!sid) sid = input;
+  var parsed = parseSessionQr_(input);
+  var sid = parsed ? parsed.sid : (input.indexOf("PS-") === 0 ? input : null);
+  if(!sid){ alert("趟次 ID 格式不正确。"); return; }
 
-  // 和扫码加入完全相同的绑定逻辑
-  var ctx = PAGE_CTX[getHashPage()] || null;
-  if(!ctx){
-    var pick = prompt(
-      "把这个趟次绑定到哪个任务？\n" +
-      "输入数字：\n" +
-      "1=TALLY 入库理货\n" +
-      "2=PICK 拣货\n" +
-      "3=批量出库\n" +
-      "4=RELABEL 换单\n" +
-      "5=进口快件-卸货\n" +
-      "6=进口快件-过机扫描码托\n" +
-      "7=进口快件-装柜/出货\n" +
-      "8=B2B-卸货\n" +
-      "9=B2B-入库理货\n" +
-      "10=B2B-工单操作\n" +
-      "11=B2B-出库\n" +
-      "12=B2B-盘点\n" +
-      "13=B2C-盘点\n" +
-      "14=仓库整理"
-    ) || "";
-    pick = String(pick).trim();
-    var map = {
-      "1": {biz:"B2C", task:"TALLY"},
-      "2": {biz:"B2C", task:"PICK"},
-      "3": {biz:"B2C", task:"批量出库"},
-      "4": {biz:"B2C", task:"RELABEL"},
-      "5": {biz:"IMPORT", task:"卸货"},
-      "6": {biz:"IMPORT", task:"过机扫描码托"},
-      "7": {biz:"IMPORT", task:"装柜/出货"},
-      "8": {biz:"B2B", task:"B2B卸货"},
-      "9": {biz:"B2B", task:"B2B入库理货"},
-      "10": {biz:"B2B", task:"B2B工单操作"},
-      "11": {biz:"B2B", task:"B2B出库"},
-      "12": {biz:"B2B", task:"B2B盘点"},
-      "13": {biz:"B2C", task:"B2C盘点"},
-      "14": {biz:"WAREHOUSE", task:"仓库整理"}
-    };
-    ctx = map[pick] || null;
-    if(!ctx){
-      alert("未选择任务，已取消。");
-      return;
-    }
-  }
-
-  CUR_CTX = { biz: ctx.biz, task: ctx.task, page: getHashPage() };
-  currentSessionId = sid;
-  setSess_(ctx.biz, ctx.task, currentSessionId);
-
-  SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
-
-  restoreState();
-  renderActiveLists();
-  refreshUI();
-
-  alert("已加入趟次 ✅\n" + currentSessionId);
-  setStatus("已加入趟次 ✅ " + currentSessionId, true);
+  await bindSessionWithCtx_(sid, parsed ? parsed.biz : "", parsed ? parsed.task : "");
 }
 
 async function joinExistingSessionByScan(){
@@ -413,8 +393,8 @@ async function joinExistingSessionByScan(){
 }
 
 function showSessionQr(){
-  var box = document.getElementById("b2cSessionQrBox");
-  if(!box) { alert("缺少 b2cSessionQrBox"); return; }
+  var box = document.getElementById("sessionQrBox");
+  if(!box) { alert("缺少 sessionQrBox"); return; }
 
   box.innerHTML = "";
   if(!currentSessionId){
@@ -432,7 +412,8 @@ function showSessionQr(){
 
   var label = document.createElement("div");
   label.className = "pill";
-  label.textContent = "session: " + currentSessionId;
+  label.textContent = "session: " + currentSessionId +
+    (CUR_CTX ? "  |  " + CUR_CTX.biz + " / " + CUR_CTX.task : "");
   wrap.appendChild(label);
 
   var qrEl = document.createElement("div");
@@ -468,6 +449,45 @@ function keyBulkOutOrders(){ return "bulkoutOrders_" + (currentSessionId || "NA"
 function keyB2bTallyOrders(){ return "b2bTallyOrders_" + (currentSessionId || "NA"); }
 function keyB2bWorkorders(){ return "b2bWorkorders_" + (currentSessionId || "NA"); }
 
+/**
+ * TASK_REGISTRY — 每条记录描述一个"在岗任务"：
+ *   task     : 任务名（与 biz/task 字段对应）
+ *   get/set  : 读写对应的 activeXxx Set
+ *   countId  : 显示人数的 DOM 元素 id（可为 null）
+ *   listId   : 显示名单的 DOM 元素 id（可为 null）
+ *   keyFn    : 返回 localStorage key 的函数
+ *   emptyMsg : leaveWork 时列表为空的提示文字
+ *
+ * 增加新任务类型：只需在这里加一行，其余函数自动覆盖。
+ */
+var TASK_REGISTRY = [
+  { task:"PICK",         get:function(){return activePick;},           set:function(s){activePick=s;},           countId:"pickCount",              listId:"pickActiveList",              keyFn:keyActivePick,          emptyMsg:"当前没有人在拣货作业中（无需退出）。" },
+  { task:"RELABEL",      get:function(){return activeRelabel;},        set:function(s){activeRelabel=s;},        countId:"relabelCount",           listId:"relabelActiveList",           keyFn:keyActiveRelabel,       emptyMsg:"当前没有人在换单作业中（无需退出）。" },
+  { task:"PACK",         get:function(){return activePack;},           set:function(s){activePack=s;},           countId:"packCount",              listId:"packActiveList",              keyFn:keyActivePack,          emptyMsg:"当前没有人在验货贴单打包作业中（无需退出）。" },
+  { task:"TALLY",        get:function(){return activeTally;},          set:function(s){activeTally=s;},          countId:"tallyCount",             listId:"tallyActiveList",             keyFn:keyActiveTally,         emptyMsg:"当前没有人在理货作业中（无需退出）。" },
+  { task:"批量出库",      get:function(){return activeBulkOut;},        set:function(s){activeBulkOut=s;},        countId:"bulkoutCount",           listId:"bulkoutActiveList",           keyFn:keyActiveBulkOut,       emptyMsg:"当前没有人在批量出库作业中（无需退出）。" },
+  { task:"退件入库",      get:function(){return activeReturn;},         set:function(s){activeReturn=s;},         countId:"returnCount",            listId:"returnActiveList",            keyFn:keyActiveReturn,        emptyMsg:"当前没有人在退件入库作业中（无需退出）。" },
+  { task:"质检",         get:function(){return activeQc;},             set:function(s){activeQc=s;},             countId:null,                     listId:null,                          keyFn:keyActiveQc,            emptyMsg:"当前没有人在质检作业中（无需退出）。" },
+  { task:"废弃处理",      get:function(){return activeDisposal;},       set:function(s){activeDisposal=s;},       countId:null,                     listId:null,                          keyFn:keyActiveDisposal,      emptyMsg:"当前没有人在废弃处理作业中（无需退出）。" },
+  { task:"卸货",         get:function(){return activeImportUnload;},   set:function(s){activeImportUnload=s;},   countId:"importUnloadCount",      listId:"importUnloadActiveList",      keyFn:keyActiveImportUnload,  emptyMsg:"当前没有人在卸货作业中（无需退出）。" },
+  { task:"过机扫描码托",  get:function(){return activeImportScanPallet;},set:function(s){activeImportScanPallet=s;},countId:"importScanPalletCount", listId:"importScanPalletActiveList",  keyFn:keyActiveImportScanPallet, emptyMsg:"当前没有人在过机扫描码托作业中（无需退出）。" },
+  { task:"装柜/出货",    get:function(){return activeImportLoadout;},  set:function(s){activeImportLoadout=s;},  countId:"importLoadoutCount",     listId:"importLoadoutActiveList",     keyFn:keyActiveImportLoadout, emptyMsg:"当前没有人在装柜/出货作业中（无需退出）。" },
+  { task:"B2B卸货",      get:function(){return activeB2bUnload;},      set:function(s){activeB2bUnload=s;},      countId:"b2bUnloadCount",         listId:"b2bUnloadActiveList",         keyFn:keyActiveB2bUnload,     emptyMsg:"当前没有人在B2B卸货作业中（无需退出）。" },
+  { task:"B2B入库理货",  get:function(){return activeB2bTally;},       set:function(s){activeB2bTally=s;},       countId:"b2bTallyCount",          listId:"b2bTallyActiveList",          keyFn:keyActiveB2bTally,      emptyMsg:"当前没有人在B2B入库理货作业中（无需退出）。" },
+  { task:"B2B工单操作",  get:function(){return activeB2bWorkorder;},   set:function(s){activeB2bWorkorder=s;},   countId:"b2bWorkorderCount",      listId:"b2bWorkorderActiveList",      keyFn:keyActiveB2bWorkorder,  emptyMsg:"当前没有人在B2B工单操作作业中（无需退出）。" },
+  { task:"B2B出库",      get:function(){return activeB2bOutbound;},    set:function(s){activeB2bOutbound=s;},    countId:"b2bOutboundCount",       listId:"b2bOutboundActiveList",       keyFn:keyActiveB2bOutbound,   emptyMsg:"当前没有人在B2B出库作业中（无需退出）。" },
+  { task:"B2B盘点",      get:function(){return activeB2bInventory;},   set:function(s){activeB2bInventory=s;},   countId:"b2bInventoryCount",      listId:"b2bInventoryActiveList",      keyFn:keyActiveB2bInventory,  emptyMsg:"当前没有人在B2B盘点作业中（无需退出）。" },
+  { task:"B2C盘点",      get:function(){return activeB2cInventory;},   set:function(s){activeB2cInventory=s;},   countId:"b2cInventoryCount",      listId:"b2cInventoryActiveList",      keyFn:keyActiveB2cInventory,  emptyMsg:"当前没有人在B2C盘点作业中（无需退出）。" },
+  { task:"仓库整理",      get:function(){return activeWarehouseCleanup;},set:function(s){activeWarehouseCleanup=s;},countId:"warehouseCleanupCount",listId:"warehouseCleanupActiveList",  keyFn:keyActiveWarehouseCleanup, emptyMsg:"当前没有人在仓库整理作业中（无需退出）。" }
+];
+
+function taskReg_(task){
+  for(var i=0;i<TASK_REGISTRY.length;i++){
+    if(TASK_REGISTRY[i].task === task) return TASK_REGISTRY[i];
+  }
+  return null;
+}
+
 var RECENT_MAX = 80;
 function keyRecent(){ return "recentEventIds_" + (currentSessionId || "NA"); }
 function loadRecent(){
@@ -501,56 +521,25 @@ function makeEventId(params){
 function persistState(){
   if(!currentSessionId) return;
   localStorage.setItem(keyWaves(), JSON.stringify(Array.from(scannedWaves)));
-  localStorage.setItem(keyActivePick(), JSON.stringify(Array.from(activePick)));
-  localStorage.setItem(keyActiveRelabel(), JSON.stringify(Array.from(activeRelabel)));
-  localStorage.setItem(keyActivePack(), JSON.stringify(Array.from(activePack)));
-  localStorage.setItem(keyActiveTally(), JSON.stringify(Array.from(activeTally)));
-  localStorage.setItem(keyActiveBulkOut(), JSON.stringify(Array.from(activeBulkOut)));
-  localStorage.setItem(keyActiveReturn(), JSON.stringify(Array.from(activeReturn)));
-  localStorage.setItem(keyActiveQc(), JSON.stringify(Array.from(activeQc)));
-  localStorage.setItem(keyActiveDisposal(), JSON.stringify(Array.from(activeDisposal)));
-  localStorage.setItem(keyActiveImportUnload(), JSON.stringify(Array.from(activeImportUnload)));
-  localStorage.setItem(keyActiveImportScanPallet(), JSON.stringify(Array.from(activeImportScanPallet)));
-  localStorage.setItem(keyActiveImportLoadout(), JSON.stringify(Array.from(activeImportLoadout)));
   localStorage.setItem(keyInbounds(), JSON.stringify(Array.from(scannedInbounds)));
   localStorage.setItem(keyBulkOutOrders(), JSON.stringify(Array.from(scannedBulkOutOrders)));
-  localStorage.setItem(keyActiveB2bUnload(), JSON.stringify(Array.from(activeB2bUnload)));
-  localStorage.setItem(keyActiveB2bTally(), JSON.stringify(Array.from(activeB2bTally)));
-  localStorage.setItem(keyActiveB2bWorkorder(), JSON.stringify(Array.from(activeB2bWorkorder)));
-  localStorage.setItem(keyActiveB2bOutbound(), JSON.stringify(Array.from(activeB2bOutbound)));
-  localStorage.setItem(keyActiveB2bInventory(), JSON.stringify(Array.from(activeB2bInventory)));
-  localStorage.setItem(keyActiveB2cInventory(), JSON.stringify(Array.from(activeB2cInventory)));
-  localStorage.setItem(keyActiveWarehouseCleanup(), JSON.stringify(Array.from(activeWarehouseCleanup)));
   localStorage.setItem(keyB2bTallyOrders(), JSON.stringify(Array.from(scannedB2bTallyOrders)));
   localStorage.setItem(keyB2bWorkorders(), JSON.stringify(Array.from(scannedB2bWorkorders)));
+  TASK_REGISTRY.forEach(function(reg){
+    localStorage.setItem(reg.keyFn(), JSON.stringify(Array.from(reg.get())));
+  });
 }
 
 function restoreState(){
   if(!currentSessionId) return;
-
   try{ scannedWaves = new Set(JSON.parse(localStorage.getItem(keyWaves()) || "[]")); }catch(e){ scannedWaves = new Set(); }
-  try{ activePick = new Set(JSON.parse(localStorage.getItem(keyActivePick()) || "[]")); }catch(e){ activePick = new Set(); }
-  try{ activeRelabel = new Set(JSON.parse(localStorage.getItem(keyActiveRelabel()) || "[]")); }catch(e){ activeRelabel = new Set(); }
-  try{ activePack = new Set(JSON.parse(localStorage.getItem(keyActivePack()) || "[]")); }catch(e){ activePack = new Set(); }
-  try{ activeTally = new Set(JSON.parse(localStorage.getItem(keyActiveTally()) || "[]")); }catch(e){ activeTally = new Set(); }
-  try{ activeBulkOut = new Set(JSON.parse(localStorage.getItem(keyActiveBulkOut()) || "[]")); }catch(e){ activeBulkOut = new Set(); }
-  try{ activeReturn = new Set(JSON.parse(localStorage.getItem(keyActiveReturn()) || "[]")); }catch(e){ activeReturn = new Set(); }
-  try{ activeQc = new Set(JSON.parse(localStorage.getItem(keyActiveQc()) || "[]")); }catch(e){ activeQc = new Set(); }
-  try{ activeDisposal = new Set(JSON.parse(localStorage.getItem(keyActiveDisposal()) || "[]")); }catch(e){ activeDisposal = new Set(); }
-  try{ activeImportUnload = new Set(JSON.parse(localStorage.getItem(keyActiveImportUnload()) || "[]")); }catch(e){ activeImportUnload = new Set(); }
-  try{ activeImportScanPallet = new Set(JSON.parse(localStorage.getItem(keyActiveImportScanPallet()) || "[]")); }catch(e){ activeImportScanPallet = new Set(); }
-  try{ activeImportLoadout = new Set(JSON.parse(localStorage.getItem(keyActiveImportLoadout()) || "[]")); }catch(e){ activeImportLoadout = new Set(); }
   try{ scannedInbounds = new Set(JSON.parse(localStorage.getItem(keyInbounds()) || "[]")); }catch(e){ scannedInbounds = new Set(); }
   try{ scannedBulkOutOrders = new Set(JSON.parse(localStorage.getItem(keyBulkOutOrders()) || "[]")); }catch(e){ scannedBulkOutOrders = new Set(); }
-  try{ activeB2bUnload = new Set(JSON.parse(localStorage.getItem(keyActiveB2bUnload()) || "[]")); }catch(e){ activeB2bUnload = new Set(); }
-  try{ activeB2bTally = new Set(JSON.parse(localStorage.getItem(keyActiveB2bTally()) || "[]")); }catch(e){ activeB2bTally = new Set(); }
-  try{ activeB2bWorkorder = new Set(JSON.parse(localStorage.getItem(keyActiveB2bWorkorder()) || "[]")); }catch(e){ activeB2bWorkorder = new Set(); }
-  try{ activeB2bOutbound = new Set(JSON.parse(localStorage.getItem(keyActiveB2bOutbound()) || "[]")); }catch(e){ activeB2bOutbound = new Set(); }
-  try{ activeB2bInventory = new Set(JSON.parse(localStorage.getItem(keyActiveB2bInventory()) || "[]")); }catch(e){ activeB2bInventory = new Set(); }
-  try{ activeB2cInventory = new Set(JSON.parse(localStorage.getItem(keyActiveB2cInventory()) || "[]")); }catch(e){ activeB2cInventory = new Set(); }
-  try{ activeWarehouseCleanup = new Set(JSON.parse(localStorage.getItem(keyActiveWarehouseCleanup()) || "[]")); }catch(e){ activeWarehouseCleanup = new Set(); }
   try{ scannedB2bTallyOrders = new Set(JSON.parse(localStorage.getItem(keyB2bTallyOrders()) || "[]")); }catch(e){ scannedB2bTallyOrders = new Set(); }
   try{ scannedB2bWorkorders = new Set(JSON.parse(localStorage.getItem(keyB2bWorkorders()) || "[]")); }catch(e){ scannedB2bWorkorders = new Set(); }
+  TASK_REGISTRY.forEach(function(reg){
+    try{ reg.set(new Set(JSON.parse(localStorage.getItem(reg.keyFn()) || "[]"))); }catch(e){ reg.set(new Set()); }
+  });
 }
 
 /** ===== Utils ===== */
@@ -639,7 +628,6 @@ netBusyOn_(action);
 
     // PERF
     var t0 = Date.now();
-    var action = (params && params.action) ? String(params.action) : "";
     if(PERF_ON && action){
       setStatus("请求中... " + action + " ⏳", true);
     }
@@ -815,29 +803,15 @@ function formatActiveListForAlert_(active){
 
 function cleanupLocalSession_(){
   localStorage.removeItem(keyWaves());
-  localStorage.removeItem(keyActivePick());
-  localStorage.removeItem(keyActiveRelabel());
-  localStorage.removeItem(keyActivePack());
-  localStorage.removeItem(keyActiveTally());
-  localStorage.removeItem(keyActiveBulkOut());
-  localStorage.removeItem(keyActiveReturn());
-  localStorage.removeItem(keyActiveQc());
-  localStorage.removeItem(keyActiveDisposal());
-  localStorage.removeItem(keyActiveImportUnload());
-  localStorage.removeItem(keyActiveImportScanPallet());
-  localStorage.removeItem(keyActiveImportLoadout());
   localStorage.removeItem(keyInbounds());
   localStorage.removeItem(keyBulkOutOrders());
-  localStorage.removeItem(keyActiveB2bUnload());
-  localStorage.removeItem(keyActiveB2bTally());
-  localStorage.removeItem(keyActiveB2bWorkorder());
-  localStorage.removeItem(keyActiveB2bOutbound());
-  localStorage.removeItem(keyActiveB2bInventory());
-  localStorage.removeItem(keyActiveB2cInventory());
-  localStorage.removeItem(keyActiveWarehouseCleanup());
   localStorage.removeItem(keyB2bTallyOrders());
   localStorage.removeItem(keyB2bWorkorders());
   localStorage.removeItem(keyRecent());
+  TASK_REGISTRY.forEach(function(reg){
+    localStorage.removeItem(reg.keyFn());
+    reg.set(new Set());
+  });
 
   if(CUR_CTX && CUR_CTX.biz && CUR_CTX.task){
     clearSess_(CUR_CTX.biz, CUR_CTX.task);
@@ -916,54 +890,23 @@ function parseBadge(code){
   return { raw: raw, id: id, name: name };
 }
 function isDaId(id){ return /^DA-\d{8}-.+$/.test(id); }
-function isEmpId(id){ return /^EMP-[A-Za-z0-9_-]+$/.test(id); }
-function isPermanentDaId(id){ return /^DAF-\d+$/.test(id); }
+function isEmpId(id){ return /^EMP-.+$/.test(id); }
+function isPermanentDaId(id){ return /^DAF-.+$/.test(id); }
 function isOperatorBadge(raw){
   var p = parseBadge(raw);
   return isDaId(p.id) || isEmpId(p.id) || isPermanentDaId(p.id);
 }
 
-/** ===== Active (local cache only) ===== */
+/** ===== Active (local cache only) — driven by TASK_REGISTRY ===== */
 function isAlreadyActive(task, badge){
-  if(task==="PICK") return activePick.has(badge);
-  if(task==="RELABEL") return activeRelabel.has(badge);
-  if(task==="PACK") return activePack.has(badge);
-  if(task==="TALLY") return activeTally.has(badge);
-  if(task==="批量出库") return activeBulkOut.has(badge);
-  if(task==="退件入库") return activeReturn.has(badge);
-  if(task==="质检") return activeQc.has(badge);
-  if(task==="废弃处理") return activeDisposal.has(badge);
-  if(task==="卸货") return activeImportUnload.has(badge);
-  if(task==="过机扫描码托") return activeImportScanPallet.has(badge);
-  if(task==="装柜/出货") return activeImportLoadout.has(badge);
-  if(task==="B2B卸货") return activeB2bUnload.has(badge);
-  if(task==="B2B入库理货") return activeB2bTally.has(badge);
-  if(task==="B2B工单操作") return activeB2bWorkorder.has(badge);
-  if(task==="B2B出库") return activeB2bOutbound.has(badge);
-  if(task==="B2B盘点") return activeB2bInventory.has(badge);
-  if(task==="B2C盘点") return activeB2cInventory.has(badge);
-  if(task==="仓库整理") return activeWarehouseCleanup.has(badge);
-  return false;
+  var reg = taskReg_(task);
+  return reg ? reg.get().has(badge) : false;
 }
 function applyActive(task, action, badge){
-  if(task==="PICK"){ if(action==="join") activePick.add(badge); if(action==="leave") activePick.delete(badge); }
-  if(task==="RELABEL"){ if(action==="join") activeRelabel.add(badge); if(action==="leave") activeRelabel.delete(badge); }
-  if(task==="PACK"){ if(action==="join") activePack.add(badge); if(action==="leave") activePack.delete(badge); }
-  if(task==="TALLY"){ if(action==="join") activeTally.add(badge); if(action==="leave") activeTally.delete(badge); }
-  if(task==="批量出库"){ if(action==="join") activeBulkOut.add(badge); if(action==="leave") activeBulkOut.delete(badge); }
-  if(task==="退件入库"){ if(action==="join") activeReturn.add(badge); if(action==="leave") activeReturn.delete(badge); }
-  if(task==="质检"){ if(action==="join") activeQc.add(badge); if(action==="leave") activeQc.delete(badge); }
-  if(task==="废弃处理"){ if(action==="join") activeDisposal.add(badge); if(action==="leave") activeDisposal.delete(badge); }
-  if(task==="卸货"){ if(action==="join") activeImportUnload.add(badge); if(action==="leave") activeImportUnload.delete(badge); }
-  if(task==="过机扫描码托"){ if(action==="join") activeImportScanPallet.add(badge); if(action==="leave") activeImportScanPallet.delete(badge); }
-  if(task==="装柜/出货"){ if(action==="join") activeImportLoadout.add(badge); if(action==="leave") activeImportLoadout.delete(badge); }
-  if(task==="B2B卸货"){ if(action==="join") activeB2bUnload.add(badge); if(action==="leave") activeB2bUnload.delete(badge); }
-  if(task==="B2B入库理货"){ if(action==="join") activeB2bTally.add(badge); if(action==="leave") activeB2bTally.delete(badge); }
-  if(task==="B2B工单操作"){ if(action==="join") activeB2bWorkorder.add(badge); if(action==="leave") activeB2bWorkorder.delete(badge); }
-  if(task==="B2B出库"){ if(action==="join") activeB2bOutbound.add(badge); if(action==="leave") activeB2bOutbound.delete(badge); }
-  if(task==="B2B盘点"){ if(action==="join") activeB2bInventory.add(badge); if(action==="leave") activeB2bInventory.delete(badge); }
-  if(task==="B2C盘点"){ if(action==="join") activeB2cInventory.add(badge); if(action==="leave") activeB2cInventory.delete(badge); }
-  if(task==="仓库整理"){ if(action==="join") activeWarehouseCleanup.add(badge); if(action==="leave") activeWarehouseCleanup.delete(badge); }
+  var reg = taskReg_(task);
+  if(!reg) return;
+  if(action==="join") reg.get().add(badge);
+  if(action==="leave") reg.get().delete(badge);
 }
 
 /** ===== Render lists ===== */
@@ -978,85 +921,12 @@ function renderSetToHtml(setObj){
 }
 
 function renderActiveLists(){
-  var pc = document.getElementById("pickCount");
-  var pl = document.getElementById("pickActiveList");
-  if(pc) pc.textContent = String(activePick.size);
-  if(pl) pl.innerHTML = renderSetToHtml(activePick);
-
-  var rc = document.getElementById("relabelCount");
-  var rl = document.getElementById("relabelActiveList");
-  if(rc) rc.textContent = String(activeRelabel.size);
-  if(rl) rl.innerHTML = renderSetToHtml(activeRelabel);
-
-  var kc = document.getElementById("packCount") || document.getElementById("packCountPeople");
-  var kl = document.getElementById("packActiveList");
-  if(kc) kc.textContent = String(activePack.size);
-  if(kl) kl.innerHTML = renderSetToHtml(activePack);
-
-  var tc = document.getElementById("tallyCount");
-  var tl = document.getElementById("tallyActiveList");
-  if(tc) tc.textContent = String(activeTally.size);
-  if(tl) tl.innerHTML = renderSetToHtml(activeTally);
-
-  var bc = document.getElementById("bulkoutCount");
-  var bl = document.getElementById("bulkoutActiveList");
-  if(bc) bc.textContent = String(activeBulkOut.size);
-  if(bl) bl.innerHTML = renderSetToHtml(activeBulkOut);
-
-  var xc = document.getElementById("returnCount");
-  var xl = document.getElementById("returnActiveList");
-  if(xc) xc.textContent = String(activeReturn.size);
-  if(xl) xl.innerHTML = renderSetToHtml(activeReturn);
-
-  var ic = document.getElementById("importUnloadCount");
-  var il = document.getElementById("importUnloadActiveList");
-  if(ic) ic.textContent = String(activeImportUnload.size);
-  if(il) il.innerHTML = renderSetToHtml(activeImportUnload);
-
-  var sc = document.getElementById("importScanPalletCount");
-  var sl = document.getElementById("importScanPalletActiveList");
-  if(sc) sc.textContent = String(activeImportScanPallet.size);
-  if(sl) sl.innerHTML = renderSetToHtml(activeImportScanPallet);
-
-  var lc = document.getElementById("importLoadoutCount");
-  var ll = document.getElementById("importLoadoutActiveList");
-  if(lc) lc.textContent = String(activeImportLoadout.size);
-  if(ll) ll.innerHTML = renderSetToHtml(activeImportLoadout);
-
-  var b2uC = document.getElementById("b2bUnloadCount");
-  var b2uL = document.getElementById("b2bUnloadActiveList");
-  if(b2uC) b2uC.textContent = String(activeB2bUnload.size);
-  if(b2uL) b2uL.innerHTML = renderSetToHtml(activeB2bUnload);
-
-  var b2tC = document.getElementById("b2bTallyCount");
-  var b2tL = document.getElementById("b2bTallyActiveList");
-  if(b2tC) b2tC.textContent = String(activeB2bTally.size);
-  if(b2tL) b2tL.innerHTML = renderSetToHtml(activeB2bTally);
-
-  var b2wC = document.getElementById("b2bWorkorderCount");
-  var b2wL = document.getElementById("b2bWorkorderActiveList");
-  if(b2wC) b2wC.textContent = String(activeB2bWorkorder.size);
-  if(b2wL) b2wL.innerHTML = renderSetToHtml(activeB2bWorkorder);
-
-  var b2oC = document.getElementById("b2bOutboundCount");
-  var b2oL = document.getElementById("b2bOutboundActiveList");
-  if(b2oC) b2oC.textContent = String(activeB2bOutbound.size);
-  if(b2oL) b2oL.innerHTML = renderSetToHtml(activeB2bOutbound);
-
-  var b2iC = document.getElementById("b2bInventoryCount");
-  var b2iL = document.getElementById("b2bInventoryActiveList");
-  if(b2iC) b2iC.textContent = String(activeB2bInventory.size);
-  if(b2iL) b2iL.innerHTML = renderSetToHtml(activeB2bInventory);
-
-  var ciC = document.getElementById("b2cInventoryCount");
-  var ciL = document.getElementById("b2cInventoryActiveList");
-  if(ciC) ciC.textContent = String(activeB2cInventory.size);
-  if(ciL) ciL.innerHTML = renderSetToHtml(activeB2cInventory);
-
-  var wcC = document.getElementById("warehouseCleanupCount");
-  var wcL = document.getElementById("warehouseCleanupActiveList");
-  if(wcC) wcC.textContent = String(activeWarehouseCleanup.size);
-  if(wcL) wcL.innerHTML = renderSetToHtml(activeWarehouseCleanup);
+  TASK_REGISTRY.forEach(function(reg){
+    var cnt = reg.countId ? document.getElementById(reg.countId) : null;
+    var lst = reg.listId ? document.getElementById(reg.listId) : null;
+    if(cnt) cnt.textContent = String(reg.get().size);
+    if(lst) lst.innerHTML = renderSetToHtml(reg.get());
+  });
 }
 
 function renderInboundCountUI(){
@@ -1522,7 +1392,7 @@ async function startPicking(){
     renderActiveLists();
     setStatus("拣货开始 ✅ 新趟次: " + currentSessionId, true);
     }catch(e){
-    setStatus("理货开始失败 ❌ " + e, false);
+    setStatus("拣货开始失败 ❌ " + e, false);
     alert(String(e));
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = "开始拣货 시작"; }
@@ -1572,7 +1442,7 @@ async function startRelabel(){
     renderActiveLists();
     setStatus("换单开始 ✅ 新趟次: " + currentSessionId, true);
     }catch(e){
-    setStatus("理货开始失败 ❌ " + e, false);
+    setStatus("换单开始失败 ❌ " + e, false);
     alert(String(e));
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = "开始换单 시작"; }
@@ -1713,24 +1583,8 @@ async function leaveWork(biz, task){
 
   if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再退出作业，请重新开始或加入新趟次。"))) return;
 
-  if(task === "PICK" && activePick.size === 0){ alert("当前没有人在拣货作业中（无需退出）。"); return; }
-  if(task === "RELABEL" && activeRelabel.size === 0){ alert("当前没有人在换单作业中（无需退出）。"); return; }
-  if(task === "PACK" && activePack.size === 0){ alert("当前没有人在验货贴单打包作业中（无需退出）。"); return; }
-  if(task === "TALLY" && activeTally.size === 0){ alert("当前没有人在理货作业中（无需退出）。"); return; }
-  if(task === "批量出库" && activeBulkOut.size === 0){ alert("当前没有人在批量出库作业中（无需退出）。"); return; }
-  if(task === "退件入库" && activeReturn.size === 0){ alert("当前没有人在退件入库作业中（无需退出）。"); return; }
-  if(task === "质检" && activeQc.size === 0){ alert("当前没有人在质检作业中（无需退出）。"); return; }
-  if(task === "废弃处理" && activeDisposal.size === 0){ alert("当前没有人在废弃处理作业中（无需退出）。"); return; }
-  if(task === "卸货" && activeImportUnload.size === 0){ alert("当前没有人在卸货作业中（无需退出）。"); return; }
-  if(task === "过机扫描码托" && activeImportScanPallet.size === 0){ alert("当前没有人在过机扫描码托作业中（无需退出）。"); return; }
-  if(task === "装柜/出货" && activeImportLoadout.size === 0){ alert("当前没有人在装柜/出货作业中（无需退出）。"); return; }
-  if(task === "B2B卸货" && activeB2bUnload.size === 0){ alert("当前没有人在B2B卸货作业中（无需退出）。"); return; }
-  if(task === "B2B入库理货" && activeB2bTally.size === 0){ alert("当前没有人在B2B入库理货作业中（无需退出）。"); return; }
-  if(task === "B2B工单操作" && activeB2bWorkorder.size === 0){ alert("当前没有人在B2B工单操作作业中（无需退出）。"); return; }
-  if(task === "B2B出库" && activeB2bOutbound.size === 0){ alert("当前没有人在B2B出库作业中（无需退出）。"); return; }
-  if(task === "B2B盘点" && activeB2bInventory.size === 0){ alert("当前没有人在B2B盘点作业中（无需退出）。"); return; }
-  if(task === "B2C盘点" && activeB2cInventory.size === 0){ alert("当前没有人在B2C盘点作业中（无需退出）。"); return; }
-  if(task === "仓库整理" && activeWarehouseCleanup.size === 0){ alert("当前没有人在仓库整理作业中（无需退出）。"); return; }
+  var reg_ = taskReg_(task);
+  if(reg_ && reg_.get().size === 0){ alert(reg_.emptyMsg || ("当前没有人在" + task + "作业中（无需退出）。")); return; }
 
   laborAction = "leave"; laborBiz = biz; laborTask = task;
   scanMode = "labor";
@@ -1814,25 +1668,21 @@ function generatePermanentDaBadges(){
   var names = normalizeNames(ta.value);
   if(names.length===0){ alert("请先输入长期日当姓名（每行一个）"); return; }
 
-  var start = parseInt((document.getElementById("daPermanentStart")||{}).value || "1", 10);
-  var pad = parseInt((document.getElementById("daPermanentPad")||{}).value || "3", 10);
-
   var listEl = document.getElementById("daPermanentList");
   if(!listEl){ alert("找不到 daPermanentList"); return; }
   listEl.innerHTML = "";
 
   names.forEach(function(name, idx){
-    var num = start + idx;
-    var id = "DAF-" + padNum(num, pad);
-    var payload = id + "|" + name;
+    var payload = "DAF-" + name;
+    var safeKey = "pdaq_" + idx + "_" + name.replace(/[^a-zA-Z0-9\u4e00-\u9fff\uac00-\ud7af]/g,"_");
 
     var box = document.createElement("div");
     box.style.border = "1px solid #ddd";
     box.style.borderRadius = "12px";
     box.style.padding = "10px";
-    box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="pdaq_'+id+'_'+idx+'"></div>';
+    box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
     listEl.appendChild(box);
-    new QRCode(document.getElementById("pdaq_"+id+"_"+idx), { text: payload, width: 160, height: 160 });
+    new QRCode(document.getElementById(safeKey), { text: payload, width: 160, height: 160 });
   });
 
   alert("已生成长期日当工牌 ✅ 共 " + names.length + " 个\n建议截图/打印发放（以后每天都用这一张）。");
@@ -1857,25 +1707,21 @@ function generateEmployeeBadges(){
   var names = normalizeNames(ta.value);
   if(names.length===0){ alert("请先输入员工名字（每行一个）"); return; }
 
-  var start = parseInt((document.getElementById("empStart")||{}).value || "1", 10);
-  var pad = parseInt((document.getElementById("empPad")||{}).value || "3", 10);
-
   var listEl = document.getElementById("empBadgeList");
   if(!listEl){ alert("找不到 empBadgeList"); return; }
   listEl.innerHTML = "";
 
   names.forEach(function(name, idx){
-    var num = start + idx;
-    var empId = "EMP-" + padNum(num, pad);
-    var payload = empId + "|" + name;
+    var payload = "EMP-" + name;
+    var safeKey = "empqr_" + idx + "_" + name.replace(/[^a-zA-Z0-9\u4e00-\u9fff\uac00-\ud7af]/g,"_");
 
     var box = document.createElement("div");
     box.style.border = "1px solid #ddd";
     box.style.borderRadius = "12px";
     box.style.padding = "10px";
-    box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="empqr_'+empId+'_'+idx+'"></div>';
+    box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
     listEl.appendChild(box);
-    new QRCode(document.getElementById("empqr_"+empId+"_"+idx), { text: payload, width: 160, height: 160 });
+    new QRCode(document.getElementById(safeKey), { text: payload, width: 160, height: 160 });
   });
 
   alert("已生成员工工牌 ✅ 共 "+names.length+" 个\n建议截图/打印此页面发放。");
@@ -1917,76 +1763,13 @@ async function openScannerCommon(){
     lastScanAt = now;
 
     if(scanMode === "session_join"){
-      var sid = parseSessionQr_(code);
-      if(!sid){ setStatus("不是趟次二维码（CKSESSION|...）", false); return; }
+      var parsed = parseSessionQr_(code);
+      if(!parsed){ setStatus("不是趟次二维码（CKSESSION|...）", false); return; }
 
       scanBusy = true;
       await pauseScanner();
       try{
-        
-// ✅ A：扫码加入趟次时，需要绑定到具体任务（每任务独立 session）
-var ctx = PAGE_CTX[getHashPage()] || null;
-if(!ctx){
-  // 在菜单页扫码：让你选择要绑定到哪个任务
-  var pick = prompt(
-    "把这个趟次绑定到哪个任务？\n" +
-    "输入数字：\n" +
-    "1=TALLY 入库理货\n" +
-    "2=PICK 拣货\n" +
-    "3=批量出库\n" +
-    "4=RELABEL 换单\n" +
-    "5=进口快件-卸货\n" +
-    "6=进口快件-过机扫描码托\n" +
-    "7=进口快件-装柜/出货\n" +
-    "8=B2B-卸货\n" +
-    "9=B2B-入库理货\n" +
-    "10=B2B-工单操作\n" +
-    "11=B2B-出库\n" +
-    "12=B2B-盘点\n" +
-    "13=B2C-盘点\n" +
-    "14=仓库整理"
-  ) || "";
-  pick = String(pick).trim();
-  var map = {
-    "1": {biz:"B2C", task:"TALLY"},
-    "2": {biz:"B2C", task:"PICK"},
-    "3": {biz:"B2C", task:"批量出库"},
-    "4": {biz:"B2C", task:"RELABEL"},
-    "5": {biz:"IMPORT", task:"卸货"},
-    "6": {biz:"IMPORT", task:"过机扫描码托"},
-    "7": {biz:"IMPORT", task:"装柜/出货"},
-    "8": {biz:"B2B", task:"B2B卸货"},
-    "9": {biz:"B2B", task:"B2B入库理货"},
-    "10": {biz:"B2B", task:"B2B工单操作"},
-    "11": {biz:"B2B", task:"B2B出库"},
-    "12": {biz:"B2B", task:"B2B盘点"},
-    "13": {biz:"B2C", task:"B2C盘点"},
-    "14": {biz:"WAREHOUSE", task:"仓库整理"}
-  };
-  ctx = map[pick] || null;
-  if(!ctx){
-    alert("未选择任务，已取消绑定。");
-    await closeScanner();
-    scanBusy = false;
-    return;
-  }
-}
-CUR_CTX = { biz: ctx.biz, task: ctx.task, page: getHashPage() };
-currentSessionId = sid;
-setSess_(ctx.biz, ctx.task, currentSessionId);
-
-        // 切换 session，清空 session_info 缓存，避免误判
-        SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
-
-        restoreState();
-        renderActiveLists();
-        refreshUI();
-
-        // ✅ 加入后先别立刻问服务器（session_info 很慢，会卡住扫码体验）
-        //    后续在做 join/leave/start 等操作时再做 guard（你本来就有 guardSessionOpenOrAlert_）
-        alert("已加入趟次 ✅\n" + currentSessionId);
-        setStatus("已加入趟次 ✅ " + currentSessionId + "（后台慢，已跳过立即校验）", true);
-
+        await bindSessionWithCtx_(parsed.sid, parsed.biz, parsed.task);
         await closeScanner();
       } finally { scanBusy = false; }
       return;
@@ -2649,7 +2432,7 @@ function reportExportCSV(){
     ].join(","));
   }
 
-  var blob = new Blob([csv.join("\\n")], {type:"text/csv;charset=utf-8;"});
+  var blob = new Blob([csv.join("\n")], {type:"text/csv;charset=utf-8;"});
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   var rangeText = (REPORT_CACHE.meta.rangeLabel || "range").replace(/[^0-9A-Za-z_-]+/g, "_");

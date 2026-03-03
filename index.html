@@ -37,72 +37,76 @@
       <h3>入口 / 메뉴</h3>
       <div class="gridHome">
         <button class="primary" onclick="go('global_menu')">
-          总控台 <small>Global</small><br><small>全局在岗 / 总览</small>
+          总控台 / Global<br><small>全局在岗 / 总览</small>
         </button>
         <button class="primary" onclick="go('badge')">
-          工牌 <small>명찰</small><br><small>日当/员工 批量生成</small>
+          工牌 / 명찰<br><small>日当/员工 批量生成</small>
         </button>
         <button class="primary" onclick="go('b2c_menu')">
           B2C<br><small>拣货 / 换单 / 打包贴单</small>
         </button>
         <button class="primary" onclick="go('import_menu')">
-          进口快件 <small>수입 택배</small><br><small>卸货/过机/装柜</small>
+          进口快件 / 수입 택배<br><small>卸货/过机/装柜</small>
         </button>
         <button class="primary" onclick="go('b2b_menu')">
           B2B<br><small>卸货/理货/工单/出库/盘点</small>
         </button>
         <button class="primary" onclick="go('warehouse_cleanup')">
-          仓库整理 <small>창고 정리</small><br><small>开始/结束扫工牌</small>
+          仓库整理 / 창고 정리<br><small>开始/结束扫工牌</small>
         </button>
       </div>
+    </div>
+
+    <div class="card">
+      <button class="primary" onclick="joinExistingSessionByScan()">扫码加入趟次 / 세션 QR 스캔</button>
+      <button class="primary" onclick="joinExistingSessionByInput()">输入趟次 ID / ID 입력</button>
+      <button onclick="showSessionQr()">显示趟次二维码 / 세션 QR</button>
+      <div id="sessionQrBox" style="margin-top:10px;"></div>
     </div>
   </div>
 
   <!-- GLOBAL MENU -->
   <div id="page-global_menu" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">总控台 / Global</div>
     </div>
 
     <div class="card">
-      <button class="primary" onclick="go('active_now')">全局在岗 <small>Active Now</small></button>
-      <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 <small>Report</small></button>
-      <button class="primary" id="btnSessions" style="display:none;" onclick="go('global_sessions')">全局Session <small>Sessions</small></button>
-      <button class="primary" onclick="go('b2b_menu')">B2B <small>하역/작업/출고</small></button>
-      <button class="primary" onclick="go('import_menu')">进口快件 <small>수입 택배</small></button>
-      <button class="primary" onclick="go('warehouse_cleanup')">仓库整理 <small>창고 정리</small></button>
+      <button class="primary" onclick="go('active_now')">全局在岗 / Active Now</button>
+      <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 / Report</button>
+      <button class="primary" id="btnSessions" style="display:none;" onclick="go('global_sessions')">全局Session / Sessions</button>
     </div>
   </div>
 
   <!-- IMPORT MENU -->
   <div id="page-import_menu" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">进口快件 / 수입 택배</div>
     </div>
 
     <div class="card">
       <div class="muted">入口已开通：下一步按流程继续开发卸货、过机、装柜。</div>
 
-      <button class="primary" onclick="go('import_unload')">卸货（开始/结束扫工牌） <small>하차</small></button>
-      <button class="primary" onclick="go('import_scan_pallet')">过机扫描码托（开始/结束扫工牌） <small>스캔</small></button>
-      <button class="primary" onclick="go('import_loadout')">装柜/出货（开始/结束扫工牌） <small>적재/출고</small></button>
+      <button class="primary" onclick="go('import_unload')">卸货 / 하차</button>
+      <button class="primary" onclick="go('import_scan_pallet')">过机扫描码托 / 스캔</button>
+      <button class="primary" onclick="go('import_loadout')">装柜/出货 / 적재/출고</button>
     </div>
   </div>
 
   <!-- IMPORT UNLOAD -->
   <div id="page-import_unload" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">进口快件 卸货 / 하차</div>
     </div>
 
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('IMPORT','卸货')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('IMPORT','卸货')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('IMPORT','卸货')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('IMPORT','卸货')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importUnloadCount">0</span></div>
@@ -114,15 +118,15 @@
   <!-- IMPORT SCAN PALLET -->
   <div id="page-import_scan_pallet" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">进口快件 过机扫描码托 / 스캔</div>
     </div>
 
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('IMPORT','过机扫描码托')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('IMPORT','过机扫描码托')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('IMPORT','过机扫描码托')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('IMPORT','过机扫描码托')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importScanPalletCount">0</span></div>
@@ -134,15 +138,15 @@
   <!-- IMPORT LOADOUT -->
   <div id="page-import_loadout" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">进口快件 装柜/出货 / 적재·출고</div>
     </div>
 
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('IMPORT','装柜/出货')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('IMPORT','装柜/出货')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('IMPORT','装柜/出货')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('IMPORT','装柜/出货')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importLoadoutCount">0</span></div>
@@ -154,13 +158,13 @@
   <!-- ACTIVE NOW (GLOBAL) -->
   <div id="page-active_now" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">全局在岗 / Active Now</div>
     </div>
 
     <div class="card">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button class="primary" onclick="refreshActiveNow()">刷新 <small>새로고침</small></button>
+        <button class="primary" onclick="refreshActiveNow()">刷新 / 새로고침</button>
         <select id="activeNowFilterBiz" onchange="refreshActiveNow()">
           <option value="">全部 / All</option>
           <option value="B2C">B2C</option>
@@ -177,13 +181,13 @@
   <!-- GLOBAL SESSIONS (Admin-only) -->
   <div id="page-global_sessions" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">全局Session / Sessions</div>
     </div>
 
     <div class="card">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button class="primary" onclick="refreshGlobalSessions()">刷新 <small>새로고침</small></button>
+        <button class="primary" onclick="refreshGlobalSessions()">刷新 / 새로고침</button>
         <select id="sessionFilterBiz" onchange="refreshGlobalSessions()">
           <option value="">全部 / All</option>
           <option value="B2C">B2C</option>
@@ -198,7 +202,7 @@
   <!-- REPORT (Admin-only) -->
   <div id="page-report" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">劳效 / 工时汇总</div>
     </div>
 
@@ -215,7 +219,7 @@
       </div>
 
       <button class="primary" onclick="reportLoadRange()">拉取区间数据</button>
-      <button onclick="reportLoadToday()">快捷：今天（KST）</button>
+      <button onclick="reportLoadToday()">快捷：今天</button>
       <button class="primary" onclick="reportExportCSV()">导出 CSV</button>
 
       <div id="reportMeta" class="muted" style="margin-top:8px;"></div>
@@ -229,7 +233,7 @@
   <!-- BADGE -->
   <div id="page-badge" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">工牌 / 명찰</div>
     </div>
 
@@ -240,58 +244,36 @@
       <small>姓名列表（每行一个） / 이름 목록</small>
       <textarea id="daNameList" placeholder="张三&#10;李四&#10;김민수&#10;박지훈"></textarea>
 
-      <button class="primary" onclick="generateDailyBadgesByName()">批量生成日当工牌 <small>이름으로 일괄 생성</small></button>
+      <button class="primary" onclick="generateDailyBadgesByName()">批量生成日当工牌 / 이름으로 일괄 생성</button>
 
       <div><small>最近生成工牌 / 최근 명찰</small></div>
       <div id="daText">无</div>
 
-      <button onclick="bindBadgeToSession()">绑定工牌到当前趟次 <small>현재 작업에 연결</small></button>
+      <button onclick="bindBadgeToSession()">绑定工牌到当前趟次 / 현재 작업에 연결</button>
       <small id="daStatus" class="muted"></small>
 
       <div id="badgeList" style="margin-top:10px;" class="grid2"></div>
     </div>
 
     <div class="card">
-      <h3>长期日当工牌 / 장기 일용직 명찰（DAF-001|名字）</h3>
-      <div class="muted">一人一张，长期使用（不需要每天生成）。扫码记录里会带名字。</div>
+      <h3>长期日当工牌 / 장기 일용직 명찰（DAF-姓名）</h3>
+      <div class="muted">一人一张，长期使用（不需要每天生成）。格式：DAF-张三。扫码记录里会带名字。</div>
 
       <small>姓名列表（每行一个） / 이름 목록</small>
       <textarea id="daPermanentNames" placeholder="张三&#10;李四&#10;김민수&#10;박지훈"></textarea>
 
-      <div class="row">
-        <div>
-          <small>起始编号 / 시작 번호</small>
-          <input id="daPermanentStart" type="number" min="1" max="9999" value="1" />
-        </div>
-        <div>
-          <small>位数（001/01） / 자릿수</small>
-          <input id="daPermanentPad" type="number" min="2" max="6" value="3" />
-        </div>
-      </div>
-
-      <button class="primary" onclick="generatePermanentDaBadges()">批量生成长期日当工牌 <small>일괄 생성</small></button>
+      <button class="primary" onclick="generatePermanentDaBadges()">批量生成长期日当工牌 / 일괄 생성</button>
       <div id="daPermanentList" style="margin-top:10px;" class="grid2"></div>
     </div>
 
     <div class="card">
-      <h3>员工工牌 / 직원 명찰（EMP-001|名字）</h3>
-      <div class="muted">名字一行一个粘贴 → 生成二维码：EMP-001|张三（支持韩文姓名）。</div>
+      <h3>员工工牌 / 직원 명찰（EMP-姓名）</h3>
+      <div class="muted">姓名一行一个 → 生成二维码：EMP-张三（支持韩文姓名）。</div>
 
       <small>员工姓名列表（每行一个） / 이름 목록</small>
       <textarea id="empNames" placeholder="张三&#10;李四&#10;김민수&#10;박지훈"></textarea>
 
-      <div class="row">
-        <div>
-          <small>起始编号 / 시작 번호</small>
-          <input id="empStart" type="number" min="1" max="999" value="1" />
-        </div>
-        <div>
-          <small>位数（001/01） / 자릿수</small>
-          <input id="empPad" type="number" min="2" max="4" value="3" />
-        </div>
-      </div>
-
-      <button class="primary" onclick="generateEmployeeBadges()">批量生成员工工牌 <small>직원 명찰 생성</small></button>
+      <button class="primary" onclick="generateEmployeeBadges()">批量生成员工工牌 / 직원 명찰 생성</button>
       <div id="empBadgeList" style="margin-top:10px;" class="grid2"></div>
     </div>
   </div>
@@ -299,111 +281,98 @@
   <!-- B2C MENU -->
   <div id="page-b2c_menu" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 菜单 / 메뉴</div>
     </div>
 
     <div class="card">
-      <!-- ✅ 加入已有趟次 / 显示趟次二维码 -->
-      <button class="primary" onclick="joinExistingSessionByScan()">加入已有趟次（扫码） <small>세션 참여(스캔)</small></button>
-      <button class="primary" onclick="joinExistingSessionByInput()">加入已有趟次（手动输入） <small>세션 참여(입력)</small></button>
-      <button class="primary" onclick="showSessionQr()">显示当前趟次二维码 <small>세션 QR</small></button>
-      <div class="listBox" style="margin-top:10px;">
-        <div class="muted">让其他设备扫描本机二维码即可加入同一趟次（session）。<br>或者手动输入趟次 ID（如 PS-xxxx）也可以加入。</div>
-        <div id="b2cSessionQrBox" style="margin-top:10px;"></div>
-      </div>
-
-      <!-- ✅ 顺序（新增 批量出库：放在 PACK 和 退件入库之间） -->
-      <button class="primary" onclick="go('b2c_tally')">入库理货（已上线） <small>입고검수</small></button>
-      <button class="primary" onclick="go('b2c_pick')">拣货（已上线） <small>피킹</small></button>
-      <button class="primary" onclick="go('b2c_pack')">验货贴单打包（开始/结束扫工牌） <small>검수·포장·라벨</small></button>
-
-      <button class="primary" onclick="go('b2c_bulkout')">批量出库（开始/扫码出库单/加入退出/结束） <small>대량 출고</small></button>
-
-      <button class="primary" onclick="go('b2c_return')">退件入库（开始/结束扫工牌） <small>반품 입고</small></button>
-      <button class="primary" onclick="go('b2c_qc')">质检（开始/结束扫工牌） <small>검품</small></button>
-      <button class="primary" onclick="go('b2c_inventory')">盘点（开始/结束扫工牌） <small>재고조사</small></button>
-      <button class="primary" onclick="go('b2c_disposal')">废弃处理（开始/结束扫工牌） <small>폐기</small></button>
-      <button class="primary" onclick="go('b2c_relabel')">换单（已上线） <small>라벨</small></button>
-
-      <button class="ghost" onclick="comingSoon('B2C 其他环节')">其他环节（待上线） <small>준비중</small></button>
+      <button class="primary" onclick="go('b2c_tally')">入库理货 / 입고검수</button>
+      <button class="primary" onclick="go('b2c_pick')">拣货 / 피킹</button>
+      <button class="primary" onclick="go('b2c_pack')">验货贴单打包 / 검수·포장·라벨</button>
+      <button class="primary" onclick="go('b2c_bulkout')">批量出库 / 대량 출고</button>
+      <button class="primary" onclick="go('b2c_return')">退件入库 / 반품 입고</button>
+      <button class="primary" onclick="go('b2c_qc')">质检 / 검품</button>
+      <button class="primary" onclick="go('b2c_inventory')">盘点 / 재고조사</button>
+      <button class="primary" onclick="go('b2c_disposal')">废弃处理 / 폐기</button>
+      <button class="primary" onclick="go('b2c_relabel')">换单 / 라벨</button>
+      <button class="ghost" onclick="comingSoon('B2C 其他环节')">其他环节 / 준비중</button>
     </div>
   </div>
 
-  <!-- ✅ B2C TALLY -->
+  <!-- B2C TALLY -->
   <div id="page-b2c_tally" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 入库理货 / 입고검수</div>
     </div>
 
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 入库单号扫码（去重计数）。</div>
 
-      <button class="primary" onclick="startTally()">开始理货 <small>시작</small></button>
+      <button class="primary" onclick="startTally()">开始理货 / 시작</button>
 
-      <button class="primary" onclick="joinWork('B2C','TALLY')">加入作业（扫工牌） <small>참여</small></button>
-      <button class="primary" onclick="leaveWork('B2C','TALLY')">退出作业（扫工牌） <small>퇴장</small></button>
+      <button class="primary" onclick="joinWork('B2C','TALLY')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2C','TALLY')">退出作业 / 퇴장</button>
 
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="tallyCount">0</span></div>
         <div id="tallyActiveList" class="muted">无 / 없음</div>
       </div>
 
-      <button class="primary" onclick="openScannerInboundCount()">扫码入库单号（计数/去重） <small>입고번호</small></button>
+      <button class="primary" onclick="openScannerInboundCount()">扫码入库单号 / 입고번호</button>
 
       <div class="listBox">
         <div><b>已扫入库单（去重）</b>：<span id="inboundCount">0</span></div>
         <div id="inboundList" class="muted">无 / 없음</div>
       </div>
 
-      <button class="primary" onclick="endTally()">结束理货 <small>종료</small></button>
+      <button class="primary" onclick="endTally()">结束理货 / 종료</button>
     </div>
   </div>
 
-  <!-- ✅ NEW: B2C 批量出库（流程同理货，但扫码的是出库单号） -->
+  <!-- B2C 批量出库 -->
   <div id="page-b2c_bulkout" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 批量出库 / 대량 출고</div>
     </div>
 
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 出库单号扫码（去重计数）。</div>
 
-      <button class="primary" onclick="startBulkOut()">开始批量出库 <small>시작</small></button>
+      <button class="primary" onclick="startBulkOut()">开始批量出库 / 시작</button>
 
-      <button class="primary" onclick="joinWork('B2C','批量出库')">加入作业（扫工牌） <small>참여</small></button>
-      <button class="primary" onclick="leaveWork('B2C','批量出库')">退出作业（扫工牌） <small>퇴장</small></button>
+      <button class="primary" onclick="joinWork('B2C','批量出库')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2C','批量出库')">退出作业 / 퇴장</button>
 
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="bulkoutCount">0</span></div>
         <div id="bulkoutActiveList" class="muted">无 / 없음</div>
       </div>
 
-      <button class="primary" onclick="openScannerBulkOutOrder()">扫码出库单号（计数/去重） <small>출고번호</small></button>
+      <button class="primary" onclick="openScannerBulkOutOrder()">扫码出库单号 / 출고번호</button>
 
       <div class="listBox">
         <div><b>已扫出库单（去重）</b>：<span id="bulkoutOrderCount">0</span></div>
         <div id="bulkoutOrderList" class="muted">无 / 없음</div>
       </div>
 
-      <button class="primary" onclick="endBulkOut()">结束批量出库 <small>종료</small></button>
+      <button class="primary" onclick="endBulkOut()">结束批量出库 / 종료</button>
     </div>
   </div>
 
-  <!-- ✅ B2C RETURN（PACK 方式：开始/结束都扫工牌） -->
+  <!-- B2C RETURN -->
   <div id="page-b2c_return" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 退件入库 / 반품 입고</div>
     </div>
 
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('B2C','退件入库')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2C','退件入库')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2C','退件入库')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2C','退件入库')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="returnCount">0</span></div>
@@ -416,100 +385,100 @@
     </div>
   </div>
 
-  <!-- ✅ NEW: B2C 质检（PACK 方式） -->
+  <!-- B2C 质检 -->
   <div id="page-b2c_qc" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 质检 / 검품</div>
     </div>
 
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('B2C','质检')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2C','质检')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2C','质检')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2C','质检')">结束作业 / 종료</button>
     </div>
   </div>
 
-  <!-- ✅ NEW: B2C 废弃处理（PACK 方式） -->
+  <!-- B2C 废弃处理 -->
   <div id="page-b2c_disposal" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 废弃处理 / 폐기</div>
     </div>
 
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('B2C','废弃处理')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2C','废弃处理')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2C','废弃处理')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2C','废弃处理')">结束作业 / 종료</button>
     </div>
   </div>
 
   <!-- B2C PICK -->
   <div id="page-b2c_pick" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 拣货 / 피킹</div>
     </div>
 
     <div class="card">
-      <button class="primary" onclick="startPicking()">开始拣货 <small>시작</small></button>
+      <button class="primary" onclick="startPicking()">开始拣货 / 시작</button>
 
-      <button class="primary" onclick="joinWork('B2C','PICK')">加入作业（扫工牌） <small>참여</small></button>
-      <button class="primary" onclick="leaveWork('B2C','PICK')">退出作业（扫工牌） <small>퇴장</small></button>
+      <button class="primary" onclick="joinWork('B2C','PICK')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2C','PICK')">退出作业 / 퇴장</button>
 
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="pickCount">0</span></div>
         <div id="pickActiveList" class="muted">无 / 없음</div>
       </div>
 
-      <button class="primary" onclick="openScannerWave()">扫码波次 <small>웨이브</small></button>
+      <button class="primary" onclick="openScannerWave()">扫码波次 / 웨이브</button>
 
-      <button class="primary" onclick="leaderLoginPick()">组长登录（扫码） <small>팀장 로그인</small></button>
+      <button class="primary" onclick="leaderLoginPick()">组长登录 / 팀장 로그인</button>
       <div class="pill" id="leaderInfoPick" style="margin-top:6px;">组长未登录 / 팀장 미로그인</div>
 
-      <button class="primary" id="btnEndPick" style="display:none;" onclick="endPicking()">结束拣货（组长确认） <small>종료</small></button>
+      <button class="primary" id="btnEndPick" style="display:none;" onclick="endPicking()">结束拣货 / 종료</button>
     </div>
   </div>
 
-  <!-- B2C RELABEL（显示名“换单”） -->
+  <!-- B2C RELABEL -->
   <div id="page-b2c_relabel" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 换单 / 라벨</div>
     </div>
 
     <div class="card">
       <div class="muted">本页面只记录开始/结束 + 加入/退出（0额外扫码）。</div>
 
-      <button class="primary" onclick="startRelabel()">开始换单 <small>시작</small></button>
+      <button class="primary" onclick="startRelabel()">开始换单 / 시작</button>
 
-      <button class="primary" onclick="joinWork('B2C','RELABEL')">加入作业（扫工牌） <small>참여</small></button>
-      <button class="primary" onclick="leaveWork('B2C','RELABEL')">退出作业（扫工牌） <small>퇴장</small></button>
+      <button class="primary" onclick="joinWork('B2C','RELABEL')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2C','RELABEL')">退出作业 / 퇴장</button>
 
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="relabelCount">0</span></div>
         <div id="relabelActiveList" class="muted">无 / 없음</div>
       </div>
 
-      <button class="primary" onclick="endRelabel()">结束换单 <small>종료</small></button>
+      <button class="primary" onclick="endRelabel()">结束换单 / 종료</button>
       <div class="pill" id="relabelTimer" style="margin-top:10px;">未开始 / 미시작</div>
     </div>
   </div>
 
-  <!-- B2C PACK（显示中文“验货贴单打包”） -->
+  <!-- B2C PACK -->
   <div id="page-b2c_pack" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 验货贴单打包 / 검수·포장·라벨</div>
     </div>
 
     <div class="card">
       <div class="pill">✅ 开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('B2C','PACK')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2C','PACK')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2C','PACK')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2C','PACK')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="packCount">0</span></div>
@@ -525,28 +494,28 @@
   <!-- B2B MENU -->
   <div id="page-b2b_menu" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2B 菜单 / 메뉴</div>
     </div>
     <div class="card">
-      <button class="primary" onclick="go('b2b_unload')">卸货（开始/结束扫工牌） <small>하차</small></button>
-      <button class="primary" onclick="go('b2b_tally')">入库理货（开始/扫码·手动输入/加入退出/结束） <small>입고검수</small></button>
-      <button class="primary" onclick="go('b2b_workorder')">工单操作（开始/扫码·手动输入/加入退出/结束） <small>작업지시</small></button>
-      <button class="primary" onclick="go('b2b_outbound')">出库（开始/结束扫工牌） <small>출고</small></button>
-      <button class="primary" onclick="go('b2b_inventory')">盘点（开始/结束扫工牌） <small>재고조사</small></button>
+      <button class="primary" onclick="go('b2b_unload')">卸货 / 하차</button>
+      <button class="primary" onclick="go('b2b_tally')">入库理货 / 입고검수</button>
+      <button class="primary" onclick="go('b2b_workorder')">工单操作 / 작업지시</button>
+      <button class="primary" onclick="go('b2b_outbound')">出库 / 출고</button>
+      <button class="primary" onclick="go('b2b_inventory')">盘点 / 재고조사</button>
     </div>
   </div>
 
   <!-- B2B UNLOAD -->
   <div id="page-b2b_unload" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2B 卸货 / 하차</div>
     </div>
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
-      <button class="primary" onclick="joinWork('B2B','B2B卸货')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2B','B2B卸货')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2B','B2B卸货')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2B','B2B卸货')">结束作业 / 종료</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bUnloadCount">0</span></div>
         <div id="b2bUnloadActiveList" class="muted">无 / 없음</div>
@@ -557,19 +526,19 @@
   <!-- B2B TALLY -->
   <div id="page-b2b_tally" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2B 入库理货 / 입고검수</div>
     </div>
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 理货单号扫码或手动输入（去重计数）。</div>
-      <button class="primary" onclick="startB2bTally()">开始理货 <small>시작</small></button>
-      <button class="primary" onclick="joinWork('B2B','B2B入库理货')">加入作业（扫工牌） <small>참여</small></button>
-      <button class="primary" onclick="leaveWork('B2B','B2B入库理货')">退出作业（扫工牌） <small>퇴장</small></button>
+      <button class="primary" onclick="startB2bTally()">开始理货 / 시작</button>
+      <button class="primary" onclick="joinWork('B2B','B2B入库理货')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2B','B2B入库理货')">退出作业 / 퇴장</button>
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="b2bTallyCount">0</span></div>
         <div id="b2bTallyActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="primary" onclick="openScannerB2bTallyOrder()">扫码理货单号（计数/去重） <small>스캔</small></button>
+      <button class="primary" onclick="openScannerB2bTallyOrder()">扫码理货单号 / 스캔</button>
       <div class="row" style="margin-top:8px;">
         <input id="b2bTallyManualInput" type="text" placeholder="手动输入理货单号 / 수동 입력" style="flex:1;" />
         <button onclick="manualAddB2bTallyOrder()" style="width:auto;min-width:80px;">添加</button>
@@ -578,26 +547,26 @@
         <div><b>已扫理货单（去重）</b>：<span id="b2bTallyOrderCount">0</span></div>
         <div id="b2bTallyOrderList" class="muted">无 / 없음</div>
       </div>
-      <button class="primary" onclick="endB2bTally()">结束理货 <small>종료</small></button>
+      <button class="primary" onclick="endB2bTally()">结束理货 / 종료</button>
     </div>
   </div>
 
   <!-- B2B WORKORDER -->
   <div id="page-b2b_workorder" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2B 工单操作 / 작업지시</div>
     </div>
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 工单号扫码或手动输入（去重计数）。</div>
-      <button class="primary" onclick="startB2bWorkorder()">开始操作 <small>시작</small></button>
-      <button class="primary" onclick="joinWork('B2B','B2B工单操作')">加入作业（扫工牌） <small>참여</small></button>
-      <button class="primary" onclick="leaveWork('B2B','B2B工单操作')">退出作业（扫工牌） <small>퇴장</small></button>
+      <button class="primary" onclick="startB2bWorkorder()">开始操作 / 시작</button>
+      <button class="primary" onclick="joinWork('B2B','B2B工单操作')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2B','B2B工单操作')">退出作业 / 퇴장</button>
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="b2bWorkorderCount">0</span></div>
         <div id="b2bWorkorderActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="primary" onclick="openScannerB2bWorkorder()">扫码工单号（计数/去重） <small>스캔</small></button>
+      <button class="primary" onclick="openScannerB2bWorkorder()">扫码工单号 / 스캔</button>
       <div class="row" style="margin-top:8px;">
         <input id="b2bWorkorderManualInput" type="text" placeholder="手动输入工单号 / 수동 입력" style="flex:1;" />
         <button onclick="manualAddB2bWorkorder()" style="width:auto;min-width:80px;">添加</button>
@@ -606,20 +575,20 @@
         <div><b>已扫工单（去重）</b>：<span id="b2bWorkorderOrderCount">0</span></div>
         <div id="b2bWorkorderOrderList" class="muted">无 / 없음</div>
       </div>
-      <button class="primary" onclick="endB2bWorkorder()">结束操作 <small>종료</small></button>
+      <button class="primary" onclick="endB2bWorkorder()">结束操作 / 종료</button>
     </div>
   </div>
 
   <!-- B2B OUTBOUND -->
   <div id="page-b2b_outbound" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2B 出库 / 출고</div>
     </div>
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
-      <button class="primary" onclick="joinWork('B2B','B2B出库')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2B','B2B出库')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2B','B2B出库')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2B','B2B出库')">结束作业 / 종료</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bOutboundCount">0</span></div>
         <div id="b2bOutboundActiveList" class="muted">无 / 없음</div>
@@ -630,13 +599,13 @@
   <!-- B2B INVENTORY -->
   <div id="page-b2b_inventory" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2B 盘点 / 재고조사</div>
     </div>
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
-      <button class="primary" onclick="joinWork('B2B','B2B盘点')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2B','B2B盘点')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2B','B2B盘点')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2B','B2B盘点')">结束作业 / 종료</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bInventoryCount">0</span></div>
         <div id="b2bInventoryActiveList" class="muted">无 / 없음</div>
@@ -647,13 +616,13 @@
   <!-- B2C INVENTORY -->
   <div id="page-b2c_inventory" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">B2C 盘点 / 재고조사</div>
     </div>
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
-      <button class="primary" onclick="joinWork('B2C','B2C盘点')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('B2C','B2C盘点')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('B2C','B2C盘点')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2C','B2C盘点')">结束作业 / 종료</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2cInventoryCount">0</span></div>
         <div id="b2cInventoryActiveList" class="muted">无 / 없음</div>
@@ -664,13 +633,13 @@
   <!-- WAREHOUSE CLEANUP -->
   <div id="page-warehouse_cleanup" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 <small>뒤로</small></button>
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
       <div class="grow pill">仓库整理 / 창고 정리</div>
     </div>
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
-      <button class="primary" onclick="joinWork('WAREHOUSE','仓库整理')">开始作业（扫工牌） <small>시작(명찰 스캔)</small></button>
-      <button class="primary" onclick="leaveWork('WAREHOUSE','仓库整理')">结束作业（扫工牌） <small>종료(명찰 스캔)</small></button>
+      <button class="primary" onclick="joinWork('WAREHOUSE','仓库整理')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('WAREHOUSE','仓库整理')">结束作业 / 종료</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="warehouseCleanupCount">0</span></div>
         <div id="warehouseCleanupActiveList" class="muted">无 / 없음</div>
@@ -686,7 +655,7 @@
           <div class="overlayTitle" id="scanTitle">扫码 / 스캔</div>
           <div class="overlayHint">请对准二维码 / 바코드를 화면 중앙에 맞추세요</div>
         </div>
-        <button class="small" style="width:auto;min-width:90px" onclick="closeScanner()">关闭 <small>닫기</small></button>
+        <button class="small" style="width:auto;min-width:90px" onclick="closeScanner()">关闭 / 닫기</button>
       </div>
       <div id="reader"></div>
     </div>
@@ -694,6 +663,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=36"></script>
+  <script src="./app.js?v=37"></script>
 </body>
 </html>
