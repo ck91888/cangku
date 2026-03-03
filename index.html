@@ -201,23 +201,13 @@
     </div>
 
     <div class="card">
-      <h3>日当工牌 / 일용직 명찰</h3>
+      <h3>日当工牌 / 일용직 명찰（DA-日期-姓名）</h3>
+      <div class="muted">输入姓名（每行一个），生成格式：DA-20260303-张三。每天生成，报表里直接看到名字。</div>
 
-      <small>今天日当人数 N（无名字，只编号） / 오늘 인원</small>
-      <input id="daCount" type="number" min="1" max="200" placeholder="例如 10" />
-      <button class="primary" onclick="bulkDailyCheckin()">按人数批量生成 <small>번호만 일괄 생성</small></button>
+      <small>姓名列表（每行一个） / 이름 목록</small>
+      <textarea id="daNameList" placeholder="张三&#10;李四&#10;김민수&#10;박지훈"></textarea>
 
-      <button onclick="dailyCheckin()">生成单个日当工牌 <small>1명 생성</small></button>
-
-      <div style="margin-top:16px;border-top:1px solid #eee;padding-top:12px;">
-        <h3>按姓名生成日当工牌 / 이름으로 생성（DA-日期-姓名）</h3>
-        <div class="muted">输入姓名（每行一个），生成格式：DA-20260303-张三。每天生成，报表里直接看到名字。</div>
-
-        <small>姓名列表（每行一个） / 이름 목록</small>
-        <textarea id="daNameList" placeholder="张三&#10;李四&#10;김민수&#10;박지훈"></textarea>
-
-        <button class="primary" onclick="generateDailyBadgesByName()">按姓名批量生成日当工牌 <small>이름으로 일괄 생성</small></button>
-      </div>
+      <button class="primary" onclick="generateDailyBadgesByName()">批量生成日当工牌 <small>이름으로 일괄 생성</small></button>
 
       <div><small>最近生成工牌 / 최근 명찰</small></div>
       <div id="daText">无</div>
@@ -514,6 +504,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=34"></script>
+  <script src="./app.js?v=35"></script>
 </body>
 </html>
