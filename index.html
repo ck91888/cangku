@@ -63,12 +63,8 @@
     </div>
 
     <div class="card">
-      <button class="primary" onclick="go('active_now')">全局在岗（已上线） <small>Active Now</small></button>
+      <button class="primary" onclick="go('active_now')">全局在岗 <small>Active Now</small></button>
       <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 <small>Report</small></button>
-      <button class="primary" onclick="go('badge')">工牌 / Badge <small>명찰</small></button>
-      <button class="primary" onclick="go('b2c_menu')">B2C <small>피킹/라벨/포장</small></button>
-      <button class="primary" onclick="go('import_menu')">进口快件 <small>수입 택배</small></button>
-      <button class="ghost" onclick="comingSoon('B2B（待上线）')">B2B（待上线）</button>
     </div>
   </div>
 
@@ -276,10 +272,11 @@
 
     <div class="card">
       <!-- ✅ 加入已有趟次 / 显示趟次二维码 -->
-      <button class="primary" onclick="joinExistingSessionByScan()">加入已有趟次（扫码） <small>세션 참여</small></button>
+      <button class="primary" onclick="joinExistingSessionByScan()">加入已有趟次（扫码） <small>세션 참여(스캔)</small></button>
+      <button class="primary" onclick="joinExistingSessionByInput()">加入已有趟次（手动输入） <small>세션 참여(입력)</small></button>
       <button class="primary" onclick="showSessionQr()">显示当前趟次二维码 <small>세션 QR</small></button>
       <div class="listBox" style="margin-top:10px;">
-        <div class="muted">让其他设备扫描本机二维码即可加入同一趟次（session）。</div>
+        <div class="muted">让其他设备扫描本机二维码即可加入同一趟次（session）。<br>或者手动输入趟次 ID（如 PS-xxxx）也可以加入。</div>
         <div id="b2cSessionQrBox" style="margin-top:10px;"></div>
       </div>
 
@@ -507,6 +504,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=32"></script>
+  <script src="./app.js?v=33"></script>
 </body>
 </html>
