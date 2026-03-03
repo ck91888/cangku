@@ -1,0 +1,570 @@
+const LOCK_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+const EVENTS_HEADER = [
+  "server_ms","client_ms","event_id","event","badge","biz","task","session","wave_id","device_id","ok","note"
+];
+
+// ===== Durable Object: Locks =====
+export class LocksDO {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this._locks = null; // badge -> lock
+  }
+
+  async _load() {
+    if (this._locks) return;
+    this._locks = (await this.state.storage.get("locks")) || {};
+  }
+
+  _cleanup(now) {
+    const locks = this._locks || {};
+    let changed = false;
+    for (const badge of Object.keys(locks)) {
+      const lk = locks[badge];
+      if (!lk) { delete locks[badge]; changed = true; continue; }
+      if (lk.expires_at && lk.expires_at < now) { delete locks[badge]; changed = true; }
+    }
+    return changed;
+  }
+
+  async _save() {
+    await this.state.storage.put("locks", this._locks || {});
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const method = request.method.toUpperCase();
+
+    let body = {};
+    if (method === "POST") {
+      const ct = request.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        body = await request.json().catch(() => ({}));
+      } else {
+        const txt = await request.text().catch(() => "");
+        body = Object.fromEntries(new URLSearchParams(txt));
+      }
+    } else {
+      body = Object.fromEntries(url.searchParams);
+    }
+
+    const action = String(body.action || "").trim();
+    const now = Date.now();
+
+    await this._load();
+    const changed = this._cleanup(now);
+    if (changed) await this._save();
+
+    if (action === "lock_acquire") {
+      const badge = String(body.badge || "").trim();
+      const task = String(body.task || "").trim();
+      const session = String(body.session || "").trim();
+      const device_id = String(body.device_id || "").trim();
+      if (!badge) return Response.json({ ok:false, error:"missing badge" });
+      if (!task) return Response.json({ ok:false, error:"missing task" });
+
+      const locks = this._locks;
+      const cur = locks[badge];
+      const expires = now + LOCK_TTL_MS;
+
+      if (!cur || (cur.expires_at && cur.expires_at < now)) {
+        locks[badge] = { badge, task, session, device_id, locked_at: now, expires_at: expires };
+        await this._save();
+        return Response.json({ ok:true, locked:true, lock: locks[badge] });
+      }
+
+      if (cur.task === task && cur.session === session && cur.device_id === device_id) {
+        cur.locked_at = now;
+        cur.expires_at = expires;
+        locks[badge] = cur;
+        await this._save();
+        return Response.json({ ok:true, locked:true, lock: cur });
+      }
+
+      return Response.json({ ok:true, locked:false, reason:"locked_by_other", lock: cur });
+    }
+
+    if (action === "lock_release") {
+      const badge = String(body.badge || "").trim();
+      const task = String(body.task || "").trim();
+      const session = String(body.session || "").trim();
+      const device_id = String(body.device_id || "").trim();
+      if (!badge) return Response.json({ ok:false, error:"missing badge" });
+
+      const locks = this._locks;
+      const cur = locks[badge];
+      if (!cur) return Response.json({ ok:true, released:false, reason:"not_found" });
+
+      if (task && cur.task !== task) return Response.json({ ok:true, released:false, reason:"different_task", lock: cur });
+      if (session && cur.session !== session) return Response.json({ ok:true, released:false, reason:"different_session", lock: cur });
+      if (device_id && cur.device_id !== device_id) return Response.json({ ok:true, released:false, reason:"different_device", lock: cur });
+
+      delete locks[badge];
+      await this._save();
+      return Response.json({ ok:true, released:true });
+    }
+
+    if (action === "lock_status") {
+      const badge = String(body.badge || "").trim();
+      if (!badge) return Response.json({ ok:false, error:"missing badge" });
+
+      const cur = (this._locks || {})[badge];
+      if (!cur) return Response.json({ ok:true, found:false });
+
+      if (cur.expires_at && cur.expires_at < now) {
+        delete this._locks[badge];
+        await this._save();
+        return Response.json({ ok:true, found:false });
+      }
+
+      return Response.json({ ok:true, found:true, lock: cur });
+    }
+
+    if (action === "locks_by_session") {
+      const session = String(body.session || "").trim();
+      if (!session) return Response.json({ ok:false, error:"missing session" });
+
+      const out = [];
+      for (const badge of Object.keys(this._locks || {})) {
+        const lk = this._locks[badge];
+        if (!lk) continue;
+        if (lk.expires_at && lk.expires_at < now) continue;
+        if (String(lk.session || "").trim() === session) out.push(lk);
+      }
+      return Response.json({ ok:true, session, asof: now, active: out });
+    }
+
+    if (action === "locks_all") {
+      const out = [];
+      for (const badge of Object.keys(this._locks || {})) {
+        const lk = this._locks[badge];
+        if (!lk) continue;
+        if (lk.expires_at && lk.expires_at < now) continue;
+        out.push(lk);
+      }
+      return Response.json({ ok:true, asof: now, active: out });
+    }
+
+    if (action === "ping") {
+      return Response.json({ ok:true, asof: now, pong:true });
+    }
+
+    return Response.json({ ok:false, error:"unknown action (DO): " + action });
+  }
+}
+
+// ===== Worker HTTP API =====
+function jsonpOrJson(obj, callback) {
+  if (callback) {
+    return new Response(`${callback}(${JSON.stringify(obj)});`, {
+      headers: { "content-type": "application/javascript; charset=utf-8" }
+    });
+  }
+  return new Response(JSON.stringify(obj), {
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+
+async function readBody(request) {
+  const method = request.method.toUpperCase();
+  if (method === "GET") return {};
+  const ct = request.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    return await request.json().catch(() => ({}));
+  }
+  const txt = await request.text().catch(() => "");
+  return Object.fromEntries(new URLSearchParams(txt));
+}
+
+function locksStub(env) {
+  const id = env.LOCKS.idFromName("global");
+  return env.LOCKS.get(id);
+}
+
+async function ensureSessionOpen(env, session, device_id) {
+  const sid = String(session || "").trim();
+  if (!sid) return;
+
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO sessions(session,status,created_ms,created_by_device,closed_ms,closed_by_device)
+     VALUES(?, 'OPEN', ?, ?, NULL, NULL)`
+  ).bind(sid, now, String(device_id||"")).run();
+}
+
+async function getSession(env, session) {
+  const sid = String(session || "").trim();
+  if (!sid) return null;
+  const r = await env.DB.prepare(
+    `SELECT session,status,created_ms,created_by_device,closed_ms,closed_by_device
+     FROM sessions WHERE session=? LIMIT 1`
+  ).bind(sid).first();
+  return r || null;
+}
+
+// ===== Task state (enforce "start before join") =====
+const REQUIRE_START_TASKS = new Set(["TALLY","PICK","RELABEL","批量出库"]);
+
+function requireStart_(task){
+  return REQUIRE_START_TASKS.has(String(task||"").trim());
+}
+
+async function taskStateStatus_(env, session, biz, task){
+  const r = await env.DB.prepare(
+    `SELECT status FROM task_state WHERE session=? AND biz=? AND task=? LIMIT 1`
+  ).bind(String(session||""), String(biz||""), String(task||"")).first();
+  return r ? String(r.status || "").toUpperCase() : "";
+}
+
+async function taskStateOpen_(env, session, biz, task, started_ms, device_id){
+  await env.DB.prepare(`
+    INSERT INTO task_state(session,biz,task,status,started_ms,ended_ms,started_by_device,ended_by_device)
+    VALUES(?,?,?,'OPEN',?,NULL,?,NULL)
+    ON CONFLICT(session,biz,task) DO UPDATE SET
+      status='OPEN',
+      started_ms=excluded.started_ms,
+      ended_ms=NULL,
+      started_by_device=excluded.started_by_device,
+      ended_by_device=NULL
+  `).bind(
+    String(session||""), String(biz||""), String(task||""),
+    Number(started_ms||0), String(device_id||"")
+  ).run();
+}
+
+async function taskStateClose_(env, session, biz, task, ended_ms, device_id){
+  await env.DB.prepare(`
+    UPDATE task_state
+    SET status='CLOSED', ended_ms=?, ended_by_device=?
+    WHERE session=? AND biz=? AND task=?
+  `).bind(
+    Number(ended_ms||0), String(device_id||""),
+    String(session||""), String(biz||""), String(task||"")
+  ).run();
+}
+
+async function taskStateCloseAll_(env, session, ended_ms, device_id){
+  await env.DB.prepare(
+    `UPDATE task_state SET status='CLOSED', ended_ms=?, ended_by_device=? WHERE session=? AND status='OPEN'`
+  ).bind(Number(ended_ms||0), String(device_id||""), String(session||"")).run();
+}
+
+// ===== Admin-only: events_tail =====
+function isAdmin_(p, env){
+  const key = String(p.k || "").trim();             // 前端传 k=口令
+  const secret = String(env.ADMINKEY || "").trim(); // 后端 secret
+  return !!(secret && key && key === secret);
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const q = Object.fromEntries(url.searchParams);
+    const body = await readBody(request);
+    const p = { ...q, ...body };
+
+    const action = String(p.action || "").trim();
+    const callback = String(p.callback || "").trim();
+    const now = Date.now();
+
+    if (action === "ping") {
+      return jsonpOrJson({ ok:true, asof: now, pong:true }, callback);
+    }
+
+    if (action === "lock_acquire" || action === "lock_release" || action === "lock_status") {
+      const stub = locksStub(env);
+      const r = await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify(p)
+      });
+      const data = await r.json();
+      return jsonpOrJson(data, callback);
+    }
+
+    if (action === "active_now") {
+      const stub = locksStub(env);
+      const r = await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ action:"locks_all" })
+      });
+      const data = await r.json();
+      return jsonpOrJson({ ok:true, version:"active_now_from_locks_v1", asof: now, active: data.active || [] }, callback);
+    }
+
+    if (action === "session_info") {
+      const session = String(p.session || p.pick_session_id || "").trim();
+      if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
+
+      await ensureSessionOpen(env, session, "");
+      const s = await getSession(env, session);
+
+      const stub = locksStub(env);
+      const r = await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ action:"locks_by_session", session })
+      });
+      const lockInfo = await r.json();
+
+      return jsonpOrJson({
+        ok:true,
+        asof: now,
+        session,
+        status: (s && s.status ? String(s.status).toUpperCase() : "OPEN"),
+        created_ms: s?.created_ms || 0,
+        created_by_device: s?.created_by_device || "",
+        closed_ms: s?.closed_ms || 0,
+        closed_by_device: s?.closed_by_device || "",
+        active: lockInfo.active || []
+      }, callback);
+    }
+
+    if (action === "session_close") {
+      const session = String(p.session || p.pick_session_id || "").trim();
+      const device_id = String(p.device_id || "").trim();
+      if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
+      if (!device_id) return jsonpOrJson({ ok:false, error:"missing device_id" }, callback);
+
+      await ensureSessionOpen(env, session, device_id);
+      const s = await getSession(env, session);
+
+      if (s && String(s.status || "").toUpperCase() === "CLOSED") {
+        return jsonpOrJson({
+          ok:true,
+          already_closed:true,
+          session,
+          closed_ms: s.closed_ms || 0,
+          closed_by_device: s.closed_by_device || ""
+        }, callback);
+      }
+
+      const stub = locksStub(env);
+      const r = await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ action:"locks_by_session", session })
+      });
+      const lockInfo = await r.json();
+      const active = lockInfo.active || [];
+      if (active.length > 0) {
+        return jsonpOrJson({ ok:true, blocked:true, reason:"still_active", session, active }, callback);
+      }
+
+      const closed_ms = Date.now();
+      await env.DB.prepare(
+        `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_device=? WHERE session=?`
+      ).bind(closed_ms, device_id, session).run();
+
+      return jsonpOrJson({ ok:true, closed:true, session, closed_ms, closed_by_device: device_id }, callback);
+    }
+
+    // admin_events_tail：只要口令正确就允许
+    if (action === "admin_events_tail") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      // 不 return，继续走 events_tail 查询逻辑
+    }
+
+    if (action === "events_tail" || action === "admin_events_tail") {
+      // 如果你想“events_tail 也必须口令”，保留这段；想公开就删掉这个 if
+      if (action === "events_tail" && !isAdmin_(p, env)) {
+        return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      }
+
+      const limit = Math.min(Math.max(parseInt(p.limit || "5000", 10) || 5000, 1), 20000);
+      const sinceMs = parseInt(p.since_ms || "0", 10) || 0;
+      const untilMs = parseInt(p.until_ms || "0", 10) || 0;
+      const session = String(p.session || "").trim();
+      const biz = String(p.biz || "").trim();
+      const task = String(p.task || "").trim();
+
+      let where = "WHERE 1=1";
+      const binds = [];
+      if (sinceMs) { where += " AND server_ms >= ?"; binds.push(sinceMs); }
+      if (untilMs) { where += " AND server_ms <= ?"; binds.push(untilMs); }
+      if (session) { where += " AND session = ?"; binds.push(session); }
+      if (biz) { where += " AND biz = ?"; binds.push(biz); }
+      if (task) { where += " AND task = ?"; binds.push(task); }
+
+      const sql = `
+        SELECT server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note
+        FROM events
+        ${where}
+        ORDER BY server_ms DESC
+        LIMIT ?
+      `;
+      binds.push(limit);
+
+      const rs = await env.DB.prepare(sql).bind(...binds).all();
+      const rowsDesc = rs.results || [];
+      const rows = rowsDesc.reverse().map(r => EVENTS_HEADER.map(k => r[k]));
+      return jsonpOrJson({ ok:true, asof: now, header: EVENTS_HEADER, rows }, callback);
+    }
+
+    if (action === "event_submit") {
+      const server_ms = Date.now();
+
+      const event_id = String(p.event_id || "").trim();
+      const event = String(p.event || "").trim();
+      const badge = String(p.badge || p.da_id || "").trim();
+      const biz = String(p.biz || "").trim();
+      const task = String(p.task || "").trim();
+      const session = String(p.session || p.pick_session_id || "").trim();
+      const wave_id = String(p.wave_id || "").trim();
+      const device_id = String(p.device_id || "").trim();
+      const client_ms = Number(p.client_ms || p.ts_ms || 0) || 0;
+
+      if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
+      if (!event) return jsonpOrJson({ ok:false, error:"missing event" }, callback);
+      if (!biz) return jsonpOrJson({ ok:false, error:"missing biz" }, callback);
+      if (!task) return jsonpOrJson({ ok:false, error:"missing task" }, callback);
+
+      // 阻止已关闭 session 继续写入（允许 SESSION/end）
+      if (session) {
+        const s = await getSession(env, session);
+        const closed = s && String(s.status || "").toUpperCase() === "CLOSED";
+        const allowEnd = (String(task).trim() === "SESSION" && String(event).trim() === "end");
+        if (closed && !allowEnd) {
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 0, "session_closed_blocked").run();
+
+          return jsonpOrJson({ ok:false, error:"session_closed", status:"CLOSED", session }, callback);
+        }
+      }
+
+      // ===== start =====
+      if (event === "start" && session) {
+        if (!device_id) return jsonpOrJson({ ok:false, error:"missing device_id" }, callback);
+
+        // ✅ 查这个设备是否已经有未结束 session（按最新创建的）
+        const open = await env.DB.prepare(
+          `SELECT session FROM sessions
+           WHERE status='OPEN' AND created_by_device=?
+           ORDER BY created_ms DESC
+           LIMIT 1`
+        ).bind(device_id).first();
+
+        if (open && String(open.session || "") !== session) {
+          // 尝试把 open session 对应的 task/biz 查出来（用于提示）
+          const first = await env.DB.prepare(
+            `SELECT biz, task FROM events
+             WHERE session=? AND event='start'
+             ORDER BY server_ms ASC
+             LIMIT 1`
+          ).bind(String(open.session)).first();
+
+          return jsonpOrJson({
+            ok:false,
+            error:"device_has_open_session",
+            open_session: String(open.session),
+            open_biz: first ? String(first.biz||"") : "",
+            open_task: first ? String(first.task||"") : ""
+          }, callback);
+        }
+
+        await ensureSessionOpen(env, session, device_id);
+
+        // ✅✅ 关键修复：start 时把该任务标记为 OPEN，join 才不会说“没开始”
+        if (task && task !== "SESSION" && requireStart_(task)) {
+          await taskStateOpen_(env, session, biz, task, server_ms, device_id);
+        }
+      }
+
+      // ===== end =====
+      if (event === "end" && session) {
+        // session 结束：把所有任务都关掉
+        if (task === "SESSION") {
+          await taskStateCloseAll_(env, session, server_ms, device_id);
+        } else {
+          // 普通任务结束：只关本任务
+          await taskStateClose_(env, session, biz, task, server_ms, device_id);
+        }
+      }
+
+      // ===== join =====
+      if (event === "join") {
+        if (!badge) return jsonpOrJson({ ok:false, error:"missing badge for join" }, callback);
+
+        // ✅ 强制：这些任务必须先 start 才能 join
+        if (session && task !== "SESSION" && requireStart_(task)) {
+          const st = await taskStateStatus_(env, session, biz, task);
+          if (st !== "OPEN") {
+            await env.DB.prepare(
+              `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+            ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, device_id, 0, "task_not_started").run();
+
+            return jsonpOrJson({ ok:false, error:"task_not_started", biz, task, session }, callback);
+          }
+        }
+
+        const stub = locksStub(env);
+        const lr = await (await stub.fetch("https://locks/do", {
+          method: "POST",
+          headers: { "content-type":"application/json" },
+          body: JSON.stringify({ action:"lock_acquire", badge, task, session, device_id })
+        })).json();
+
+        if (!lr || lr.ok !== true) {
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, device_id, 0, "lock_error").run();
+
+          return jsonpOrJson({ ok:false, error:"lock_error" }, callback);
+        }
+
+        if (lr.locked !== true) {
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, device_id, 0, "locked_by_other").run();
+
+          return jsonpOrJson({ ok:true, locked:false, reason: lr.reason || "locked_by_other", lock: lr.lock || null }, callback);
+        }
+
+        const ins = await env.DB.prepare(
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 1, "").run();
+
+        if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
+        return jsonpOrJson({ ok:true, saved:true, locked:true }, callback);
+      }
+
+      // ===== leave =====
+      if (event === "leave") {
+        if (!badge) return jsonpOrJson({ ok:false, error:"missing badge for leave" }, callback);
+
+        const ins = await env.DB.prepare(
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 1, "").run();
+
+        const stub = locksStub(env);
+        ctx.waitUntil(stub.fetch("https://locks/do", {
+          method: "POST",
+          headers: { "content-type":"application/json" },
+          body: JSON.stringify({ action:"lock_release", badge, task, session, device_id })
+        }).catch(() => {}));
+
+        if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
+        return jsonpOrJson({ ok:true, saved:true }, callback);
+      }
+
+      // ===== other events =====
+      const ins = await env.DB.prepare(
+        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 1, "").run();
+
+      if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
+      return jsonpOrJson({ ok:true, saved:true }, callback);
+    }
+
+    return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);
+  }
+};
