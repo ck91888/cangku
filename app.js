@@ -823,7 +823,7 @@ function parseBadge(code){
   var name = (parts[1] || "").trim();
   return { raw: raw, id: id, name: name };
 }
-function isDaId(id){ return /^DA-\d{8}-\d+$/.test(id); }
+function isDaId(id){ return /^DA-\d{8}-.+$/.test(id); }
 function isEmpId(id){ return /^EMP-[A-Za-z0-9_-]+$/.test(id); }
 function isPermanentDaId(id){ return /^DAF-\d+$/.test(id); }
 function isOperatorBadge(raw){
@@ -1420,6 +1420,54 @@ async function bulkDailyCheckin(){
     setDaStatus("批量生成完成（待上传）✅ 共 "+n+" 个", true);
   }catch(e){
     setDaStatus("批量生成失败 ❌ " + e, false);
+  }
+}
+
+function generateDailyBadgesByName(){
+  try{
+    var ta = document.getElementById("daNameList");
+    if(!ta){ alert("找不到 daNameList"); return; }
+    var names = normalizeNames(ta.value);
+    if(names.length===0){ alert("请先输入日当姓名（每行一个）"); return; }
+
+    var listEl = document.getElementById("badgeList");
+    if(!listEl) return;
+    listEl.innerHTML = "";
+    setDaStatus("生成中...", true);
+
+    var d = new Date();
+    var yyyy = d.getFullYear();
+    var mm = String(d.getMonth()+1).padStart(2,'0');
+    var dd = String(d.getDate()).padStart(2,'0');
+    var dateStr = yyyy + mm + dd;
+
+    names.forEach(function(name, idx){
+      var da = "DA-" + dateStr + "-" + name;
+
+      var evId = makeEventId({ event:"daily_checkin", biz:"DAILY", task:"BADGE", wave_id:"", badgeRaw:da });
+      if(!hasRecent(evId)){
+        submitEvent({ event:"daily_checkin", event_id: evId, biz:"DAILY", task:"BADGE", pick_session_id:"NA", da_id: da });
+        addRecent(evId);
+      }
+
+      var box = document.createElement("div");
+      box.style.border = "1px solid #ddd";
+      box.style.borderRadius = "12px";
+      box.style.padding = "10px";
+      var safeId = "qrn_" + dateStr + "_" + name.replace(/[^a-zA-Z0-9\u4e00-\u9fff\uac00-\ud7af]/g, "_") + "_" + idx;
+      box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">' + da + '</div><div id="' + safeId + '"></div>';
+      listEl.appendChild(box);
+      new QRCode(document.getElementById(safeId), { text: da, width: 160, height: 160 });
+
+      currentDaId = da;
+      localStorage.setItem("da_id", currentDaId);
+    });
+
+    refreshDaUI();
+    setDaStatus("按姓名批量生成完成 ✅ 共 " + names.length + " 个", true);
+    alert("已生成日当工牌 ✅ 共 " + names.length + " 个\n格式：DA-" + dateStr + "-姓名\n建议截图/打印发放。");
+  }catch(e){
+    setDaStatus("生成失败 ❌ " + e, false);
   }
 }
 
