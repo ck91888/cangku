@@ -13,7 +13,9 @@ var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
 var pages = [
   "home","badge","global_menu","b2c_menu",
   "import_menu","import_unload","import_scan_pallet","import_loadout",
-  "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
+  "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound","b2b_inventory",
+  "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_inventory","b2c_disposal","b2c_relabel",
+  "warehouse_cleanup",
   "active_now",
   "report",
   "global_sessions"
@@ -135,6 +137,15 @@ function renderPages(){
   if(cur==="import_scan_pallet"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="import_loadout"){ restoreState(); renderActiveLists(); refreshUI(); }
 
+  if(cur==="b2b_menu"){ refreshUI(); }
+  if(cur==="b2b_unload"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="b2b_tally"){ restoreState(); renderActiveLists(); renderB2bTallyUI(); refreshUI(); }
+  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); refreshUI(); }
+  if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="b2c_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="warehouse_cleanup"){ restoreState(); renderActiveLists(); refreshUI(); }
+
   if(cur==="active_now"){ refreshActiveNow(); }
   if(cur==="global_sessions"){ refreshGlobalSessions(); }
   if(cur==="b2c_menu"){ refreshUI(); }
@@ -191,11 +202,22 @@ var PAGE_CTX = {
   "b2c_return":  { biz:"B2C", task:"退件入库" },
   "b2c_qc":      { biz:"B2C", task:"质检" },
   "b2c_disposal":{ biz:"B2C", task:"废弃处理" },
+  "b2c_inventory":{ biz:"B2C", task:"B2C盘点" },
 
   // ===== 进口快件 =====
   "import_unload":      { biz:"IMPORT", task:"卸货" },
   "import_scan_pallet": { biz:"IMPORT", task:"过机扫描码托" },
-  "import_loadout":     { biz:"IMPORT", task:"装柜/出货" }
+  "import_loadout":     { biz:"IMPORT", task:"装柜/出货" },
+
+  // ===== B2B =====
+  "b2b_unload":    { biz:"B2B", task:"B2B卸货" },
+  "b2b_tally":     { biz:"B2B", task:"B2B入库理货" },
+  "b2b_workorder": { biz:"B2B", task:"B2B工单操作" },
+  "b2b_outbound":  { biz:"B2B", task:"B2B出库" },
+  "b2b_inventory": { biz:"B2B", task:"B2B盘点" },
+
+  // ===== 仓库整理 =====
+  "warehouse_cleanup": { biz:"WAREHOUSE", task:"仓库整理" }
 };
 
 function applyPageSession_(){
@@ -215,6 +237,8 @@ function applyPageSession_(){
 var scannedWaves = new Set();
 var scannedInbounds = new Set();
 var scannedBulkOutOrders = new Set();
+var scannedB2bTallyOrders = new Set();
+var scannedB2bWorkorders = new Set();
 
 var lastScanAt = 0;
 var scanBusy = false;
@@ -241,6 +265,13 @@ var activeDisposal = new Set();
 var activeImportUnload = new Set();
 var activeImportScanPallet = new Set();
 var activeImportLoadout = new Set();
+var activeB2bUnload = new Set();
+var activeB2bTally = new Set();
+var activeB2bWorkorder = new Set();
+var activeB2bOutbound = new Set();
+var activeB2bInventory = new Set();
+var activeB2cInventory = new Set();
+var activeWarehouseCleanup = new Set();
 
 var relabelTimerHandle = null;
 var relabelStartTs = null;
@@ -328,7 +359,14 @@ async function joinExistingSessionByInput(){
       "4=RELABEL 换单\n" +
       "5=进口快件-卸货\n" +
       "6=进口快件-过机扫描码托\n" +
-      "7=进口快件-装柜/出货"
+      "7=进口快件-装柜/出货\n" +
+      "8=B2B-卸货\n" +
+      "9=B2B-入库理货\n" +
+      "10=B2B-工单操作\n" +
+      "11=B2B-出库\n" +
+      "12=B2B-盘点\n" +
+      "13=B2C-盘点\n" +
+      "14=仓库整理"
     ) || "";
     pick = String(pick).trim();
     var map = {
@@ -338,7 +376,14 @@ async function joinExistingSessionByInput(){
       "4": {biz:"B2C", task:"RELABEL"},
       "5": {biz:"IMPORT", task:"卸货"},
       "6": {biz:"IMPORT", task:"过机扫描码托"},
-      "7": {biz:"IMPORT", task:"装柜/出货"}
+      "7": {biz:"IMPORT", task:"装柜/出货"},
+      "8": {biz:"B2B", task:"B2B卸货"},
+      "9": {biz:"B2B", task:"B2B入库理货"},
+      "10": {biz:"B2B", task:"B2B工单操作"},
+      "11": {biz:"B2B", task:"B2B出库"},
+      "12": {biz:"B2B", task:"B2B盘点"},
+      "13": {biz:"B2C", task:"B2C盘点"},
+      "14": {biz:"WAREHOUSE", task:"仓库整理"}
     };
     ctx = map[pick] || null;
     if(!ctx){
@@ -410,9 +455,18 @@ function keyActiveDisposal(){ return "activeDisposal_" + (currentSessionId || "N
 function keyActiveImportUnload(){ return "activeImportUnload_" + (currentSessionId || "NA"); }
 function keyActiveImportScanPallet(){ return "activeImportScanPallet_" + (currentSessionId || "NA"); }
 function keyActiveImportLoadout(){ return "activeImportLoadout_" + (currentSessionId || "NA"); }
+function keyActiveB2bUnload(){ return "activeB2bUnload_" + (currentSessionId || "NA"); }
+function keyActiveB2bTally(){ return "activeB2bTally_" + (currentSessionId || "NA"); }
+function keyActiveB2bWorkorder(){ return "activeB2bWorkorder_" + (currentSessionId || "NA"); }
+function keyActiveB2bOutbound(){ return "activeB2bOutbound_" + (currentSessionId || "NA"); }
+function keyActiveB2bInventory(){ return "activeB2bInventory_" + (currentSessionId || "NA"); }
+function keyActiveB2cInventory(){ return "activeB2cInventory_" + (currentSessionId || "NA"); }
+function keyActiveWarehouseCleanup(){ return "activeWarehouseCleanup_" + (currentSessionId || "NA"); }
 
 function keyInbounds(){ return "inbounds_" + (currentSessionId || "NA"); }
 function keyBulkOutOrders(){ return "bulkoutOrders_" + (currentSessionId || "NA"); }
+function keyB2bTallyOrders(){ return "b2bTallyOrders_" + (currentSessionId || "NA"); }
+function keyB2bWorkorders(){ return "b2bWorkorders_" + (currentSessionId || "NA"); }
 
 var RECENT_MAX = 80;
 function keyRecent(){ return "recentEventIds_" + (currentSessionId || "NA"); }
@@ -460,6 +514,15 @@ function persistState(){
   localStorage.setItem(keyActiveImportLoadout(), JSON.stringify(Array.from(activeImportLoadout)));
   localStorage.setItem(keyInbounds(), JSON.stringify(Array.from(scannedInbounds)));
   localStorage.setItem(keyBulkOutOrders(), JSON.stringify(Array.from(scannedBulkOutOrders)));
+  localStorage.setItem(keyActiveB2bUnload(), JSON.stringify(Array.from(activeB2bUnload)));
+  localStorage.setItem(keyActiveB2bTally(), JSON.stringify(Array.from(activeB2bTally)));
+  localStorage.setItem(keyActiveB2bWorkorder(), JSON.stringify(Array.from(activeB2bWorkorder)));
+  localStorage.setItem(keyActiveB2bOutbound(), JSON.stringify(Array.from(activeB2bOutbound)));
+  localStorage.setItem(keyActiveB2bInventory(), JSON.stringify(Array.from(activeB2bInventory)));
+  localStorage.setItem(keyActiveB2cInventory(), JSON.stringify(Array.from(activeB2cInventory)));
+  localStorage.setItem(keyActiveWarehouseCleanup(), JSON.stringify(Array.from(activeWarehouseCleanup)));
+  localStorage.setItem(keyB2bTallyOrders(), JSON.stringify(Array.from(scannedB2bTallyOrders)));
+  localStorage.setItem(keyB2bWorkorders(), JSON.stringify(Array.from(scannedB2bWorkorders)));
 }
 
 function restoreState(){
@@ -479,6 +542,15 @@ function restoreState(){
   try{ activeImportLoadout = new Set(JSON.parse(localStorage.getItem(keyActiveImportLoadout()) || "[]")); }catch(e){ activeImportLoadout = new Set(); }
   try{ scannedInbounds = new Set(JSON.parse(localStorage.getItem(keyInbounds()) || "[]")); }catch(e){ scannedInbounds = new Set(); }
   try{ scannedBulkOutOrders = new Set(JSON.parse(localStorage.getItem(keyBulkOutOrders()) || "[]")); }catch(e){ scannedBulkOutOrders = new Set(); }
+  try{ activeB2bUnload = new Set(JSON.parse(localStorage.getItem(keyActiveB2bUnload()) || "[]")); }catch(e){ activeB2bUnload = new Set(); }
+  try{ activeB2bTally = new Set(JSON.parse(localStorage.getItem(keyActiveB2bTally()) || "[]")); }catch(e){ activeB2bTally = new Set(); }
+  try{ activeB2bWorkorder = new Set(JSON.parse(localStorage.getItem(keyActiveB2bWorkorder()) || "[]")); }catch(e){ activeB2bWorkorder = new Set(); }
+  try{ activeB2bOutbound = new Set(JSON.parse(localStorage.getItem(keyActiveB2bOutbound()) || "[]")); }catch(e){ activeB2bOutbound = new Set(); }
+  try{ activeB2bInventory = new Set(JSON.parse(localStorage.getItem(keyActiveB2bInventory()) || "[]")); }catch(e){ activeB2bInventory = new Set(); }
+  try{ activeB2cInventory = new Set(JSON.parse(localStorage.getItem(keyActiveB2cInventory()) || "[]")); }catch(e){ activeB2cInventory = new Set(); }
+  try{ activeWarehouseCleanup = new Set(JSON.parse(localStorage.getItem(keyActiveWarehouseCleanup()) || "[]")); }catch(e){ activeWarehouseCleanup = new Set(); }
+  try{ scannedB2bTallyOrders = new Set(JSON.parse(localStorage.getItem(keyB2bTallyOrders()) || "[]")); }catch(e){ scannedB2bTallyOrders = new Set(); }
+  try{ scannedB2bWorkorders = new Set(JSON.parse(localStorage.getItem(keyB2bWorkorders()) || "[]")); }catch(e){ scannedB2bWorkorders = new Set(); }
 }
 
 /** ===== Utils ===== */
@@ -756,6 +828,15 @@ function cleanupLocalSession_(){
   localStorage.removeItem(keyActiveImportLoadout());
   localStorage.removeItem(keyInbounds());
   localStorage.removeItem(keyBulkOutOrders());
+  localStorage.removeItem(keyActiveB2bUnload());
+  localStorage.removeItem(keyActiveB2bTally());
+  localStorage.removeItem(keyActiveB2bWorkorder());
+  localStorage.removeItem(keyActiveB2bOutbound());
+  localStorage.removeItem(keyActiveB2bInventory());
+  localStorage.removeItem(keyActiveB2cInventory());
+  localStorage.removeItem(keyActiveWarehouseCleanup());
+  localStorage.removeItem(keyB2bTallyOrders());
+  localStorage.removeItem(keyB2bWorkorders());
   localStorage.removeItem(keyRecent());
 
   if(CUR_CTX && CUR_CTX.biz && CUR_CTX.task){
@@ -794,7 +875,9 @@ async function endSessionGlobal_(){
 }
 
 function taskAutoSession_(task){
-  return task === "PACK" || task === "退件入库" || task === "质检" || task === "废弃处理" || task === "卸货" || task === "过机扫描码托" || task === "装柜/出货";
+  return task === "PACK" || task === "退件入库" || task === "质检" || task === "废弃处理" || task === "卸货" || task === "过机扫描码托" || task === "装柜/出货"
+    || task === "B2B卸货" || task === "B2B出库" || task === "B2B盘点"
+    || task === "B2C盘点" || task === "仓库整理";
 }
 
 async function tryAutoEndSessionAfterLeave_(){
@@ -853,6 +936,13 @@ function isAlreadyActive(task, badge){
   if(task==="卸货") return activeImportUnload.has(badge);
   if(task==="过机扫描码托") return activeImportScanPallet.has(badge);
   if(task==="装柜/出货") return activeImportLoadout.has(badge);
+  if(task==="B2B卸货") return activeB2bUnload.has(badge);
+  if(task==="B2B入库理货") return activeB2bTally.has(badge);
+  if(task==="B2B工单操作") return activeB2bWorkorder.has(badge);
+  if(task==="B2B出库") return activeB2bOutbound.has(badge);
+  if(task==="B2B盘点") return activeB2bInventory.has(badge);
+  if(task==="B2C盘点") return activeB2cInventory.has(badge);
+  if(task==="仓库整理") return activeWarehouseCleanup.has(badge);
   return false;
 }
 function applyActive(task, action, badge){
@@ -867,6 +957,13 @@ function applyActive(task, action, badge){
   if(task==="卸货"){ if(action==="join") activeImportUnload.add(badge); if(action==="leave") activeImportUnload.delete(badge); }
   if(task==="过机扫描码托"){ if(action==="join") activeImportScanPallet.add(badge); if(action==="leave") activeImportScanPallet.delete(badge); }
   if(task==="装柜/出货"){ if(action==="join") activeImportLoadout.add(badge); if(action==="leave") activeImportLoadout.delete(badge); }
+  if(task==="B2B卸货"){ if(action==="join") activeB2bUnload.add(badge); if(action==="leave") activeB2bUnload.delete(badge); }
+  if(task==="B2B入库理货"){ if(action==="join") activeB2bTally.add(badge); if(action==="leave") activeB2bTally.delete(badge); }
+  if(task==="B2B工单操作"){ if(action==="join") activeB2bWorkorder.add(badge); if(action==="leave") activeB2bWorkorder.delete(badge); }
+  if(task==="B2B出库"){ if(action==="join") activeB2bOutbound.add(badge); if(action==="leave") activeB2bOutbound.delete(badge); }
+  if(task==="B2B盘点"){ if(action==="join") activeB2bInventory.add(badge); if(action==="leave") activeB2bInventory.delete(badge); }
+  if(task==="B2C盘点"){ if(action==="join") activeB2cInventory.add(badge); if(action==="leave") activeB2cInventory.delete(badge); }
+  if(task==="仓库整理"){ if(action==="join") activeWarehouseCleanup.add(badge); if(action==="leave") activeWarehouseCleanup.delete(badge); }
 }
 
 /** ===== Render lists ===== */
@@ -925,6 +1022,41 @@ function renderActiveLists(){
   var ll = document.getElementById("importLoadoutActiveList");
   if(lc) lc.textContent = String(activeImportLoadout.size);
   if(ll) ll.innerHTML = renderSetToHtml(activeImportLoadout);
+
+  var b2uC = document.getElementById("b2bUnloadCount");
+  var b2uL = document.getElementById("b2bUnloadActiveList");
+  if(b2uC) b2uC.textContent = String(activeB2bUnload.size);
+  if(b2uL) b2uL.innerHTML = renderSetToHtml(activeB2bUnload);
+
+  var b2tC = document.getElementById("b2bTallyCount");
+  var b2tL = document.getElementById("b2bTallyActiveList");
+  if(b2tC) b2tC.textContent = String(activeB2bTally.size);
+  if(b2tL) b2tL.innerHTML = renderSetToHtml(activeB2bTally);
+
+  var b2wC = document.getElementById("b2bWorkorderCount");
+  var b2wL = document.getElementById("b2bWorkorderActiveList");
+  if(b2wC) b2wC.textContent = String(activeB2bWorkorder.size);
+  if(b2wL) b2wL.innerHTML = renderSetToHtml(activeB2bWorkorder);
+
+  var b2oC = document.getElementById("b2bOutboundCount");
+  var b2oL = document.getElementById("b2bOutboundActiveList");
+  if(b2oC) b2oC.textContent = String(activeB2bOutbound.size);
+  if(b2oL) b2oL.innerHTML = renderSetToHtml(activeB2bOutbound);
+
+  var b2iC = document.getElementById("b2bInventoryCount");
+  var b2iL = document.getElementById("b2bInventoryActiveList");
+  if(b2iC) b2iC.textContent = String(activeB2bInventory.size);
+  if(b2iL) b2iL.innerHTML = renderSetToHtml(activeB2bInventory);
+
+  var ciC = document.getElementById("b2cInventoryCount");
+  var ciL = document.getElementById("b2cInventoryActiveList");
+  if(ciC) ciC.textContent = String(activeB2cInventory.size);
+  if(ciL) ciL.innerHTML = renderSetToHtml(activeB2cInventory);
+
+  var wcC = document.getElementById("warehouseCleanupCount");
+  var wcL = document.getElementById("warehouseCleanupActiveList");
+  if(wcC) wcC.textContent = String(activeWarehouseCleanup.size);
+  if(wcL) wcL.innerHTML = renderSetToHtml(activeWarehouseCleanup);
 }
 
 function renderInboundCountUI(){
@@ -1215,6 +1347,152 @@ async function startBulkOut(){
 }
 async function endBulkOut(){ return endSessionGlobal_(); }
 
+/** ===== B2B Tally (like B2C Tally) ===== */
+async function startB2bTally(){
+  if(currentSessionId){
+    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？");
+    if(!ok) return;
+  }
+  var btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
+  try{
+    var biz = "B2B", task = "B2B入库理货";
+    currentSessionId = makePickSessionId();
+    CUR_CTX = { biz: biz, task: task, page: "b2b_tally" };
+    setSess_(biz, task, currentSessionId);
+    scannedB2bTallyOrders = new Set();
+    activeB2bTally = new Set();
+    persistState(); refreshUI();
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
+    addRecent(evId);
+    renderActiveLists(); renderB2bTallyUI();
+    setStatus("B2B理货开始 ✅ 新趟次: " + currentSessionId, true);
+  }catch(e){
+    setStatus("B2B理货开始失败 ❌ " + e, false); alert(String(e));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = "开始理货 시작"; }
+  }
+}
+async function endB2bTally(){ return endSessionGlobal_(); }
+
+async function openScannerB2bTallyOrder(){
+  if(!currentSessionId){ setStatus("请先开始理货", false); return; }
+  if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再扫码，请重新开始。"))) return;
+  scanMode = "b2b_tally_order";
+  document.getElementById("scanTitle").textContent = "扫码理货单号（B2B）";
+  await openScannerCommon();
+}
+
+function manualAddB2bTallyOrder(){
+  var inp = document.getElementById("b2bTallyManualInput");
+  if(!inp) return;
+  var val = String(inp.value || "").trim();
+  if(!val){ alert("请输入理货单号"); return; }
+  if(!currentSessionId){ alert("请先点【开始理货】"); return; }
+  if(scannedB2bTallyOrders.has(val)){
+    alert("已记录（去重）✅\n" + val);
+    renderB2bTallyUI(); inp.value = ""; return;
+  }
+  scannedB2bTallyOrders.add(val);
+  persistState(); renderB2bTallyUI();
+  var evId = makeEventId({ event:"wave", biz:"B2B", task:"B2B入库理货", wave_id: val, badgeRaw:"" });
+  if(!hasRecent(evId)){
+    submitEvent({ event:"wave", event_id: evId, biz:"B2B", task:"B2B入库理货", pick_session_id: currentSessionId, wave_id: val });
+    addRecent(evId);
+  }
+  setStatus("已记录理货单（待上传）✅ " + val, true);
+  inp.value = "";
+}
+
+function renderB2bTallyUI(){
+  var c = document.getElementById("b2bTallyOrderCount");
+  var l = document.getElementById("b2bTallyOrderList");
+  if(c) c.textContent = String(scannedB2bTallyOrders.size);
+  if(l){
+    if(scannedB2bTallyOrders.size === 0){
+      l.innerHTML = '<span class="muted">无 / 없음</span>';
+    }else{
+      var arr = Array.from(scannedB2bTallyOrders);
+      var show = arr.slice(Math.max(0, arr.length - 30));
+      l.innerHTML = show.map(function(x){ return '<span class="tag">'+String(x)+'</span>'; }).join(" ");
+    }
+  }
+}
+
+/** ===== B2B Workorder (like B2C BulkOut) ===== */
+async function startB2bWorkorder(){
+  if(currentSessionId){
+    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？");
+    if(!ok) return;
+  }
+  var btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
+  try{
+    var biz = "B2B", task = "B2B工单操作";
+    currentSessionId = makePickSessionId();
+    CUR_CTX = { biz: biz, task: task, page: "b2b_workorder" };
+    setSess_(biz, task, currentSessionId);
+    scannedB2bWorkorders = new Set();
+    activeB2bWorkorder = new Set();
+    persistState(); refreshUI();
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
+    addRecent(evId);
+    renderActiveLists(); renderB2bWorkorderUI();
+    setStatus("B2B工单操作开始 ✅ 新趟次: " + currentSessionId, true);
+  }catch(e){
+    setStatus("B2B工单操作开始失败 ❌ " + e, false); alert(String(e));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = "开始操作 시작"; }
+  }
+}
+async function endB2bWorkorder(){ return endSessionGlobal_(); }
+
+async function openScannerB2bWorkorder(){
+  if(!currentSessionId){ setStatus("请先开始操作", false); return; }
+  if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再扫码，请重新开始。"))) return;
+  scanMode = "b2b_workorder";
+  document.getElementById("scanTitle").textContent = "扫码工单号（B2B）";
+  await openScannerCommon();
+}
+
+function manualAddB2bWorkorder(){
+  var inp = document.getElementById("b2bWorkorderManualInput");
+  if(!inp) return;
+  var val = String(inp.value || "").trim();
+  if(!val){ alert("请输入工单号"); return; }
+  if(!currentSessionId){ alert("请先点【开始操作】"); return; }
+  if(scannedB2bWorkorders.has(val)){
+    alert("已记录（去重）✅\n" + val);
+    renderB2bWorkorderUI(); inp.value = ""; return;
+  }
+  scannedB2bWorkorders.add(val);
+  persistState(); renderB2bWorkorderUI();
+  var evId = makeEventId({ event:"wave", biz:"B2B", task:"B2B工单操作", wave_id: val, badgeRaw:"" });
+  if(!hasRecent(evId)){
+    submitEvent({ event:"wave", event_id: evId, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: val });
+    addRecent(evId);
+  }
+  setStatus("已记录工单（待上传）✅ " + val, true);
+  inp.value = "";
+}
+
+function renderB2bWorkorderUI(){
+  var c = document.getElementById("b2bWorkorderOrderCount");
+  var l = document.getElementById("b2bWorkorderOrderList");
+  if(c) c.textContent = String(scannedB2bWorkorders.size);
+  if(l){
+    if(scannedB2bWorkorders.size === 0){
+      l.innerHTML = '<span class="muted">无 / 없음</span>';
+    }else{
+      var arr = Array.from(scannedB2bWorkorders);
+      var show = arr.slice(Math.max(0, arr.length - 30));
+      l.innerHTML = show.map(function(x){ return '<span class="tag">'+String(x)+'</span>'; }).join(" ");
+    }
+  }
+}
+
 async function startPicking(){
   if(currentSessionId){
     var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
@@ -1383,6 +1661,11 @@ async function joinWork(biz, task){
     if(task==="卸货") activeImportUnload = new Set();
     if(task==="过机扫描码托") activeImportScanPallet = new Set();
     if(task==="装柜/出货") activeImportLoadout = new Set();
+    if(task==="B2B卸货") activeB2bUnload = new Set();
+    if(task==="B2B出库") activeB2bOutbound = new Set();
+    if(task==="B2B盘点") activeB2bInventory = new Set();
+    if(task==="B2C盘点") activeB2cInventory = new Set();
+    if(task==="仓库整理") activeWarehouseCleanup = new Set();
     persistState(); refreshUI();
 
     // ✅ start 必须同步确认（否则后端会拒绝 join）
@@ -1441,6 +1724,13 @@ async function leaveWork(biz, task){
   if(task === "卸货" && activeImportUnload.size === 0){ alert("当前没有人在卸货作业中（无需退出）。"); return; }
   if(task === "过机扫描码托" && activeImportScanPallet.size === 0){ alert("当前没有人在过机扫描码托作业中（无需退出）。"); return; }
   if(task === "装柜/出货" && activeImportLoadout.size === 0){ alert("当前没有人在装柜/出货作业中（无需退出）。"); return; }
+  if(task === "B2B卸货" && activeB2bUnload.size === 0){ alert("当前没有人在B2B卸货作业中（无需退出）。"); return; }
+  if(task === "B2B入库理货" && activeB2bTally.size === 0){ alert("当前没有人在B2B入库理货作业中（无需退出）。"); return; }
+  if(task === "B2B工单操作" && activeB2bWorkorder.size === 0){ alert("当前没有人在B2B工单操作作业中（无需退出）。"); return; }
+  if(task === "B2B出库" && activeB2bOutbound.size === 0){ alert("当前没有人在B2B出库作业中（无需退出）。"); return; }
+  if(task === "B2B盘点" && activeB2bInventory.size === 0){ alert("当前没有人在B2B盘点作业中（无需退出）。"); return; }
+  if(task === "B2C盘点" && activeB2cInventory.size === 0){ alert("当前没有人在B2C盘点作业中（无需退出）。"); return; }
+  if(task === "仓库整理" && activeWarehouseCleanup.size === 0){ alert("当前没有人在仓库整理作业中（无需退出）。"); return; }
 
   laborAction = "leave"; laborBiz = biz; laborTask = task;
   scanMode = "labor";
@@ -1647,7 +1937,14 @@ if(!ctx){
     "4=RELABEL 换单\n" +
     "5=进口快件-卸货\n" +
     "6=进口快件-过机扫描码托\n" +
-    "7=进口快件-装柜/出货"
+    "7=进口快件-装柜/出货\n" +
+    "8=B2B-卸货\n" +
+    "9=B2B-入库理货\n" +
+    "10=B2B-工单操作\n" +
+    "11=B2B-出库\n" +
+    "12=B2B-盘点\n" +
+    "13=B2C-盘点\n" +
+    "14=仓库整理"
   ) || "";
   pick = String(pick).trim();
   var map = {
@@ -1657,7 +1954,14 @@ if(!ctx){
     "4": {biz:"B2C", task:"RELABEL"},
     "5": {biz:"IMPORT", task:"卸货"},
     "6": {biz:"IMPORT", task:"过机扫描码托"},
-    "7": {biz:"IMPORT", task:"装柜/出货"}
+    "7": {biz:"IMPORT", task:"装柜/出货"},
+    "8": {biz:"B2B", task:"B2B卸货"},
+    "9": {biz:"B2B", task:"B2B入库理货"},
+    "10": {biz:"B2B", task:"B2B工单操作"},
+    "11": {biz:"B2B", task:"B2B出库"},
+    "12": {biz:"B2B", task:"B2B盘点"},
+    "13": {biz:"B2C", task:"B2C盘点"},
+    "14": {biz:"WAREHOUSE", task:"仓库整理"}
   };
   ctx = map[pick] || null;
   if(!ctx){
@@ -1747,6 +2051,54 @@ setSess_(ctx.biz, ctx.task, currentSessionId);
 
         setStatus("已记录出库单（待上传）✅ " + code3, true);
         alert("已记录出库单 ✅\n" + code3 + "\n当前累计：" + scannedBulkOutOrders.size);
+        await closeScanner();
+      } finally { scanBusy = false; }
+      return;
+    }
+
+    if(scanMode === "b2b_tally_order"){
+      var codeT = decodedText.trim();
+      if(!codeT){ setStatus("理货单号为空", false); return; }
+      scanBusy = true;
+      await pauseScanner();
+      try{
+        if(scannedB2bTallyOrders.has(codeT)){
+          setStatus("已记录（去重）✅ " + codeT, true);
+          alert("已记录（去重）✅\n" + codeT);
+          renderB2bTallyUI(); await closeScanner(); return;
+        }
+        scannedB2bTallyOrders.add(codeT); persistState(); renderB2bTallyUI();
+        var evIdT = makeEventId({ event:"wave", biz:"B2B", task:"B2B入库理货", wave_id: codeT, badgeRaw:"" });
+        if(!hasRecent(evIdT)){
+          submitEvent({ event:"wave", event_id: evIdT, biz:"B2B", task:"B2B入库理货", pick_session_id: currentSessionId, wave_id: codeT });
+          addRecent(evIdT);
+        }
+        setStatus("已记录理货单（待上传）✅ " + codeT, true);
+        alert("已记录理货单 ✅\n" + codeT + "\n当前累计：" + scannedB2bTallyOrders.size);
+        await closeScanner();
+      } finally { scanBusy = false; }
+      return;
+    }
+
+    if(scanMode === "b2b_workorder"){
+      var codeW = decodedText.trim();
+      if(!codeW){ setStatus("工单号为空", false); return; }
+      scanBusy = true;
+      await pauseScanner();
+      try{
+        if(scannedB2bWorkorders.has(codeW)){
+          setStatus("已记录（去重）✅ " + codeW, true);
+          alert("已记录（去重）✅\n" + codeW);
+          renderB2bWorkorderUI(); await closeScanner(); return;
+        }
+        scannedB2bWorkorders.add(codeW); persistState(); renderB2bWorkorderUI();
+        var evIdW = makeEventId({ event:"wave", biz:"B2B", task:"B2B工单操作", wave_id: codeW, badgeRaw:"" });
+        if(!hasRecent(evIdW)){
+          submitEvent({ event:"wave", event_id: evIdW, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: codeW });
+          addRecent(evIdW);
+        }
+        setStatus("已记录工单（待上传）✅ " + codeW, true);
+        alert("已记录工单 ✅\n" + codeW + "\n当前累计：" + scannedB2bWorkorders.size);
         await closeScanner();
       } finally { scanBusy = false; }
       return;
