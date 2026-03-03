@@ -300,6 +300,62 @@ function parseSessionQr_(text){
   return null;
 }
 
+async function joinExistingSessionByInput(){
+  var input = prompt("请输入趟次 ID（例如 PS-20260303-001）：\n세션 ID를 입력하세요:") || "";
+  input = String(input).trim();
+  if(!input){
+    return;
+  }
+
+  // 尝试解析 CKSESSION|xxx 格式，如果不是就直接当 session id
+  var sid = parseSessionQr_(input);
+  if(!sid) sid = input;
+
+  // 和扫码加入完全相同的绑定逻辑
+  var ctx = PAGE_CTX[getHashPage()] || null;
+  if(!ctx){
+    var pick = prompt(
+      "把这个趟次绑定到哪个任务？\n" +
+      "输入数字：\n" +
+      "1=TALLY 入库理货\n" +
+      "2=PICK 拣货\n" +
+      "3=批量出库\n" +
+      "4=RELABEL 换单\n" +
+      "5=进口快件-卸货\n" +
+      "6=进口快件-过机扫描码托\n" +
+      "7=进口快件-装柜/出货"
+    ) || "";
+    pick = String(pick).trim();
+    var map = {
+      "1": {biz:"B2C", task:"TALLY"},
+      "2": {biz:"B2C", task:"PICK"},
+      "3": {biz:"B2C", task:"批量出库"},
+      "4": {biz:"B2C", task:"RELABEL"},
+      "5": {biz:"IMPORT", task:"卸货"},
+      "6": {biz:"IMPORT", task:"过机扫描码托"},
+      "7": {biz:"IMPORT", task:"装柜/出货"}
+    };
+    ctx = map[pick] || null;
+    if(!ctx){
+      alert("未选择任务，已取消。");
+      return;
+    }
+  }
+
+  CUR_CTX = { biz: ctx.biz, task: ctx.task, page: getHashPage() };
+  currentSessionId = sid;
+  setSess_(ctx.biz, ctx.task, currentSessionId);
+
+  SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
+
+  restoreState();
+  renderActiveLists();
+  refreshUI();
+
+  alert("已加入趟次 ✅\n" + currentSessionId);
+  setStatus("已加入趟次 ✅ " + currentSessionId, true);
+}
+
 async function joinExistingSessionByScan(){
   scanMode = "session_join";
   document.getElementById("scanTitle").textContent = "扫码加入趟次 / 세션 QR 스캔";
