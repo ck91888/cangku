@@ -965,7 +965,16 @@ async function refreshActiveNow(){
 }
 
 /** ===== Start / End: B2C tasks ===== */
-async function startTally(){
+  async function startTally(){
+  // ✅ 防连点保护
+  if(currentSessionId){
+    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
+    if(!ok) return;
+  }
+  var btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
+
+
   try{
     var biz = "B2C", task = "TALLY";
 
@@ -988,9 +997,11 @@ async function startTally(){
     renderActiveLists();
     renderInboundCountUI();
     setStatus("理货开始 ✅ 新趟次: " + currentSessionId, true);
-  }catch(e){
+    }catch(e){
     setStatus("理货开始失败 ❌ " + e, false);
     alert(String(e));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = "开始理货 시작"; }
   }
 }
 async function endTally(){ return endSessionGlobal_(); }
@@ -1015,9 +1026,11 @@ async function startBulkOut(){
     renderActiveLists();
     renderBulkOutUI();
     setStatus("批量出库开始 ✅ 新趟次: " + currentSessionId, true);
-  }catch(e){
-    setStatus("批量出库开始失败 ❌ " + e, false);
+    }catch(e){
+    setStatus("理货开始失败 ❌ " + e, false);
     alert(String(e));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = "开始批量出库 시작"; }
   }
 }
 async function endBulkOut(){ return endSessionGlobal_(); }
@@ -1043,12 +1056,13 @@ async function startPicking(){
 
     renderActiveLists();
     setStatus("拣货开始 ✅ 新趟次: " + currentSessionId, true);
-  }catch(e){
-    setStatus("拣货开始失败 ❌ " + e, false);
+    }catch(e){
+    setStatus("理货开始失败 ❌ " + e, false);
     alert(String(e));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = "开始拣货 시작"; }
   }
 }
-
 
 function setRelabelTimerText(text){
   var el = document.getElementById("relabelTimer");
@@ -1085,9 +1099,11 @@ async function startRelabel(){
 
     renderActiveLists();
     setStatus("换单开始 ✅ 新趟次: " + currentSessionId, true);
-  }catch(e){
-    setStatus("换单开始失败 ❌ " + e, false);
+    }catch(e){
+    setStatus("理货开始失败 ❌ " + e, false);
     alert(String(e));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = "开始换单 시작"; }
   }
 }
 async function endRelabel(){ return endSessionGlobal_(); }
