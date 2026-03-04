@@ -73,9 +73,10 @@ export class LocksDO {
         return Response.json({ ok:true, locked:true, lock: locks[badge] });
       }
 
-      if (cur.task === task && cur.session === session && cur.device_id === device_id) {
+      if (cur.task === task && cur.session === session) {
         cur.locked_at = now;
         cur.expires_at = expires;
+        cur.device_id = device_id; // 允许同 task+session 下 device_id 更新（同设备localStorage重置场景）
         locks[badge] = cur;
         await this._save();
         return Response.json({ ok:true, locked:true, lock: cur });
@@ -97,7 +98,7 @@ export class LocksDO {
 
       if (task && cur.task !== task) return Response.json({ ok:true, released:false, reason:"different_task", lock: cur });
       if (session && cur.session !== session) return Response.json({ ok:true, released:false, reason:"different_session", lock: cur });
-      if (device_id && cur.device_id !== device_id) return Response.json({ ok:true, released:false, reason:"different_device", lock: cur });
+      // device_id 不做校验：同设备 localStorage 重置后 device_id 会变，不应阻止退出
 
       delete locks[badge];
       await this._save();
@@ -192,22 +193,22 @@ function locksStub(env) {
   return env.LOCKS.get(id);
 }
 
-async function ensureSessionOpen(env, session, device_id) {
+async function ensureSessionOpen(env, session, device_id, biz, task) {
   const sid = String(session || "").trim();
   if (!sid) return;
 
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO sessions(session,status,created_ms,created_by_device,closed_ms,closed_by_device)
-     VALUES(?, 'OPEN', ?, ?, NULL, NULL)`
-  ).bind(sid, now, String(device_id||"")).run();
+    `INSERT OR IGNORE INTO sessions(session,status,created_ms,created_by_device,closed_ms,closed_by_device,biz,task)
+     VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?)`
+  ).bind(sid, now, String(device_id||""), String(biz||""), String(task||"")).run();
 }
 
 async function getSession(env, session) {
   const sid = String(session || "").trim();
   if (!sid) return null;
   const r = await env.DB.prepare(
-    `SELECT session,status,created_ms,created_by_device,closed_ms,closed_by_device
+    `SELECT session,status,created_ms,created_by_device,closed_ms,closed_by_device,biz,task
      FROM sessions WHERE session=? LIMIT 1`
   ).bind(sid).first();
   return r || null;
@@ -311,11 +312,6 @@ export default {
       await ensureSessionOpen(env, session, "");
       const s = await getSession(env, session);
 
-      // 查该 session 关联的任务（取第一条 start 事件）
-      const firstEvt = await env.DB.prepare(
-        `SELECT biz, task FROM events WHERE session=? AND event='start' ORDER BY server_ms ASC LIMIT 1`
-      ).bind(session).first();
-
       const stub = locksStub(env);
       const r = await stub.fetch("https://locks/do", {
         method: "POST",
@@ -333,8 +329,8 @@ export default {
         created_by_device: s?.created_by_device || "",
         closed_ms: s?.closed_ms || 0,
         closed_by_device: s?.closed_by_device || "",
-        biz: firstEvt ? String(firstEvt.biz||"") : "",
-        task: firstEvt ? String(firstEvt.task||"") : "",
+        biz: s?.biz || "",
+        task: s?.task || "",
         active: lockInfo.active || []
       }, callback);
     }
@@ -457,33 +453,26 @@ export default {
       if (event === "start" && session) {
         if (!device_id) return jsonpOrJson({ ok:false, error:"missing device_id" }, callback);
 
-        // ✅ 查这个设备是否已经有未结束 session（按最新创建的）
+        // 查这个设备是否已有未结束 session，拣货 session（B2C/PICK）允许与其他 session 同时存在
         const open = await env.DB.prepare(
-          `SELECT session FROM sessions
+          `SELECT session,biz,task FROM sessions
            WHERE status='OPEN' AND created_by_device=?
+           AND NOT (biz='B2C' AND task='PICK')
            ORDER BY created_ms DESC
            LIMIT 1`
         ).bind(device_id).first();
 
         if (open && String(open.session || "") !== session) {
-          // 尝试把 open session 对应的 task/biz 查出来（用于提示）
-          const first = await env.DB.prepare(
-            `SELECT biz, task FROM events
-             WHERE session=? AND event='start'
-             ORDER BY server_ms ASC
-             LIMIT 1`
-          ).bind(String(open.session)).first();
-
           return jsonpOrJson({
             ok:false,
             error:"device_has_open_session",
             open_session: String(open.session),
-            open_biz: first ? String(first.biz||"") : "",
-            open_task: first ? String(first.task||"") : ""
+            open_biz: String(open.biz||""),
+            open_task: String(open.task||"")
           }, callback);
         }
 
-        await ensureSessionOpen(env, session, device_id);
+        await ensureSessionOpen(env, session, device_id, biz, task);
 
         // ✅✅ 关键修复：start 时把该任务标记为 OPEN，join 才不会说“没开始”
         if (task && task !== "SESSION" && requireStart_(task)) {
@@ -609,8 +598,12 @@ export default {
     if (action === "admin_sessions_list") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const biz = String(p.biz || "").trim();
-      let sessionsSql = `SELECT session,status,created_ms,created_by_device,closed_ms,closed_by_device FROM sessions ORDER BY created_ms DESC LIMIT 50`;
-      const sessionRows = (await env.DB.prepare(sessionsSql).all()).results || [];
+      let sessionsSql = biz
+        ? `SELECT session,status,biz,task,created_ms,created_by_device,closed_ms,closed_by_device FROM sessions WHERE biz=? ORDER BY created_ms DESC LIMIT 50`
+        : `SELECT session,status,biz,task,created_ms,created_by_device,closed_ms,closed_by_device FROM sessions ORDER BY created_ms DESC LIMIT 50`;
+      const sessionRows = biz
+        ? (await env.DB.prepare(sessionsSql).bind(biz).all()).results || []
+        : (await env.DB.prepare(sessionsSql).all()).results || [];
       const stub = locksStub(env);
       const allLocksR = await stub.fetch("https://locks/do", {
         method: "POST",
@@ -627,18 +620,12 @@ export default {
       }
       const result = [];
       for (const s of sessionRows) {
-        const firstEvt = await env.DB.prepare(
-          `SELECT biz,task FROM events WHERE session=? AND event='start' ORDER BY server_ms ASC LIMIT 1`
-        ).bind(String(s.session)).first();
-        const sessionBiz = firstEvt ? String(firstEvt.biz || "") : "";
-        const sessionTask = firstEvt ? String(firstEvt.task || "") : "";
-        if (biz && sessionBiz && sessionBiz !== biz) continue;
         const activeLocks = locksBySession[String(s.session)] || [];
         result.push({
           session: s.session,
           status: String(s.status || "OPEN").toUpperCase(),
-          biz: sessionBiz,
-          task: sessionTask,
+          biz: s.biz || "",
+          task: s.task || "",
           created_ms: s.created_ms || 0,
           closed_ms: s.closed_ms || 0,
           active: activeLocks
