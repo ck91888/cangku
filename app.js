@@ -1637,10 +1637,10 @@ function generateDailyBadgesByName(){
       box.style.border = "1px solid #ddd";
       box.style.borderRadius = "12px";
       box.style.padding = "10px";
-      var safeId = "qrn_" + dateStr + "_" + name.replace(/[^a-zA-Z0-9\u4e00-\u9fff\uac00-\ud7af]/g, "_") + "_" + idx;
+      var safeId = "qrn_" + dateStr + "_" + idx;
       box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">' + da + '</div><div id="' + safeId + '"></div>';
       listEl.appendChild(box);
-      new QRCode(document.getElementById(safeId), { text: da, width: 160, height: 160 });
+      new QRCode(document.getElementById(safeId), { text: "DA-" + dateStr + "-" + encodeURIComponent(name), width: 160, height: 160 });
 
       currentDaId = da;
       localStorage.setItem("da_id", currentDaId);
@@ -1674,7 +1674,7 @@ function generatePermanentDaBadges(){
 
   names.forEach(function(name, idx){
     var payload = "DAF-" + name;
-    var safeKey = "pdaq_" + idx + "_" + name.replace(/[^a-zA-Z0-9\u4e00-\u9fff\uac00-\ud7af]/g,"_");
+    var safeKey = "pdaq_" + idx;
 
     var box = document.createElement("div");
     box.style.border = "1px solid #ddd";
@@ -1682,7 +1682,7 @@ function generatePermanentDaBadges(){
     box.style.padding = "10px";
     box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
     listEl.appendChild(box);
-    new QRCode(document.getElementById(safeKey), { text: payload, width: 160, height: 160 });
+    new QRCode(document.getElementById(safeKey), { text: "DAF-" + encodeURIComponent(name), width: 160, height: 160 });
   });
 
   alert("已生成长期日当工牌 ✅ 共 " + names.length + " 个\n建议截图/打印发放（以后每天都用这一张）。");
@@ -1713,7 +1713,7 @@ function generateEmployeeBadges(){
 
   names.forEach(function(name, idx){
     var payload = "EMP-" + name;
-    var safeKey = "empqr_" + idx + "_" + name.replace(/[^a-zA-Z0-9\u4e00-\u9fff\uac00-\ud7af]/g,"_");
+    var safeKey = "empqr_" + idx;
 
     var box = document.createElement("div");
     box.style.border = "1px solid #ddd";
@@ -1721,7 +1721,7 @@ function generateEmployeeBadges(){
     box.style.padding = "10px";
     box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
     listEl.appendChild(box);
-    new QRCode(document.getElementById(safeKey), { text: payload, width: 160, height: 160 });
+    new QRCode(document.getElementById(safeKey), { text: "EMP-" + encodeURIComponent(name), width: 160, height: 160 });
   });
 
   alert("已生成员工工牌 ✅ 共 "+names.length+" 个\n建议截图/打印此页面发放。");
@@ -1756,6 +1756,7 @@ async function openScannerCommon(){
 
   var onScan = async (decodedText) => {
     var code = decodedText.trim();
+    try { code = decodeURIComponent(code); } catch(e) {}
     if(scanBusy) return;
 
     var now = Date.now();
