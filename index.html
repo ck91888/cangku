@@ -165,23 +165,17 @@
   <!-- ACTIVE NOW (GLOBAL) -->
   <div id="page-active_now" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill">全局在岗 / Active Now</div>
+      <button class="back small" id="activeNowBackBtn" onclick="activeNowBack()">返回 / 뒤로</button>
+      <div class="grow pill" id="activeNowTitle">全局在岗 / Active Now</div>
+      <button class="small" onclick="refreshActiveNow()">刷新</button>
     </div>
 
     <div class="card">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button class="primary" onclick="refreshActiveNow()">刷新 / 새로고침</button>
-        <select id="activeNowFilterBiz" onchange="refreshActiveNow()">
-          <option value="">全部 / All</option>
-          <option value="B2C">B2C</option>
-          <option value="进口">进口</option>
-        </select>
-        <div id="activeNowMeta" class="muted"></div>
-      </div>
-
-      <div id="activeNowSummary" style="margin-top:10px;"></div>
-      <div id="activeNowList" style="margin-top:10px;"></div>
+      <div id="activeNowMeta" class="muted" style="margin-bottom:8px;"></div>
+      <!-- 索引：任务卡片 -->
+      <div id="activeNowIndex"></div>
+      <!-- 详情：某任务的在岗人员 -->
+      <div id="activeNowDetail" style="display:none;"></div>
     </div>
   </div>
 
@@ -687,6 +681,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=44"></script>
+  <script src="./app.js?v=45"></script>
 </body>
 </html>

@@ -1107,72 +1107,120 @@ function fmtDur(ms){
   return m + "m";
 }
 
+var _activeNowData = [];
+var _activeNowAsof = 0;
+var _activeNowDetailKey = null; // "biz/task" currently shown in detail
+
 async function refreshActiveNow(){
   try{
     setStatus("拉取在岗中... ⏳", true);
     var res = await jsonp(LOCK_URL, { action:"active_now" });
-
     if(!res || res.ok !== true){
       setStatus("在岗拉取失败 ❌ " + (res && res.error ? res.error : ""), false);
-      alert("在岗拉取失败：" + (res && res.error ? res.error : "unknown"));
       return;
     }
-
-    var allActive = res.active || [];
-    var asof = res.asof || Date.now();
-
-    // 筛选
-    var filterEl = document.getElementById("activeNowFilterBiz");
-    var filterBiz = filterEl ? filterEl.value : "";
-    var active = filterBiz ? allActive.filter(function(x){ return (x.biz||"") === filterBiz; }) : allActive;
+    _activeNowData = res.active || [];
+    _activeNowAsof = res.asof || Date.now();
 
     var meta = document.getElementById("activeNowMeta");
-    if(meta) meta.textContent = "人数: " + active.length + " ｜ " + new Date(asof).toLocaleString();
+    if(meta) meta.textContent = "在岗: " + _activeNowData.length + " 人 ｜ " + new Date(_activeNowAsof).toLocaleTimeString();
 
-    var by = {};
-    active.forEach(function(x){
-      var k = (x.biz||"") + " / " + (x.task||"");
-      by[k] = (by[k]||0) + 1;
-    });
-
-    var sumEl = document.getElementById("activeNowSummary");
-    if(sumEl){
-      var keys = Object.keys(by).sort();
-      sumEl.innerHTML = keys.length
-        ? keys.map(function(k){ return '<span class="tag">'+esc(k)+': '+by[k]+'</span>'; }).join(" ")
-        : '<span class="muted">当前无人在岗</span>';
+    // 如果当前在详情页，刷新详情；否则渲染索引
+    if(_activeNowDetailKey){
+      var parts = _activeNowDetailKey.split("/");
+      renderActiveNowDetail_(parts[0], parts.slice(1).join("/"));
+    } else {
+      renderActiveNowIndex_();
     }
-
-    var listEl = document.getElementById("activeNowList");
-    if(listEl){
-      if(active.length===0){
-        listEl.innerHTML = '<div class="muted">当前无人在岗</div>';
-      }else{
-        var now = Date.now();
-        var isAdmin = adminIsUnlocked_();
-        listEl.innerHTML = active.map(function(x){
-          var dur = fmtDur(now - (x.since||now));
-          var forceBtn = isAdmin
-            ? '<button class="small bad" style="margin-top:6px;width:auto;" ' +
-                'data-badge="'+esc(x.badge)+'" data-task="'+esc(x.task||"")+'" data-session="'+esc(x.session||"")+'" data-biz="'+esc(x.biz||"")+'" ' +
-                'onclick="adminForceLeave(this)">强制下线 / 강제 퇴장</button>'
-            : "";
-          return (
-            '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
-              '<div style="font-weight:700;">'+esc(x.badge)+'</div>' +
-              '<div class="muted" style="margin-top:4px;">作业: '+esc(x.biz)+' / '+esc(x.task)+' ｜ 在岗: '+esc(dur)+'</div>' +
-              '<div class="muted" style="margin-top:4px;">session: '+esc(x.session||"")+'</div>' +
-              forceBtn +
-            '</div>'
-          );
-        }).join("");
-      }
-    }
-
     setStatus("在岗已更新 ✅", true);
   }catch(e){
     setStatus("在岗拉取异常 ❌ " + e, false);
-    alert("在岗拉取异常：" + e);
+  }
+}
+
+function renderActiveNowIndex_(){
+  _activeNowDetailKey = null;
+  var titleEl = document.getElementById("activeNowTitle");
+  if(titleEl) titleEl.textContent = "全局在岗 / Active Now";
+  var indexEl = document.getElementById("activeNowIndex");
+  var detailEl = document.getElementById("activeNowDetail");
+  if(detailEl) detailEl.style.display = "none";
+  if(!indexEl) return;
+  indexEl.style.display = "";
+
+  // 按 biz/task 分组统计
+  var by = {};
+  _activeNowData.forEach(function(x){
+    var k = (x.biz||"") + "/" + (x.task||"");
+    if(!by[k]) by[k] = { biz: x.biz||"", task: x.task||"", count: 0 };
+    by[k].count++;
+  });
+
+  var keys = Object.keys(by).sort();
+  if(keys.length === 0){
+    indexEl.innerHTML = '<div class="muted" style="padding:10px 0;">当前无人在岗 / 현재 없음</div>';
+    return;
+  }
+
+  indexEl.innerHTML = '<div class="grid2">' +
+    keys.map(function(k){
+      var t = by[k];
+      var label = taskDisplayLabel(t.biz, t.task);
+      return '<button style="text-align:left;line-height:1.3;" ' +
+        'onclick="activeNowShowDetail(' + JSON.stringify(t.biz) + ',' + JSON.stringify(t.task) + ')">' +
+        '<div style="font-size:13px;">' + esc(label) + '</div>' +
+        '<div style="font-size:22px;font-weight:800;margin-top:4px;">' + t.count + ' <small style="font-size:13px;">人</small></div>' +
+        '</button>';
+    }).join("") +
+  '</div>';
+}
+
+function activeNowShowDetail(biz, task){
+  _activeNowDetailKey = biz + "/" + task;
+  renderActiveNowDetail_(biz, task);
+}
+
+function renderActiveNowDetail_(biz, task){
+  var titleEl = document.getElementById("activeNowTitle");
+  var indexEl = document.getElementById("activeNowIndex");
+  var detailEl = document.getElementById("activeNowDetail");
+  if(indexEl) indexEl.style.display = "none";
+  if(!detailEl) return;
+  detailEl.style.display = "";
+
+  var label = taskDisplayLabel(biz, task);
+  var workers = _activeNowData.filter(function(x){
+    return (x.biz||"") === biz && (x.task||"") === task;
+  });
+
+  if(titleEl) titleEl.textContent = label + " · " + workers.length + "人";
+
+  var now = Date.now();
+  var isAdmin = adminIsUnlocked_();
+
+  detailEl.innerHTML = workers.length === 0
+    ? '<div class="muted">无人在岗</div>'
+    : workers.map(function(x){
+        var dur = fmtDur(now - (x.since||now));
+        var forceBtn = isAdmin
+          ? '<button class="small bad" style="margin-top:6px;width:auto;" ' +
+              'data-badge="'+esc(x.badge)+'" data-task="'+esc(x.task||"")+'" data-session="'+esc(x.session||"")+'" data-biz="'+esc(x.biz||"")+'" ' +
+              'onclick="adminForceLeave(this)">强制下线 / 강제 퇴장</button>'
+          : "";
+        return '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
+          '<div style="font-weight:700;">'+esc(x.badge)+'</div>' +
+          '<div class="muted" style="margin-top:4px;">在岗: '+esc(dur)+'</div>' +
+          '<div class="muted" style="font-size:12px;margin-top:2px;">session: '+esc(x.session||"")+'</div>' +
+          forceBtn +
+        '</div>';
+      }).join("");
+}
+
+function activeNowBack(){
+  if(_activeNowDetailKey){
+    renderActiveNowIndex_();
+  } else {
+    back();
   }
 }
 
@@ -1193,7 +1241,7 @@ async function adminForceLeave(btn){
       return;
     }
     setStatus("强制下线成功 ✅", true);
-    refreshActiveNow();
+    await refreshActiveNow();
   }catch(e){
     setStatus("强制下线异常 ❌ " + e, false);
     alert("强制下线异常：" + e);
