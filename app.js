@@ -317,6 +317,14 @@ var scannedB2bWorkorders = new Set();
 
 var lastScanAt = 0;
 var scanBusy = false;
+var globalBusy = false; // 防止快速连点导致并发请求
+
+function acquireBusy_(){
+  if(globalBusy){ setStatus("处理中，请稍候 / 잠시만요...", false); return false; }
+  globalBusy = true;
+  return true;
+}
+function releaseBusy_(){ globalBusy = false; }
 // ===== Speed test / Perf =====
 var PERF_ON = true; // ✅ 需要测速就 true，不要就 false
 function perfLog_(msg){
@@ -1302,7 +1310,7 @@ async function adminForceEndSession(btn){
     if(btn){ btn.disabled = false; btn.textContent = "开始理货 시작"; }
   }
 }
-async function endTally(){ return endSessionGlobal_(); }
+async function endTally(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 async function startBulkOut(){
   if(currentSessionId){
@@ -1338,7 +1346,7 @@ async function startBulkOut(){
     if(btn){ btn.disabled = false; btn.textContent = "开始批量出库 시작"; }
   }
 }
-async function endBulkOut(){ return endSessionGlobal_(); }
+async function endBulkOut(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 /** ===== B2B Tally (like B2C Tally) ===== */
 async function startB2bTally(){
@@ -1368,7 +1376,7 @@ async function startB2bTally(){
     if(btn){ btn.disabled = false; btn.textContent = "开始理货 시작"; }
   }
 }
-async function endB2bTally(){ return endSessionGlobal_(); }
+async function endB2bTally(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 async function openScannerB2bTallyOrder(){
   if(!currentSessionId){ setStatus("请先开始理货", false); return; }
@@ -1442,7 +1450,7 @@ async function startB2bWorkorder(){
     if(btn){ btn.disabled = false; btn.textContent = "开始操作 시작"; }
   }
 }
-async function endB2bWorkorder(){ return endSessionGlobal_(); }
+async function endB2bWorkorder(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 async function openScannerB2bWorkorder(){
   if(!currentSessionId){ setStatus("请先开始操作", false); return; }
@@ -1573,7 +1581,7 @@ async function startRelabel(){
     if(btn){ btn.disabled = false; btn.textContent = "开始换单 시작"; }
   }
 }
-async function endRelabel(){ return endSessionGlobal_(); }
+async function endRelabel(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 /** ===== PICK end (leader confirmation) ===== */
 async function endPicking(){
@@ -1635,6 +1643,10 @@ async function openScannerBulkOutOrder(){
 
 /** ===== Labor (join/leave) ===== */
 async function joinWork(biz, task){
+  if(!acquireBusy_()) return;
+  try{ await joinWork_(biz, task); }finally{ releaseBusy_(); }
+}
+async function joinWork_(biz, task){
   biz = String(biz||"").trim();
   task = String(task||"").trim();
 
@@ -1701,6 +1713,10 @@ async function joinWork(biz, task){
 
 
 async function leaveWork(biz, task){
+  if(!acquireBusy_()) return;
+  try{ await leaveWork_(biz, task); }finally{ releaseBusy_(); }
+}
+async function leaveWork_(biz, task){
   biz = String(biz||"").trim();
   task = String(task||"").trim();
 
