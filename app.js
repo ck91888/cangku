@@ -1718,7 +1718,11 @@ async function leaveWork(biz, task){
   if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再退出作业，请重新开始或加入新趟次。"))) return;
 
   var reg_ = taskReg_(task);
-  if(reg_ && reg_.get().size === 0){ alert(reg_.emptyMsg || ("当前没有人在" + task + "作业中（无需退出）。")); return; }
+  if(reg_ && reg_.get().size === 0){
+    var endIt = confirm("当前没有人在" + task + "作业中，无需退出。\n\n如果您想结束本趟次，请点【确定】；\n返回继续作业请点【取消】。");
+    if(endIt) await endSessionGlobal_();
+    return;
+  }
 
   laborAction = "leave"; laborBiz = biz; laborTask = task;
   scanMode = "labor";
