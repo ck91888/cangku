@@ -305,7 +305,6 @@ export default {
       const session = String(p.session || p.pick_session_id || "").trim();
       if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
 
-      await ensureSessionOpen(env, session, "");
       const s = await getSession(env, session);
 
       const stub = locksStub(env);
@@ -337,7 +336,6 @@ export default {
       if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
       if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
 
-      await ensureSessionOpen(env, session, operator_id);
       const s = await getSession(env, session);
 
       if (s && String(s.status || "").toUpperCase() === "CLOSED") {
