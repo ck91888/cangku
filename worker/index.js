@@ -280,7 +280,7 @@ export default {
       return jsonpOrJson({ ok:true, asof: now, pong:true }, callback);
     }
 
-    if (action === "lock_acquire" || action === "lock_release" || action === "lock_status") {
+    if (action === "lock_acquire" || action === "lock_release" || action === "lock_status" || action === "locks_by_session") {
       const stub = locksStub(env);
       const r = await stub.fetch("https://locks/do", {
         method: "POST",

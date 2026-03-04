@@ -150,6 +150,14 @@ function renderPages(){
   if(cur==="global_sessions"){ refreshGlobalSessions(); }
   if(cur==="b2c_menu"){ refreshUI(); }
   if(cur==="import_menu"){ refreshUI(); }
+
+  // 进入任务页时异步同步服务器在岗列表（解决换设备/刷新后本地列表为空的问题）
+  var taskPages = ["b2c_tally","b2c_bulkout","b2c_pick","b2c_pack","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
+    "import_unload","import_scan_pallet","import_loadout","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound",
+    "b2b_inventory","b2c_inventory","warehouse_cleanup"];
+  if(taskPages.indexOf(cur) >= 0 && currentSessionId){
+    syncActiveFromServer_();
+  }
 }
 window.addEventListener("hashchange", renderPages);
 
@@ -360,7 +368,7 @@ var relabelTimerHandle = null;
 var relabelStartTs = null;
 
 var leaderPickBadge = localStorage.getItem("leader_pick_badge") || null;
-var leaderPickOk = false;
+var leaderPickOk = localStorage.getItem("leader_pick_ok") === "1";
 var pendingLeaderEnd = null;
 
 /** ===== Session state (server) ===== */
@@ -428,15 +436,20 @@ function parseSessionQr_(text){
 
 /** 自动绑定 session — biz/task 可来自 QR 或从服务器读取，无需手动选择 */
 async function bindSessionWithCtx_(sid, biz, task){
-  // 1. 若 QR 里没有 biz/task，先从服务器查
-  if(!biz || !task){
-    try{
-      var info = await sessionInfoServer_(sid);
-      biz  = info.biz  || "";
-      task = info.task || "";
-    }catch(e){ /* 网络异常时继续尝试页面上下文 */ }
-  }
-  // 2. 还没有就用当前页面上下文
+  // 0. 先检查 session 是否仍然 OPEN（清缓存确保实时）
+  SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
+  try{
+    var chk = await sessionInfoServer_(sid);
+    if(chk && String(chk.status || "").toUpperCase() === "CLOSED"){
+      alert("该趟次已结束（CLOSED），无法加入。请扫新的趟次二维码。");
+      return false;
+    }
+    // 顺便取 biz/task
+    if(!biz) biz = chk.biz || "";
+    if(!task) task = chk.task || "";
+  }catch(e){ /* 网络异常时继续 */ }
+
+  // 1. 还没有就用当前页面上下文
   if(!biz || !task){
     var pageCtx = PAGE_CTX[getHashPage()] || null;
     if(pageCtx){ biz = pageCtx.biz; task = pageCtx.task; }
@@ -625,6 +638,36 @@ function restoreState(){
   });
 }
 
+/** ===== Sync active list from server (multi-device) ===== */
+async function syncActiveFromServer_(){
+  if(!currentSessionId) return;
+  try{
+    var res = await jsonp(LOCK_URL, { action:"locks_by_session", session: currentSessionId }, { skipBusy: true });
+    if(!res || !res.ok) return;
+    var serverLocks = res.active || [];
+    // 按 task 分组
+    var byTask = {};
+    serverLocks.forEach(function(lk){
+      var t = lk.task || "";
+      if(!byTask[t]) byTask[t] = [];
+      byTask[t].push(lk.badge);
+    });
+    var changed = false;
+    TASK_REGISTRY.forEach(function(reg){
+      var badges = byTask[reg.task] || [];
+      var localSet = reg.get();
+      // 合并服务器数据到本地（添加本地没有的）
+      badges.forEach(function(b){
+        if(!localSet.has(b)){ localSet.add(b); changed = true; }
+      });
+    });
+    if(changed){
+      persistState();
+      renderActiveLists();
+    }
+  }catch(e){ /* 静默失败 */ }
+}
+
 /** ===== Utils ===== */
 function getOperatorId(){
   return localStorage.getItem("operator_id") || "";
@@ -761,6 +804,13 @@ function jsonp(url, params, opts){
     }
     qs.push("callback=" + encodeURIComponent(cb));
     var src = url + "?" + qs.join("&");
+
+    // URL 过长保护（浏览器一般限制 ~8000 字符，保守取 6000）
+    if(src.length > 6000){
+      if(!skipBusy) netBusyOff_();
+      reject(new Error("URL 过长（" + src.length + " 字符），请减少参数数据量。"));
+      return;
+    }
 
     // PERF
     var t0 = Date.now();
@@ -952,6 +1002,7 @@ function cleanupLocalSession_(){
     clearSess_(CUR_CTX.biz, CUR_CTX.task);
   }
   currentSessionId = null;
+  leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0");
   refreshUI();
 }
 
@@ -974,12 +1025,17 @@ async function endSessionGlobal_(){
 
   var endBiz = (CUR_CTX && CUR_CTX.biz) ? String(CUR_CTX.biz) : "B2C"; // ✅ 用当前任务的 biz
   var evId = makeEventId({ event:"end", biz: endBiz, task:"SESSION", wave_id:"", badgeRaw:"" });
-   if(!hasRecent(evId)){
-    submitEvent({ event:"end", event_id: evId, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId });
-     addRecent(evId);
+  if(!hasRecent(evId)){
+    try{
+      await submitEventSync_({ event:"end", event_id: evId, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId }, true);
+    }catch(e){
+      // 同步失败时降级到异步队列，确保不丢失
+      submitEvent({ event:"end", event_id: evId, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId });
+    }
+    addRecent(evId);
   }
 
-  setStatus("趟次结束已记录（待上传）✅", true);
+  setStatus("趟次已结束 ✅", true);
   cleanupLocalSession_();
 }
 
@@ -1007,7 +1063,11 @@ async function tryAutoEndSessionAfterLeave_(){
            : ((CUR_CTX && CUR_CTX.biz) ? String(CUR_CTX.biz) : "B2C"); // ✅ 优先用本次 leave 的 biz
       var evIdEnd = makeEventId({ event:"end", biz: endBiz, task:"SESSION", wave_id:"", badgeRaw:"" });
       if(!hasRecent(evIdEnd)){
-        submitEvent({ event:"end", event_id: evIdEnd, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId });
+        try{
+          await submitEventSync_({ event:"end", event_id: evIdEnd, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId }, true);
+        }catch(e2){
+          submitEvent({ event:"end", event_id: evIdEnd, biz: endBiz, task:"SESSION", pick_session_id: currentSessionId });
+        }
         addRecent(evIdEnd);
       }
       cleanupLocalSession_();
@@ -1621,7 +1681,7 @@ async function startPicking(){
     setSess_(biz, task, newSid);
     scannedWaves = new Set();
     activePick = new Set();
-    leaderPickOk = false;
+    leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0");
     syncLeaderPickUI();
     persistState();
     refreshUI();
@@ -2292,7 +2352,7 @@ async function openScannerCommon(){
       await pauseScanner();
       try{
         leaderPickBadge = p3.raw; localStorage.setItem("leader_pick_badge", leaderPickBadge);
-        leaderPickOk = true; syncLeaderPickUI();
+        leaderPickOk = true; localStorage.setItem("leader_pick_ok", "1"); syncLeaderPickUI();
         alert("组长登录成功 ✅ " + p3.raw);
         setStatus("组长登录成功 ✅", true);
         await closeScanner();
@@ -2311,7 +2371,7 @@ async function openScannerCommon(){
         leaderPickBadge = p4.raw; localStorage.setItem("leader_pick_badge", leaderPickBadge);
         await endSessionGlobal_();
         pendingLeaderEnd = null;
-        leaderPickOk = false;
+        leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0");
         refreshUI(); syncLeaderPickUI();
         await closeScanner();
       } finally { scanBusy = false; }
