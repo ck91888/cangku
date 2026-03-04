@@ -211,7 +211,7 @@ async function getSession(env, session) {
 }
 
 // ===== Task state (enforce "start before join") =====
-const REQUIRE_START_TASKS = new Set(["TALLY","PICK","RELABEL","批量出库","B2B入库理货","B2B工单操作"]);
+const REQUIRE_START_TASKS = new Set(["理货","拣货","换单","批量出库","B2B入库理货","B2B工单操作"]);
 
 function requireStart_(task){
   return REQUIRE_START_TASKS.has(String(task||"").trim());
@@ -453,7 +453,7 @@ export default {
         const open = await env.DB.prepare(
           `SELECT session,biz,task FROM sessions
            WHERE status='OPEN' AND created_by_operator=?
-           AND NOT (biz='B2C' AND task='PICK')
+           AND NOT (biz='B2C' AND task='拣货')
            ORDER BY created_ms DESC
            LIMIT 1`
         ).bind(operator_id).first();

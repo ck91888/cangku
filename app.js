@@ -194,20 +194,20 @@ function getLastCtx_(){
 // page -> biz/task (must match your index.html page ids)
 var PAGE_CTX = {
   // ===== B2C =====
-  "b2c_tally":   { biz:"B2C", task:"TALLY" },
-  "b2c_pick":    { biz:"B2C", task:"PICK" },
-  "b2c_relabel": { biz:"B2C", task:"RELABEL" },
+  "b2c_tally":   { biz:"B2C", task:"理货" },
+  "b2c_pick":    { biz:"B2C", task:"拣货" },
+  "b2c_relabel": { biz:"B2C", task:"换单" },
   "b2c_bulkout": { biz:"B2C", task:"批量出库" },
-  "b2c_pack":    { biz:"B2C", task:"PACK" },
+  "b2c_pack":    { biz:"B2C", task:"打包" },
   "b2c_return":  { biz:"B2C", task:"退件入库" },
   "b2c_qc":      { biz:"B2C", task:"质检" },
   "b2c_disposal":{ biz:"B2C", task:"废弃处理" },
   "b2c_inventory":{ biz:"B2C", task:"B2C盘点" },
 
   // ===== 进口快件 =====
-  "import_unload":      { biz:"IMPORT", task:"卸货" },
-  "import_scan_pallet": { biz:"IMPORT", task:"过机扫描码托" },
-  "import_loadout":     { biz:"IMPORT", task:"装柜/出货" },
+  "import_unload":      { biz:"进口", task:"卸货" },
+  "import_scan_pallet": { biz:"进口", task:"过机扫描码托" },
+  "import_loadout":     { biz:"进口", task:"装柜/出货" },
 
   // ===== B2B =====
   "b2b_unload":    { biz:"B2B", task:"B2B卸货" },
@@ -217,29 +217,29 @@ var PAGE_CTX = {
   "b2b_inventory": { biz:"B2B", task:"B2B盘点" },
 
   // ===== 仓库整理 =====
-  "warehouse_cleanup": { biz:"WAREHOUSE", task:"仓库整理" }
+  "warehouse_cleanup": { biz:"仓库", task:"仓库整理" }
 };
 
 // 双语任务名：biz/task -> 中文 / 한국어
 var TASK_DISPLAY = {
-  "B2C/TALLY":         "B2C 理货 / B2C 검수",
-  "B2C/PICK":          "B2C 拣货 / B2C 피킹",
-  "B2C/RELABEL":       "B2C 换单 / B2C 재라벨",
+  "B2C/理货":         "B2C 理货 / B2C 검수",
+  "B2C/拣货":          "B2C 拣货 / B2C 피킹",
+  "B2C/换单":       "B2C 换单 / B2C 재라벨",
   "B2C/批量出库":       "B2C 批量出库 / B2C 일괄출고",
-  "B2C/PACK":          "B2C 打包 / B2C 포장",
+  "B2C/打包":          "B2C 打包 / B2C 포장",
   "B2C/退件入库":       "B2C 退件入库 / B2C 반품입고",
   "B2C/质检":           "B2C 质检 / B2C 품검",
   "B2C/废弃处理":       "B2C 废弃处理 / B2C 폐기",
   "B2C/B2C盘点":        "B2C 盘点 / B2C 재고조사",
-  "IMPORT/卸货":        "进口 卸货 / 수입 하차",
-  "IMPORT/过机扫描码托": "进口 过机扫描 / 수입 기계스캔",
-  "IMPORT/装柜/出货":   "进口 装柜出货 / 수입 컨테이너적재",
+  "进口/卸货":        "进口 卸货 / 수입 하차",
+  "进口/过机扫描码托": "进口 过机扫描 / 수입 기계스캔",
+  "进口/装柜/出货":   "进口 装柜出货 / 수입 컨테이너적재",
   "B2B/B2B卸货":        "B2B 卸货 / B2B 하차",
   "B2B/B2B入库理货":    "B2B 理货 / B2B 입고정리",
   "B2B/B2B工单操作":    "B2B 工单 / B2B 작업지시",
   "B2B/B2B出库":        "B2B 出库 / B2B 출고",
   "B2B/B2B盘点":        "B2B 盘点 / B2B 재고조사",
-  "WAREHOUSE/仓库整理": "仓库整理 / 창고정리",
+  "仓库/仓库整理": "仓库整理 / 창고정리",
 };
 function taskDisplayLabel(biz, task){
   return TASK_DISPLAY[biz + "/" + task] || (biz + " / " + task);
@@ -536,10 +536,10 @@ function keyB2bWorkorders(){ return "b2bWorkorders_" + (currentSessionId || "NA"
  * 增加新任务类型：只需在这里加一行，其余函数自动覆盖。
  */
 var TASK_REGISTRY = [
-  { task:"PICK",         get:function(){return activePick;},           set:function(s){activePick=s;},           countId:"pickCount",              listId:"pickActiveList",              keyFn:keyActivePick,          emptyMsg:"当前没有人在拣货作业中（无需退出）。" },
-  { task:"RELABEL",      get:function(){return activeRelabel;},        set:function(s){activeRelabel=s;},        countId:"relabelCount",           listId:"relabelActiveList",           keyFn:keyActiveRelabel,       emptyMsg:"当前没有人在换单作业中（无需退出）。" },
-  { task:"PACK",         get:function(){return activePack;},           set:function(s){activePack=s;},           countId:"packCount",              listId:"packActiveList",              keyFn:keyActivePack,          emptyMsg:"当前没有人在验货贴单打包作业中（无需退出）。" },
-  { task:"TALLY",        get:function(){return activeTally;},          set:function(s){activeTally=s;},          countId:"tallyCount",             listId:"tallyActiveList",             keyFn:keyActiveTally,         emptyMsg:"当前没有人在理货作业中（无需退出）。" },
+  { task:"拣货",         get:function(){return activePick;},           set:function(s){activePick=s;},           countId:"pickCount",              listId:"pickActiveList",              keyFn:keyActivePick,          emptyMsg:"当前没有人在拣货作业中（无需退出）。" },
+  { task:"换单",      get:function(){return activeRelabel;},        set:function(s){activeRelabel=s;},        countId:"relabelCount",           listId:"relabelActiveList",           keyFn:keyActiveRelabel,       emptyMsg:"当前没有人在换单作业中（无需退出）。" },
+  { task:"打包",         get:function(){return activePack;},           set:function(s){activePack=s;},           countId:"packCount",              listId:"packActiveList",              keyFn:keyActivePack,          emptyMsg:"当前没有人在验货贴单打包作业中（无需退出）。" },
+  { task:"理货",        get:function(){return activeTally;},          set:function(s){activeTally=s;},          countId:"tallyCount",             listId:"tallyActiveList",             keyFn:keyActiveTally,         emptyMsg:"当前没有人在理货作业中（无需退出）。" },
   { task:"批量出库",      get:function(){return activeBulkOut;},        set:function(s){activeBulkOut=s;},        countId:"bulkoutCount",           listId:"bulkoutActiveList",           keyFn:keyActiveBulkOut,       emptyMsg:"当前没有人在批量出库作业中（无需退出）。" },
   { task:"退件入库",      get:function(){return activeReturn;},         set:function(s){activeReturn=s;},         countId:"returnCount",            listId:"returnActiveList",            keyFn:keyActiveReturn,        emptyMsg:"当前没有人在退件入库作业中（无需退出）。" },
   { task:"质检",         get:function(){return activeQc;},             set:function(s){activeQc=s;},             countId:null,                     listId:null,                          keyFn:keyActiveQc,            emptyMsg:"当前没有人在质检作业中（无需退出）。" },
@@ -974,7 +974,7 @@ async function endSessionGlobal_(){
 }
 
 function taskAutoSession_(task){
-  return task === "PACK" || task === "退件入库" || task === "质检" || task === "废弃处理" || task === "卸货" || task === "过机扫描码托" || task === "装柜/出货"
+  return task === "打包" || task === "退件入库" || task === "质检" || task === "废弃处理" || task === "卸货" || task === "过机扫描码托" || task === "装柜/出货"
     || task === "B2B卸货" || task === "B2B出库" || task === "B2B盘点"
     || task === "B2C盘点" || task === "仓库整理";
 }
@@ -1275,7 +1275,7 @@ async function adminForceEndSession(btn){
 
 
   try{
-    var biz = "B2C", task = "TALLY";
+    var biz = "B2C", task = "理货";
 
     // ✅ A：每次开始都新建本任务趟次
     currentSessionId = makePickSessionId();
@@ -1496,7 +1496,7 @@ async function startPicking(){
   if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
 
   try{
-    var biz = "B2C", task = "PICK";
+    var biz = "B2C", task = "拣货";
 
     currentSessionId = makePickSessionId();
     CUR_CTX = { biz: biz, task: task, page: "b2c_pick" };
@@ -1547,7 +1547,7 @@ async function startRelabel(){
   if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
 
   try{
-    var biz = "B2C", task = "RELABEL";
+    var biz = "B2C", task = "换单";
 
     currentSessionId = makePickSessionId();
     CUR_CTX = { biz: biz, task: task, page: "b2c_relabel" };
@@ -1587,7 +1587,7 @@ async function endPicking(){
       return;
     }
 
-    pendingLeaderEnd = { biz:"B2C", task:"PICK" };
+    pendingLeaderEnd = { biz:"B2C", task:"拣货" };
     scanMode = "leaderEndPick";
     document.getElementById("scanTitle").textContent = "扫码组长工牌确认结束 / 팀장 종료 확인";
     await openScannerCommon();
@@ -1648,7 +1648,7 @@ async function joinWork(biz, task){
     setSess_(biz, task, sid);
 
     // 清空该任务的本地状态
-    if(task==="PACK") activePack = new Set();
+    if(task==="打包") activePack = new Set();
     if(task==="退件入库") activeReturn = new Set();
     if(task==="质检") activeQc = new Set();
     if(task==="废弃处理") activeDisposal = new Set();
@@ -1929,9 +1929,9 @@ async function openScannerCommon(){
         persistState();
         renderInboundCountUI();
 
-        var evIdX = makeEventId({ event:"wave", biz:"B2C", task:"TALLY", wave_id: code2, badgeRaw:"" });
+        var evIdX = makeEventId({ event:"wave", biz:"B2C", task:"理货", wave_id: code2, badgeRaw:"" });
         if(!hasRecent(evIdX)){
-          submitEvent({ event:"wave", event_id: evIdX, biz:"B2C", task:"TALLY", pick_session_id: currentSessionId, wave_id: code2 });
+          submitEvent({ event:"wave", event_id: evIdX, biz:"B2C", task:"理货", pick_session_id: currentSessionId, wave_id: code2 });
           addRecent(evIdX);
         }
 
@@ -2033,10 +2033,10 @@ async function openScannerCommon(){
       scanBusy = true;
       await pauseScanner();
       try{
-        var evId = makeEventId({ event:"wave", biz:"B2C", task:"PICK", wave_id: code, badgeRaw:"" });
+        var evId = makeEventId({ event:"wave", biz:"B2C", task:"拣货", wave_id: code, badgeRaw:"" });
         if(hasRecent(evId)){ setStatus("重复扫码已忽略 ⏭️ " + code, false); await closeScanner(); return; }
 
-        submitEvent({ event:"wave", event_id: evId, biz:"B2C", task:"PICK", pick_session_id: currentSessionId, wave_id: code });
+        submitEvent({ event:"wave", event_id: evId, biz:"B2C", task:"拣货", pick_session_id: currentSessionId, wave_id: code });
         addRecent(evId);
 
         alert("已记录波次 ✅ " + code);
