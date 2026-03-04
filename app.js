@@ -1833,10 +1833,18 @@ async function leaveWork_(biz, task){
   CUR_CTX = { biz: biz, task: task, page: getHashPage() };
   refreshUI();
 
-  if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再退出作业，请重新开始或加入新趟次。"))) return;
+  // ✅ leave 不再检查 session 是否关闭 — 即使 session 已关闭，也要允许释放锁
+  // 只做提示，不阻断
+  var sessionClosed_ = await isSessionClosedAsync_();
 
   var reg_ = taskReg_(task);
   if(reg_ && reg_.get().size === 0){
+    if(sessionClosed_){
+      // session 已关闭且本地无人 → 直接清理本地状态
+      alert("该趟次已结束，本地状态已清理。");
+      cleanupLocalSession_();
+      return;
+    }
     var endIt = confirm("当前没有人在" + task + "作业中，无需退出。\n\n如果您想结束本趟次，请点【确定】；\n返回继续作业请点【取消】。");
     if(endIt) await endSessionGlobal_();
     return;
@@ -2204,10 +2212,13 @@ async function openScannerCommon(){
       var p2 = parseBadge(code);
 
       if(laborAction === "leave" && !isAlreadyActive(laborTask, p2.raw)){
-        alert("该工牌不在当前作业名单中，无法退出。\n请确认是否扫错工牌。");
-        setStatus("不在岗，无法退出 ❌", false);
-        await closeScanner();
-        return;
+        // ✅ 本地列表可能不准（刷新/换设备），不再硬拦截，改为确认后继续
+        var goOn = confirm("该工牌不在本机名单中（可能是刷新或换设备导致）。\n\n仍要尝试退出并释放服务器锁吗？");
+        if(!goOn){
+          setStatus("已取消退出", false);
+          await closeScanner();
+          return;
+        }
       }
 
       if(laborAction === "join" && isAlreadyActive(laborTask, p2.raw)){
@@ -2225,7 +2236,7 @@ async function openScannerCommon(){
         var evId = makeEventId({ event:laborAction, biz:laborBiz, task:laborTask, wave_id:"", badgeRaw:p2.raw });
         if(hasRecent(evId)){ setStatus("重复扫描已忽略 ⏭️", false); await closeScanner(); return; }
 
-        await submitEventSync_({
+        var syncRes = await submitEventSync_({
           event: laborAction,
           event_id: evId,
           biz: laborBiz,
@@ -2241,6 +2252,10 @@ async function openScannerCommon(){
         persistState();
 
         if(laborAction === "leave"){
+          // ✅ 检查锁是否真的释放了
+          if(syncRes && syncRes.lock_released === false){
+            console.warn("[LEAVE] lock_released=false for badge:", p2.raw);
+          }
           await tryAutoEndSessionAfterLeave_();
         }
 

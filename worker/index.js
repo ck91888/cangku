@@ -68,7 +68,7 @@ export class LocksDO {
       const expires = now + LOCK_TTL_MS;
 
       if (!cur || (cur.expires_at && cur.expires_at < now)) {
-        locks[badge] = { badge, biz, task, session, locked_at: now, expires_at: expires };
+        locks[badge] = { badge, biz, task, session, since: now, locked_at: now, expires_at: expires };
         await this._save();
         return Response.json({ ok:true, locked:true, lock: locks[badge] });
       }
@@ -434,7 +434,8 @@ export default {
         const s = await getSession(env, session);
         const closed = s && String(s.status || "").toUpperCase() === "CLOSED";
         const allowEnd = (String(task).trim() === "SESSION" && String(event).trim() === "end");
-        if (closed && !allowEnd) {
+        const allowLeave = (String(event).trim() === "leave"); // ✅ leave 必须放行，否则锁永远释放不了
+        if (closed && !allowEnd && !allowLeave) {
           await env.DB.prepare(
             `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
@@ -546,15 +547,43 @@ export default {
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
         ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, "").run();
 
+        // ✅ 同步等待锁释放，不再 fire-and-forget
         const stub = locksStub(env);
-        ctx.waitUntil(stub.fetch("https://locks/do", {
-          method: "POST",
-          headers: { "content-type":"application/json" },
-          body: JSON.stringify({ action:"lock_release", badge, task, session, operator_id })
-        }).catch(() => {}));
+        let lockReleased = false;
+        try {
+          const lr = await (await stub.fetch("https://locks/do", {
+            method: "POST",
+            headers: { "content-type":"application/json" },
+            body: JSON.stringify({ action:"lock_release", badge, task, session, operator_id })
+          })).json();
 
-        if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
-        return jsonpOrJson({ ok:true, saved:true }, callback);
+          if (lr && lr.released) {
+            lockReleased = true;
+          } else if (lr && !lr.released && (lr.reason === "different_task" || lr.reason === "different_session")) {
+            // ✅ task/session 不匹配时 fallback 强制释放，防止锁永远卡住
+            const fr = await (await stub.fetch("https://locks/do", {
+              method: "POST",
+              headers: { "content-type":"application/json" },
+              body: JSON.stringify({ action:"lock_force_release", badge })
+            })).json();
+            lockReleased = !!(fr && fr.released);
+          } else if (lr && !lr.released && lr.reason === "not_found") {
+            lockReleased = true; // 锁已经不存在，视为成功
+          }
+        } catch(e) {
+          // 网络异常时 fallback：尝试强制释放
+          try {
+            await stub.fetch("https://locks/do", {
+              method: "POST",
+              headers: { "content-type":"application/json" },
+              body: JSON.stringify({ action:"lock_force_release", badge })
+            });
+            lockReleased = true;
+          } catch(e2) { /* 彻底失败 */ }
+        }
+
+        if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true, lock_released: lockReleased }, callback);
+        return jsonpOrJson({ ok:true, saved:true, lock_released: lockReleased }, callback);
       }
 
       // ===== other events =====
@@ -633,7 +662,9 @@ export default {
           biz: s.biz || "",
           task: s.task || "",
           created_ms: s.created_ms || 0,
+          created_by_operator: s.created_by_operator || "",
           closed_ms: s.closed_ms || 0,
+          closed_by_operator: s.closed_by_operator || "",
           active: activeLocks
         });
       }
