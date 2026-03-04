@@ -112,8 +112,8 @@
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('IMPORT','卸货')">开始作业 / 시작</button>
-      <button class="primary" onclick="leaveWork('IMPORT','卸货')">结束作业 / 종료</button>
+      <button class="primary" onclick="joinWork('进口','卸货')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('进口','卸货')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importUnloadCount">0</span></div>
@@ -132,8 +132,8 @@
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('IMPORT','过机扫描码托')">开始作业 / 시작</button>
-      <button class="primary" onclick="leaveWork('IMPORT','过机扫描码托')">结束作业 / 종료</button>
+      <button class="primary" onclick="joinWork('进口','过机扫描码托')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('进口','过机扫描码托')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importScanPalletCount">0</span></div>
@@ -152,8 +152,8 @@
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('IMPORT','装柜/出货')">开始作业 / 시작</button>
-      <button class="primary" onclick="leaveWork('IMPORT','装柜/出货')">结束作业 / 종료</button>
+      <button class="primary" onclick="joinWork('进口','装柜/出货')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('进口','装柜/出货')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importLoadoutCount">0</span></div>
@@ -175,7 +175,7 @@
         <select id="activeNowFilterBiz" onchange="refreshActiveNow()">
           <option value="">全部 / All</option>
           <option value="B2C">B2C</option>
-          <option value="IMPORT">IMPORT</option>
+          <option value="进口">进口</option>
         </select>
         <div id="activeNowMeta" class="muted"></div>
       </div>
@@ -198,7 +198,7 @@
         <select id="sessionFilterBiz" onchange="refreshGlobalSessions()">
           <option value="">全部 / All</option>
           <option value="B2C">B2C</option>
-          <option value="IMPORT">IMPORT</option>
+          <option value="进口">进口</option>
         </select>
       </div>
       <div id="sessionListMeta" class="muted" style="margin-top:8px;"></div>
@@ -318,8 +318,8 @@
 
       <button class="primary" onclick="startTally()">开始理货 / 시작</button>
 
-      <button class="primary" onclick="joinWork('B2C','TALLY')">加入作业 / 참여</button>
-      <button class="primary" onclick="leaveWork('B2C','TALLY')">退出作业 / 퇴장</button>
+      <button class="primary" onclick="joinWork('B2C','理货')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2C','理货')">退出作业 / 퇴장</button>
 
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="tallyCount">0</span></div>
@@ -432,8 +432,8 @@
     <div class="card">
       <button class="primary" onclick="startPicking()">开始拣货 / 시작</button>
 
-      <button class="primary" onclick="joinWork('B2C','PICK')">加入作业 / 참여</button>
-      <button class="primary" onclick="leaveWork('B2C','PICK')">退出作业 / 퇴장</button>
+      <button class="primary" onclick="joinWork('B2C','拣货')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2C','拣货')">退出作业 / 퇴장</button>
 
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="pickCount">0</span></div>
@@ -461,8 +461,8 @@
 
       <button class="primary" onclick="startRelabel()">开始换单 / 시작</button>
 
-      <button class="primary" onclick="joinWork('B2C','RELABEL')">加入作业 / 참여</button>
-      <button class="primary" onclick="leaveWork('B2C','RELABEL')">退出作业 / 퇴장</button>
+      <button class="primary" onclick="joinWork('B2C','换单')">加入作业 / 참여</button>
+      <button class="primary" onclick="leaveWork('B2C','换单')">退出作业 / 퇴장</button>
 
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="relabelCount">0</span></div>
@@ -484,8 +484,8 @@
     <div class="card">
       <div class="pill">✅ 开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
 
-      <button class="primary" onclick="joinWork('B2C','PACK')">开始作业 / 시작</button>
-      <button class="primary" onclick="leaveWork('B2C','PACK')">结束作业 / 종료</button>
+      <button class="primary" onclick="joinWork('B2C','打包')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('B2C','打包')">结束作业 / 종료</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="packCount">0</span></div>
@@ -645,8 +645,8 @@
     </div>
     <div class="card">
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
-      <button class="primary" onclick="joinWork('WAREHOUSE','仓库整理')">开始作业 / 시작</button>
-      <button class="primary" onclick="leaveWork('WAREHOUSE','仓库整理')">结束作业 / 종료</button>
+      <button class="primary" onclick="joinWork('仓库','仓库整理')">开始作业 / 시작</button>
+      <button class="primary" onclick="leaveWork('仓库','仓库整理')">结束作业 / 종료</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="warehouseCleanupCount">0</span></div>
         <div id="warehouseCleanupActiveList" class="muted">无 / 없음</div>
@@ -687,6 +687,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=40"></script>
+  <script src="./app.js?v=41"></script>
 </body>
 </html>
