@@ -182,21 +182,15 @@
   <!-- GLOBAL SESSIONS (Admin-only) -->
   <div id="page-global_sessions" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill">全局Session / Sessions</div>
+      <button class="back small" onclick="globalSessionsBack()">返回 / 뒤로</button>
+      <div class="grow pill" id="globalSessionsTitle">全局Session / Sessions</div>
+      <button class="small" onclick="refreshGlobalSessions()">刷新</button>
     </div>
 
     <div class="card">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button class="primary" onclick="refreshGlobalSessions()">刷新 / 새로고침</button>
-        <select id="sessionFilterBiz" onchange="refreshGlobalSessions()">
-          <option value="">全部 / All</option>
-          <option value="B2C">B2C</option>
-          <option value="进口">进口</option>
-        </select>
-      </div>
-      <div id="sessionListMeta" class="muted" style="margin-top:8px;"></div>
-      <div id="sessionListContent" style="margin-top:10px;"></div>
+      <div id="sessionListMeta" class="muted" style="margin-bottom:8px;"></div>
+      <div id="globalSessionsIndex"></div>
+      <div id="globalSessionsDetail" style="display:none;"></div>
     </div>
   </div>
 
@@ -681,6 +675,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=46"></script>
+  <script src="./app.js?v=47"></script>
 </body>
 </html>

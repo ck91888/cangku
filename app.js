@@ -1248,52 +1248,106 @@ async function adminForceLeave(btn){
   }
 }
 
+var _globalSessionsData = [];
+var _globalSessionsFilter = null; // "OPEN" | "CLOSED" | null
+
 async function refreshGlobalSessions(){
-  var filterEl = document.getElementById("sessionFilterBiz");
-  var filterBiz = filterEl ? filterEl.value : "";
   var metaEl = document.getElementById("sessionListMeta");
-  var contentEl = document.getElementById("sessionListContent");
   if(metaEl) metaEl.textContent = "加载中... ⏳";
-  if(contentEl) contentEl.innerHTML = "";
   try{
-    var params = { action:"admin_sessions_list", k:adminKey_() };
-    if(filterBiz) params.biz = filterBiz;
-    var res = await jsonp(LOCK_URL, params);
+    var res = await jsonp(LOCK_URL, { action:"admin_sessions_list", k:adminKey_() });
     if(!res || res.ok !== true){
       if(metaEl) metaEl.textContent = "加载失败 ❌ " + (res && res.error ? res.error : "");
       return;
     }
-    var sessions = res.sessions || [];
-    if(metaEl) metaEl.textContent = "共 " + sessions.length + " 条 ｜ " + new Date(res.asof||Date.now()).toLocaleString();
-    if(!contentEl) return;
-    if(sessions.length===0){
-      contentEl.innerHTML = '<div class="muted">暂无Session记录</div>';
-      return;
+    _globalSessionsData = res.sessions || [];
+    var open = _globalSessionsData.filter(function(s){ return s.status==="OPEN"; }).length;
+    var closed = _globalSessionsData.length - open;
+    if(metaEl) metaEl.textContent = "共 " + _globalSessionsData.length + " 条 ｜ OPEN: " + open + " ｜ CLOSED: " + closed;
+
+    if(_globalSessionsFilter){
+      renderGlobalSessionsDetail_(_globalSessionsFilter);
+    } else {
+      renderGlobalSessionsIndex_();
     }
-    contentEl.innerHTML = sessions.map(function(s){
-      var statusClass = s.status==="OPEN" ? "ok" : "muted";
-      var activeList = (s.active||[]).map(function(lk){ return esc(lk.badge||""); }).join(", ");
-      var forceEndBtn = "";
-      if(s.status==="OPEN" && (!s.active || s.active.length===0)){
-        forceEndBtn = '<button class="small bad" style="margin-top:6px;width:auto;" data-session="'+esc(s.session)+'" onclick="adminForceEndSession(this)">强制结束 / 강제 종료</button>';
-      }
-      return (
-        '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
-          '<div style="font-weight:700;font-size:13px;">'+esc(s.session)+'</div>' +
-          '<div class="muted" style="margin-top:4px;">'+
-            '状态: <span class="'+statusClass+'">'+esc(s.status)+'</span> ｜ ' +
-            'biz: '+esc(s.biz||"-")+' ｜ task: '+esc(s.task||"-")+
-          '</div>' +
-          '<div class="muted" style="margin-top:4px;">创建: '+new Date(s.created_ms||0).toLocaleString()+'</div>' +
-          (s.active && s.active.length>0
-            ? '<div class="muted" style="margin-top:4px;">在岗('+s.active.length+'): '+activeList+'</div>'
-            : '<div class="muted" style="margin-top:4px;">当前无在岗人员</div>') +
-          forceEndBtn +
-        '</div>'
-      );
-    }).join("");
   }catch(e){
     if(metaEl) metaEl.textContent = "加载异常 ❌ " + e;
+  }
+}
+
+function renderGlobalSessionsIndex_(){
+  _globalSessionsFilter = null;
+  var titleEl = document.getElementById("globalSessionsTitle");
+  if(titleEl) titleEl.textContent = "全局Session / Sessions";
+  var indexEl = document.getElementById("globalSessionsIndex");
+  var detailEl = document.getElementById("globalSessionsDetail");
+  if(detailEl) detailEl.style.display = "none";
+  if(!indexEl) return;
+  indexEl.style.display = "";
+
+  var open = _globalSessionsData.filter(function(s){ return s.status==="OPEN"; });
+  var closed = _globalSessionsData.filter(function(s){ return s.status!=="OPEN"; });
+
+  indexEl.innerHTML = '<div class="grid2">' +
+    '<button data-status="OPEN" onclick="globalSessionsShowDetail(this.dataset.status)" style="text-align:left;line-height:1.3;">' +
+      '<div style="font-size:13px;" class="ok">● OPEN</div>' +
+      '<div style="font-size:22px;font-weight:800;margin-top:4px;">' + open.length + ' <small style="font-size:13px;">条</small></div>' +
+    '</button>' +
+    '<button data-status="CLOSED" onclick="globalSessionsShowDetail(this.dataset.status)" style="text-align:left;line-height:1.3;">' +
+      '<div style="font-size:13px;" class="muted">● CLOSED</div>' +
+      '<div style="font-size:22px;font-weight:800;margin-top:4px;">' + closed.length + ' <small style="font-size:13px;">条</small></div>' +
+    '</button>' +
+  '</div>';
+}
+
+function globalSessionsShowDetail(status){
+  _globalSessionsFilter = status;
+  renderGlobalSessionsDetail_(status);
+}
+
+function renderGlobalSessionsDetail_(status){
+  var titleEl = document.getElementById("globalSessionsTitle");
+  var indexEl = document.getElementById("globalSessionsIndex");
+  var detailEl = document.getElementById("globalSessionsDetail");
+  if(indexEl) indexEl.style.display = "none";
+  if(!detailEl) return;
+  detailEl.style.display = "";
+
+  var list = _globalSessionsData.filter(function(s){
+    return status === "OPEN" ? s.status === "OPEN" : s.status !== "OPEN";
+  });
+  if(titleEl) titleEl.textContent = status + " · " + list.length + "条";
+
+  if(list.length === 0){
+    detailEl.innerHTML = '<div class="muted">暂无记录</div>';
+    return;
+  }
+
+  detailEl.innerHTML = list.map(function(s){
+    var activeList = (s.active||[]).map(function(lk){ return esc(lk.badge||""); }).join(", ");
+    var forceEndBtn = (s.status==="OPEN" && (!s.active || s.active.length===0))
+      ? '<button class="small bad" style="margin-top:6px;width:auto;" data-session="'+esc(s.session)+'" onclick="adminForceEndSession(this)">强制结束 / 강제 종료</button>'
+      : "";
+    var taskLabel = (s.biz && s.task) ? taskDisplayLabel(s.biz, s.task) : (s.biz||"-");
+    return (
+      '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
+        '<div style="font-weight:700;font-size:13px;">'+esc(s.session)+'</div>' +
+        '<div style="margin-top:4px;">'+esc(taskLabel)+'</div>' +
+        '<div class="muted" style="margin-top:2px;font-size:12px;">创建: '+new Date(s.created_ms||0).toLocaleString()+' ｜ 操作员: '+esc(s.created_by_operator||"-")+'</div>' +
+        (s.active && s.active.length>0
+          ? '<div class="muted" style="margin-top:4px;">在岗('+s.active.length+'): '+activeList+'</div>'
+          : '') +
+        forceEndBtn +
+      '</div>'
+    );
+  }).join("");
+}
+
+function globalSessionsBack(){
+  if(_globalSessionsFilter){
+    renderGlobalSessionsIndex_();
+  } else {
+    back();
   }
 }
 
@@ -1312,7 +1366,7 @@ async function adminForceEndSession(btn){
       return;
     }
     setStatus("强制结束成功 ✅", true);
-    refreshGlobalSessions();
+    await refreshGlobalSessions();
   }catch(e){
     setStatus("强制结束异常 ❌ " + e, false);
     alert("强制结束异常：" + e);
