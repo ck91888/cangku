@@ -1167,7 +1167,7 @@ function renderActiveNowIndex_(){
       var t = by[k];
       var label = taskDisplayLabel(t.biz, t.task);
       return '<button style="text-align:left;line-height:1.3;" ' +
-        'onclick="activeNowShowDetail(' + JSON.stringify(t.biz) + ',' + JSON.stringify(t.task) + ')">' +
+        'data-biz="'+esc(t.biz)+'" data-task="'+esc(t.task)+'" onclick="activeNowShowDetail(this.dataset.biz,this.dataset.task)">' +
         '<div style="font-size:13px;">' + esc(label) + '</div>' +
         '<div style="font-size:22px;font-weight:800;margin-top:4px;">' + t.count + ' <small style="font-size:13px;">人</small></div>' +
         '</button>';

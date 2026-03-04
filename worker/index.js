@@ -57,6 +57,7 @@ export class LocksDO {
 
     if (action === "lock_acquire") {
       const badge = String(body.badge || "").trim();
+      const biz = String(body.biz || "").trim();
       const task = String(body.task || "").trim();
       const session = String(body.session || "").trim();
       if (!badge) return Response.json({ ok:false, error:"missing badge" });
@@ -67,7 +68,7 @@ export class LocksDO {
       const expires = now + LOCK_TTL_MS;
 
       if (!cur || (cur.expires_at && cur.expires_at < now)) {
-        locks[badge] = { badge, task, session, locked_at: now, expires_at: expires };
+        locks[badge] = { badge, biz, task, session, locked_at: now, expires_at: expires };
         await this._save();
         return Response.json({ ok:true, locked:true, lock: locks[badge] });
       }
@@ -506,7 +507,7 @@ export default {
         const lr = await (await stub.fetch("https://locks/do", {
           method: "POST",
           headers: { "content-type":"application/json" },
-          body: JSON.stringify({ action:"lock_acquire", badge, task, session, operator_id })
+          body: JSON.stringify({ action:"lock_acquire", badge, biz, task, session, operator_id })
         })).json();
 
         if (!lr || lr.ok !== true) {
