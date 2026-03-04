@@ -31,6 +31,10 @@
     </div>
     <small>当前 session_id（本趟作业ID） / 현재 작업ID</small>
     <div id="session"></div>
+    <div id="openSessionsPanel" style="display:none;margin-top:10px;">
+      <small>进行中的作业 / 진행 중인 작업</small>
+      <div id="openSessionsList"></div>
+    </div>
     <div id="status" class="pill" style="margin-top:8px;">Ready</div>
   </div>
 
@@ -683,6 +687,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=38"></script>
+  <script src="./app.js?v=39"></script>
 </body>
 </html>

@@ -220,6 +220,81 @@ var PAGE_CTX = {
   "warehouse_cleanup": { biz:"WAREHOUSE", task:"仓库整理" }
 };
 
+// 双语任务名：biz/task -> 中文 / 한국어
+var TASK_DISPLAY = {
+  "B2C/TALLY":         "B2C 理货 / B2C 검수",
+  "B2C/PICK":          "B2C 拣货 / B2C 피킹",
+  "B2C/RELABEL":       "B2C 换单 / B2C 재라벨",
+  "B2C/批量出库":       "B2C 批量出库 / B2C 일괄출고",
+  "B2C/PACK":          "B2C 打包 / B2C 포장",
+  "B2C/退件入库":       "B2C 退件入库 / B2C 반품입고",
+  "B2C/质检":           "B2C 质检 / B2C 품검",
+  "B2C/废弃处理":       "B2C 废弃处理 / B2C 폐기",
+  "B2C/B2C盘点":        "B2C 盘点 / B2C 재고조사",
+  "IMPORT/卸货":        "进口 卸货 / 수입 하차",
+  "IMPORT/过机扫描码托": "进口 过机扫描 / 수입 기계스캔",
+  "IMPORT/装柜/出货":   "进口 装柜出货 / 수입 컨테이너적재",
+  "B2B/B2B卸货":        "B2B 卸货 / B2B 하차",
+  "B2B/B2B入库理货":    "B2B 理货 / B2B 입고정리",
+  "B2B/B2B工单操作":    "B2B 工单 / B2B 작업지시",
+  "B2B/B2B出库":        "B2B 出库 / B2B 출고",
+  "B2B/B2B盘点":        "B2B 盘点 / B2B 재고조사",
+  "WAREHOUSE/仓库整理": "仓库整理 / 창고정리",
+};
+function taskDisplayLabel(biz, task){
+  return TASK_DISPLAY[biz + "/" + task] || (biz + " / " + task);
+}
+function pageForTask(biz, task){
+  for(var p in PAGE_CTX){
+    if(PAGE_CTX[p].biz === biz && PAGE_CTX[p].task === task) return p;
+  }
+  return null;
+}
+
+async function fetchOperatorOpenSessions(){
+  var op = getOperatorId();
+  if(!op) return;
+  try{
+    var res = await jsonp(LOCK_URL, { action:"operator_open_sessions", operator_id: op });
+    var panel = document.getElementById("openSessionsPanel");
+    var list = document.getElementById("openSessionsList");
+    if(!panel || !list) return;
+    if(!res || res.ok !== true || !res.sessions || res.sessions.length === 0){
+      panel.style.display = "none";
+      return;
+    }
+    panel.style.display = "";
+    list.innerHTML = res.sessions.map(function(s){
+      var label = taskDisplayLabel(s.biz, s.task);
+      var age = fmtDur(Date.now() - (s.created_ms || 0));
+      var page = pageForTask(s.biz, s.task);
+      var btn = page
+        ? '<button class="small" style="width:auto;white-space:nowrap;" onclick="restoreOpenSession('+
+            JSON.stringify(s.session)+','+JSON.stringify(s.biz)+','+JSON.stringify(s.task)+','+JSON.stringify(page)+
+          ')">进入 / 이동</button>'
+        : '';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;">'+
+        '<div style="flex:1;">'+
+          '<div style="font-weight:700;font-size:13px;">'+esc(label)+'</div>'+
+          '<div class="muted" style="font-size:11px;margin-top:2px;">'+esc(s.session)+' · '+esc(age)+'前开始 / '+esc(age)+' 전 시작</div>'+
+        '</div>'+
+        btn+
+      '</div>';
+    }).join("");
+  }catch(e){ /* silent */ }
+}
+
+function restoreOpenSession(sid, biz, task, page){
+  CUR_CTX = { biz: biz, task: task, page: page };
+  currentSessionId = sid;
+  setSess_(biz, task, sid);
+  SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
+  restoreState();
+  renderActiveLists();
+  refreshUI();
+  go(page);
+}
+
 function applyPageSession_(){
   var cur = getHashPage();
   var ctx = PAGE_CTX[cur];
@@ -578,6 +653,7 @@ function saveOperatorId(raw){
   localStorage.setItem("operator_id", raw);
   hideOperatorSetup();
   refreshUI();
+  fetchOperatorOpenSessions();
   return true;
 }
 function operatorSetupScan(){
@@ -2518,6 +2594,7 @@ refreshNet();
 applyPageSession_();
 refreshUI();
 if(!getOperatorId()) showOperatorSetup(false);
+else fetchOperatorOpenSessions();
 restoreState();
 renderActiveLists();
 bindAdminEasterEgg_();

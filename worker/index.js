@@ -568,6 +568,17 @@ export default {
       return jsonpOrJson({ ok:true, saved:true }, callback);
     }
 
+    if (action === "operator_open_sessions") {
+      const operator_id = String(p.operator_id || "").trim();
+      if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
+      const rows = await env.DB.prepare(
+        `SELECT session, biz, task, created_ms FROM sessions
+         WHERE status='OPEN' AND created_by_operator=?
+         ORDER BY created_ms DESC LIMIT 10`
+      ).bind(operator_id).all();
+      return jsonpOrJson({ ok:true, sessions: rows.results || [] }, callback);
+    }
+
     if (action === "admin_force_leave") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const badge = String(p.badge || "").trim();
