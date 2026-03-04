@@ -24,8 +24,11 @@
 
   <!-- 全局状态 -->
   <div class="card">
-    <small>device_id（每台手机固定） / 기기ID</small>
-    <div id="device"></div>
+    <small>操作员 / 담당자</small>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div id="device" style="flex:1;"></div>
+      <button class="small" style="width:auto;min-width:72px;font-size:12px;" onclick="showOperatorSetup(true)">更换 / 변경</button>
+    </div>
     <small>当前 session_id（本趟作业ID） / 현재 작업ID</small>
     <div id="session"></div>
     <div id="status" class="pill" style="margin-top:8px;">Ready</div>
@@ -647,6 +650,23 @@
     </div>
   </div>
 
+  <!-- 操作员设置弹窗 -->
+  <div id="operatorSetupModal" class="overlay">
+    <div class="overlayCard">
+      <div class="overlayTitle" style="margin-bottom:6px;">设置本机操作员 / 이 기기 담당자 설정</div>
+      <div class="overlayHint" style="margin-bottom:16px;line-height:1.6;">
+        请扫描您的工牌，或手动输入工号<br>
+        담당자 명찰을 스캔하거나 직접 입력하세요
+      </div>
+      <input id="operatorIdInput" type="text" placeholder="EMP-001|张三" style="width:100%;box-sizing:border-box;margin-bottom:10px;">
+      <button class="primary" onclick="operatorSetupScan()" style="width:100%;margin-bottom:8px;">扫码工牌 / 명찰 스캔</button>
+      <button onclick="operatorSetupConfirm()" style="width:100%;margin-bottom:8px;">手动确认 / 직접 확인</button>
+      <div id="operatorSetupCancelRow" style="display:none;">
+        <button class="bad" onclick="operatorSetupClose()" style="width:100%;">取消 / 취소</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 全屏扫码浮层 -->
   <div id="scannerOverlay" class="overlay">
     <div class="overlayCard">
@@ -655,7 +675,7 @@
           <div class="overlayTitle" id="scanTitle">扫码 / 스캔</div>
           <div class="overlayHint">请对准二维码 / 바코드를 화면 중앙에 맞추세요</div>
         </div>
-        <button class="small" style="width:auto;min-width:90px" onclick="closeScanner()">关闭 / 닫기</button>
+        <button class="small" style="width:auto;min-width:90px" onclick="closeScannerWithFallback()">关闭 / 닫기</button>
       </div>
       <div id="reader"></div>
     </div>
@@ -663,6 +683,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=37"></script>
+  <script src="./app.js?v=38"></script>
 </body>
 </html>

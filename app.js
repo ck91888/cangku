@@ -543,13 +543,52 @@ function restoreState(){
 }
 
 /** ===== Utils ===== */
-function makeDeviceId(){
-  var id = localStorage.getItem("device_id");
-  if(!id){
-    id = "DEV-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString().slice(-6);
-    localStorage.setItem("device_id", id);
+function getOperatorId(){
+  return localStorage.getItem("operator_id") || "";
+}
+// 保留 makeDeviceId 供内部调用，统一走 operator_id
+function makeDeviceId(){ return getOperatorId(); }
+
+function showOperatorSetup(isChanging){
+  var modal = document.getElementById("operatorSetupModal");
+  var cancelRow = document.getElementById("operatorSetupCancelRow");
+  var input = document.getElementById("operatorIdInput");
+  if(!modal) return;
+  if(isChanging){
+    if(cancelRow) cancelRow.style.display = "";
+    if(input) input.value = getOperatorId();
+  } else {
+    if(cancelRow) cancelRow.style.display = "none";
+    if(input) input.value = "";
   }
-  return id;
+  modal.classList.add("show");
+}
+function hideOperatorSetup(){
+  var modal = document.getElementById("operatorSetupModal");
+  if(modal) modal.classList.remove("show");
+}
+function operatorSetupClose(){ hideOperatorSetup(); }
+
+function saveOperatorId(raw){
+  raw = (raw || "").trim();
+  if(!raw || !isOperatorBadge(raw)){
+    alert("无效工牌格式 / 잘못된 명찰 형식\n\n格式: EMP-001|张三 / DA-...|名字\n형식: EMP-001|이름 / DA-...|이름");
+    return false;
+  }
+  localStorage.setItem("operator_id", raw);
+  hideOperatorSetup();
+  refreshUI();
+  return true;
+}
+function operatorSetupScan(){
+  hideOperatorSetup();
+  scanMode = "operator_setup";
+  document.getElementById("scanTitle").textContent = "扫码工牌 / 명찰 스캔";
+  openScannerCommon().catch(function(e){ console.error(e); showOperatorSetup(!!getOperatorId()); });
+}
+function operatorSetupConfirm(){
+  var input = document.getElementById("operatorIdInput");
+  saveOperatorId(input ? input.value : "");
 }
 
 function makePickSessionId(){
@@ -560,7 +599,9 @@ function makePickSessionId(){
   var hh = String(d.getHours()).padStart(2,'0');
   var mi = String(d.getMinutes()).padStart(2,'0');
   var ss = String(d.getSeconds()).padStart(2,'0');
-  return "PS-" + yyyy + mm + dd + "-" + hh + mi + ss + "-" + makeDeviceId().slice(-6);
+  // 取工牌 ID 部分（| 前），去掉非字母数字字符，最多取 8 位
+  var opId = getOperatorId().split("|")[0].replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "NOSET";
+  return "PS-" + yyyy + mm + dd + "-" + hh + mi + ss + "-" + opId;
 }
 
 function setStatus(msg, ok){
@@ -587,7 +628,15 @@ function netBusyOff_(){
 function refreshUI(){
   var dev = document.getElementById("device");
   var ses = document.getElementById("session");
-  if(dev) dev.textContent = makeDeviceId();
+  if(dev){
+    var op = getOperatorId();
+    if(op){
+      var p = parseBadge(op);
+      dev.textContent = p.name ? p.id + " · " + p.name : p.id;
+    } else {
+      dev.textContent = "未设置 / 미설정";
+    }
+  }
   if(ses){
     if(CUR_CTX && CUR_CTX.biz && CUR_CTX.task){
       ses.textContent = (currentSessionId || "无 / 없음") + "  [" + CUR_CTX.biz + "/" + CUR_CTX.task + "]";
@@ -1763,6 +1812,16 @@ async function openScannerCommon(){
     if(now - lastScanAt < 900) return;
     lastScanAt = now;
 
+    if(scanMode === "operator_setup"){
+      if(!isOperatorBadge(code)){ setStatus("无效工牌 / 잘못된 명찰 ❌", false); return; }
+      var saved = saveOperatorId(code);
+      if(saved){
+        await closeScanner();
+        setStatus("操作员已设置 ✅ " + parseBadge(code).id, true);
+      }
+      return;
+    }
+
     if(scanMode === "session_join"){
       var parsed = parseSessionQr_(code);
       if(!parsed){ setStatus("不是趟次二维码（CKSESSION|...）", false); return; }
@@ -2038,6 +2097,13 @@ async function closeScanner(){
     if(scanner){ await scanner.stop(); await scanner.clear(); scanner = null; }
   }catch(e){}
   hideOverlay();
+}
+function closeScannerWithFallback(){
+  var wasOperatorSetup = (scanMode === "operator_setup");
+  closeScanner().then(function(){
+    // 若扫码器是为设置操作员而开的，关闭时恢复弹窗
+    if(wasOperatorSetup) showOperatorSetup(!!getOperatorId());
+  });
 }
 
 function comingSoon(msg){
@@ -2452,6 +2518,7 @@ function adminLogout(){
 refreshNet();
 applyPageSession_();
 refreshUI();
+if(!getOperatorId()) showOperatorSetup(false);
 restoreState();
 renderActiveLists();
 bindAdminEasterEgg_();
