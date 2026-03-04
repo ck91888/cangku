@@ -741,15 +741,18 @@ window.addEventListener("online", refreshNet);
 window.addEventListener("offline", refreshNet);
 
 /** ===== JSONP (with PERF) ===== */
-function jsonp(url, params){
+function jsonp(url, params, opts){
+  var skipBusy = opts && opts.skipBusy; // ✅ 队列 flush 用：不占 NET_BUSY 锁
   return new Promise(function(resolve, reject){
-    // ✅ 如果上一个请求还没结束，直接拒绝，防止连点堆积导致越来越卡
-var action = (params && params.action) ? String(params.action) : "";
-if(NET_BUSY){
-  reject(new Error("busy: previous request not finished"));
-  return;
-}
-netBusyOn_(action);
+    var action = (params && params.action) ? String(params.action) : "";
+    // ✅ 只有用户发起的请求才检查/占用 NET_BUSY
+    if(!skipBusy){
+      if(NET_BUSY){
+        reject(new Error("busy: previous request not finished"));
+        return;
+      }
+      netBusyOn_(action);
+    }
     var cb = "cb_" + Math.random().toString(16).slice(2);
     var qs = [];
     for(var k in params){
@@ -761,7 +764,7 @@ netBusyOn_(action);
 
     // PERF
     var t0 = Date.now();
-    if(PERF_ON && action){
+    if(PERF_ON && action && !skipBusy){
       setStatus("请求中... " + action + " ⏳", true);
     }
 
@@ -769,7 +772,7 @@ netBusyOn_(action);
     var timer = setTimeout(function(){
       cleanup();
       var dt = Date.now() - t0;
-      if(PERF_ON && action){
+      if(PERF_ON && action && !skipBusy){
         setStatus("超时 ❌ " + action + " " + dt + "ms", false);
         perfLog_("TIMEOUT action=" + action + " dt=" + dt + "ms src=" + src);
       }
@@ -780,8 +783,7 @@ netBusyOn_(action);
       try{ delete window[cb]; }catch(e){ window[cb]=undefined; }
       if(script && script.parentNode) script.parentNode.removeChild(script);
       clearTimeout(timer);
-      // ✅ 释放网络忙状态
-      netBusyOff_();
+      if(!skipBusy) netBusyOff_();
     }
 
     window[cb] = function(data){
@@ -789,7 +791,7 @@ netBusyOn_(action);
       var dt = Date.now() - t0;
       var ok = data && data.ok === true;
 
-      if(PERF_ON && action){
+      if(PERF_ON && action && !skipBusy){
         setStatus((ok ? "完成 ✅ " : "失败 ❌ ") + action + " " + dt + "ms", ok);
         perfLog_((ok ? "OK" : "BAD") + " action=" + action + " dt=" + dt + "ms");
       }
@@ -799,7 +801,7 @@ netBusyOn_(action);
     script.onerror = function(){
       cleanup();
       var dt = Date.now() - t0;
-      if(PERF_ON && action){
+      if(PERF_ON && action && !skipBusy){
         setStatus("错误 ❌ " + action + " " + dt + "ms", false);
         perfLog_("ERROR action=" + action + " dt=" + dt + "ms src=" + src);
       }
@@ -870,7 +872,7 @@ async function submitEventSync_(o, silent){
     client_ms: (o.client_ms || Date.now())
   };
 
-  var res = await jsonp(LOCK_URL, params);
+  var res = await jsonp(LOCK_URL, params, silent ? { skipBusy: true } : undefined);
 
   if(!res || res.ok !== true){
   var er = (res && res.error) ? String(res.error) : "提交失败：event_submit failed";
@@ -1050,7 +1052,7 @@ function badgeDisplay(raw){
 function renderSetToHtml(setObj){
   var arr = Array.from(setObj);
   if(arr.length === 0) return '<span class="muted">无 / 없음</span>';
-  return arr.map(function(x){ return '<span class="tag">' + badgeDisplay(x) + '</span>'; }).join("");
+  return arr.map(function(x){ return '<span class="tag">' + esc(badgeDisplay(x)) + '</span>'; }).join("");
 }
 
 function renderActiveLists(){
@@ -2016,7 +2018,19 @@ async function openScannerCommon(){
   document.getElementById("reader").innerHTML = "";
 
   try{ if(scanner){ await scanner.stop(); await scanner.clear(); } }catch(e){}
-  scanner = new Html5Qrcode("reader");
+
+  // ✅ 同时支持 QR 码和常见条形码格式（CODE_128 / CODE_39 / EAN_13 / EAN_8 / UPC_A / ITF / CODABAR）
+  var supportedFormats = [
+    Html5QrcodeSupportedFormats.QR_CODE,
+    Html5QrcodeSupportedFormats.CODE_128,
+    Html5QrcodeSupportedFormats.CODE_39,
+    Html5QrcodeSupportedFormats.EAN_13,
+    Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A,
+    Html5QrcodeSupportedFormats.ITF,
+    Html5QrcodeSupportedFormats.CODABAR
+  ];
+  scanner = new Html5Qrcode("reader", { formatsToSupport: supportedFormats });
 
   var onScan = async (decodedText) => {
     var code = decodedText.trim();

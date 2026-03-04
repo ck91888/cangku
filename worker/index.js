@@ -702,6 +702,8 @@ export default {
       await env.DB.prepare(
         `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator='admin' WHERE session=?`
       ).bind(now, session).run();
+      // ✅ 关闭该 session 下所有 task_state
+      await taskStateCloseAll_(env, session, now, "admin");
       const endEvId = "admin-force-end-session-" + session + "-" + now;
       await env.DB.prepare(
         `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
