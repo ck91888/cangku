@@ -1,6 +1,6 @@
 const LOCK_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 const EVENTS_HEADER = [
-  "server_ms","client_ms","event_id","event","badge","biz","task","session","wave_id","device_id","ok","note"
+  "server_ms","client_ms","event_id","event","badge","biz","task","session","wave_id","operator_id","ok","note"
 ];
 
 // ===== Durable Object: Locks =====
@@ -59,7 +59,6 @@ export class LocksDO {
       const badge = String(body.badge || "").trim();
       const task = String(body.task || "").trim();
       const session = String(body.session || "").trim();
-      const device_id = String(body.device_id || "").trim();
       if (!badge) return Response.json({ ok:false, error:"missing badge" });
       if (!task) return Response.json({ ok:false, error:"missing task" });
 
@@ -68,7 +67,7 @@ export class LocksDO {
       const expires = now + LOCK_TTL_MS;
 
       if (!cur || (cur.expires_at && cur.expires_at < now)) {
-        locks[badge] = { badge, task, session, device_id, locked_at: now, expires_at: expires };
+        locks[badge] = { badge, task, session, locked_at: now, expires_at: expires };
         await this._save();
         return Response.json({ ok:true, locked:true, lock: locks[badge] });
       }
@@ -76,7 +75,6 @@ export class LocksDO {
       if (cur.task === task && cur.session === session) {
         cur.locked_at = now;
         cur.expires_at = expires;
-        cur.device_id = device_id; // 允许同 task+session 下 device_id 更新（同设备localStorage重置场景）
         locks[badge] = cur;
         await this._save();
         return Response.json({ ok:true, locked:true, lock: cur });
@@ -89,7 +87,6 @@ export class LocksDO {
       const badge = String(body.badge || "").trim();
       const task = String(body.task || "").trim();
       const session = String(body.session || "").trim();
-      const device_id = String(body.device_id || "").trim();
       if (!badge) return Response.json({ ok:false, error:"missing badge" });
 
       const locks = this._locks;
@@ -98,7 +95,6 @@ export class LocksDO {
 
       if (task && cur.task !== task) return Response.json({ ok:true, released:false, reason:"different_task", lock: cur });
       if (session && cur.session !== session) return Response.json({ ok:true, released:false, reason:"different_session", lock: cur });
-      // device_id 不做校验：同设备 localStorage 重置后 device_id 会变，不应阻止退出
 
       delete locks[badge];
       await this._save();
@@ -193,22 +189,22 @@ function locksStub(env) {
   return env.LOCKS.get(id);
 }
 
-async function ensureSessionOpen(env, session, device_id, biz, task) {
+async function ensureSessionOpen(env, session, operator_id, biz, task) {
   const sid = String(session || "").trim();
   if (!sid) return;
 
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO sessions(session,status,created_ms,created_by_device,closed_ms,closed_by_device,biz,task)
+    `INSERT OR IGNORE INTO sessions(session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task)
      VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?)`
-  ).bind(sid, now, String(device_id||""), String(biz||""), String(task||"")).run();
+  ).bind(sid, now, String(operator_id||""), String(biz||""), String(task||"")).run();
 }
 
 async function getSession(env, session) {
   const sid = String(session || "").trim();
   if (!sid) return null;
   const r = await env.DB.prepare(
-    `SELECT session,status,created_ms,created_by_device,closed_ms,closed_by_device,biz,task
+    `SELECT session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task
      FROM sessions WHERE session=? LIMIT 1`
   ).bind(sid).first();
   return r || null;
@@ -228,37 +224,37 @@ async function taskStateStatus_(env, session, biz, task){
   return r ? String(r.status || "").toUpperCase() : "";
 }
 
-async function taskStateOpen_(env, session, biz, task, started_ms, device_id){
+async function taskStateOpen_(env, session, biz, task, started_ms, operator_id){
   await env.DB.prepare(`
-    INSERT INTO task_state(session,biz,task,status,started_ms,ended_ms,started_by_device,ended_by_device)
+    INSERT INTO task_state(session,biz,task,status,started_ms,ended_ms,started_by_operator,ended_by_operator)
     VALUES(?,?,?,'OPEN',?,NULL,?,NULL)
     ON CONFLICT(session,biz,task) DO UPDATE SET
       status='OPEN',
       started_ms=excluded.started_ms,
       ended_ms=NULL,
-      started_by_device=excluded.started_by_device,
-      ended_by_device=NULL
+      started_by_operator=excluded.started_by_operator,
+      ended_by_operator=NULL
   `).bind(
     String(session||""), String(biz||""), String(task||""),
-    Number(started_ms||0), String(device_id||"")
+    Number(started_ms||0), String(operator_id||"")
   ).run();
 }
 
-async function taskStateClose_(env, session, biz, task, ended_ms, device_id){
+async function taskStateClose_(env, session, biz, task, ended_ms, operator_id){
   await env.DB.prepare(`
     UPDATE task_state
-    SET status='CLOSED', ended_ms=?, ended_by_device=?
+    SET status='CLOSED', ended_ms=?, ended_by_operator=?
     WHERE session=? AND biz=? AND task=?
   `).bind(
-    Number(ended_ms||0), String(device_id||""),
+    Number(ended_ms||0), String(operator_id||""),
     String(session||""), String(biz||""), String(task||"")
   ).run();
 }
 
-async function taskStateCloseAll_(env, session, ended_ms, device_id){
+async function taskStateCloseAll_(env, session, ended_ms, operator_id){
   await env.DB.prepare(
-    `UPDATE task_state SET status='CLOSED', ended_ms=?, ended_by_device=? WHERE session=? AND status='OPEN'`
-  ).bind(Number(ended_ms||0), String(device_id||""), String(session||"")).run();
+    `UPDATE task_state SET status='CLOSED', ended_ms=?, ended_by_operator=? WHERE session=? AND status='OPEN'`
+  ).bind(Number(ended_ms||0), String(operator_id||""), String(session||"")).run();
 }
 
 // ===== Admin-only: events_tail =====
@@ -326,9 +322,9 @@ export default {
         session,
         status: (s && s.status ? String(s.status).toUpperCase() : "OPEN"),
         created_ms: s?.created_ms || 0,
-        created_by_device: s?.created_by_device || "",
+        created_by_operator: s?.created_by_operator || "",
         closed_ms: s?.closed_ms || 0,
-        closed_by_device: s?.closed_by_device || "",
+        closed_by_operator: s?.closed_by_operator || "",
         biz: s?.biz || "",
         task: s?.task || "",
         active: lockInfo.active || []
@@ -337,11 +333,11 @@ export default {
 
     if (action === "session_close") {
       const session = String(p.session || p.pick_session_id || "").trim();
-      const device_id = String(p.device_id || "").trim();
+      const operator_id = String(p.operator_id || "").trim();
       if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
-      if (!device_id) return jsonpOrJson({ ok:false, error:"missing device_id" }, callback);
+      if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
 
-      await ensureSessionOpen(env, session, device_id);
+      await ensureSessionOpen(env, session, operator_id);
       const s = await getSession(env, session);
 
       if (s && String(s.status || "").toUpperCase() === "CLOSED") {
@@ -350,7 +346,7 @@ export default {
           already_closed:true,
           session,
           closed_ms: s.closed_ms || 0,
-          closed_by_device: s.closed_by_device || ""
+          closed_by_operator: s.closed_by_operator || ""
         }, callback);
       }
 
@@ -368,10 +364,10 @@ export default {
 
       const closed_ms = Date.now();
       await env.DB.prepare(
-        `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_device=? WHERE session=?`
-      ).bind(closed_ms, device_id, session).run();
+        `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator=? WHERE session=?`
+      ).bind(closed_ms, operator_id, session).run();
 
-      return jsonpOrJson({ ok:true, closed:true, session, closed_ms, closed_by_device: device_id }, callback);
+      return jsonpOrJson({ ok:true, closed:true, session, closed_ms, closed_by_operator: operator_id }, callback);
     }
 
     // admin_events_tail：只要口令正确就允许
@@ -402,7 +398,7 @@ export default {
       if (task) { where += " AND task = ?"; binds.push(task); }
 
       const sql = `
-        SELECT server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note
+        SELECT server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note
         FROM events
         ${where}
         ORDER BY server_ms DESC
@@ -426,7 +422,7 @@ export default {
       const task = String(p.task || "").trim();
       const session = String(p.session || p.pick_session_id || "").trim();
       const wave_id = String(p.wave_id || "").trim();
-      const device_id = String(p.device_id || "").trim();
+      const operator_id = String(p.operator_id || "").trim();
       const client_ms = Number(p.client_ms || p.ts_ms || 0) || 0;
 
       if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
@@ -441,9 +437,9 @@ export default {
         const allowEnd = (String(task).trim() === "SESSION" && String(event).trim() === "end");
         if (closed && !allowEnd) {
           await env.DB.prepare(
-            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 0, "session_closed_blocked").run();
+          ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 0, "session_closed_blocked").run();
 
           return jsonpOrJson({ ok:false, error:"session_closed", status:"CLOSED", session }, callback);
         }
@@ -451,32 +447,32 @@ export default {
 
       // ===== start =====
       if (event === "start" && session) {
-        if (!device_id) return jsonpOrJson({ ok:false, error:"missing device_id" }, callback);
+        if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
 
         // 查这个设备是否已有未结束 session，拣货 session（B2C/PICK）允许与其他 session 同时存在
         const open = await env.DB.prepare(
           `SELECT session,biz,task FROM sessions
-           WHERE status='OPEN' AND created_by_device=?
+           WHERE status='OPEN' AND created_by_operator=?
            AND NOT (biz='B2C' AND task='PICK')
            ORDER BY created_ms DESC
            LIMIT 1`
-        ).bind(device_id).first();
+        ).bind(operator_id).first();
 
         if (open && String(open.session || "") !== session) {
           return jsonpOrJson({
             ok:false,
-            error:"device_has_open_session",
+            error:"operator_has_open_session",
             open_session: String(open.session),
             open_biz: String(open.biz||""),
             open_task: String(open.task||"")
           }, callback);
         }
 
-        await ensureSessionOpen(env, session, device_id, biz, task);
+        await ensureSessionOpen(env, session, operator_id, biz, task);
 
         // ✅✅ 关键修复：start 时把该任务标记为 OPEN，join 才不会说“没开始”
         if (task && task !== "SESSION" && requireStart_(task)) {
-          await taskStateOpen_(env, session, biz, task, server_ms, device_id);
+          await taskStateOpen_(env, session, biz, task, server_ms, operator_id);
         }
       }
 
@@ -484,10 +480,10 @@ export default {
       if (event === "end" && session) {
         // session 结束：把所有任务都关掉
         if (task === "SESSION") {
-          await taskStateCloseAll_(env, session, server_ms, device_id);
+          await taskStateCloseAll_(env, session, server_ms, operator_id);
         } else {
           // 普通任务结束：只关本任务
-          await taskStateClose_(env, session, biz, task, server_ms, device_id);
+          await taskStateClose_(env, session, biz, task, server_ms, operator_id);
         }
       }
 
@@ -500,9 +496,9 @@ export default {
           const st = await taskStateStatus_(env, session, biz, task);
           if (st !== "OPEN") {
             await env.DB.prepare(
-              `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+              `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-            ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, device_id, 0, "task_not_started").run();
+            ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, operator_id, 0, "task_not_started").run();
 
             return jsonpOrJson({ ok:false, error:"task_not_started", biz, task, session }, callback);
           }
@@ -512,31 +508,31 @@ export default {
         const lr = await (await stub.fetch("https://locks/do", {
           method: "POST",
           headers: { "content-type":"application/json" },
-          body: JSON.stringify({ action:"lock_acquire", badge, task, session, device_id })
+          body: JSON.stringify({ action:"lock_acquire", badge, task, session, operator_id })
         })).json();
 
         if (!lr || lr.ok !== true) {
           await env.DB.prepare(
-            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, device_id, 0, "lock_error").run();
+          ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, operator_id, 0, "lock_error").run();
 
           return jsonpOrJson({ ok:false, error:"lock_error" }, callback);
         }
 
         if (lr.locked !== true) {
           await env.DB.prepare(
-            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, device_id, 0, "locked_by_other").run();
+          ).bind(server_ms, client_ms, event_id, "join_fail", badge, biz, task, session, wave_id, operator_id, 0, "locked_by_other").run();
 
           return jsonpOrJson({ ok:true, locked:false, reason: lr.reason || "locked_by_other", lock: lr.lock || null }, callback);
         }
 
         const ins = await env.DB.prepare(
-          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 1, "").run();
+        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, "").run();
 
         if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
         return jsonpOrJson({ ok:true, saved:true, locked:true }, callback);
@@ -547,15 +543,15 @@ export default {
         if (!badge) return jsonpOrJson({ ok:false, error:"missing badge for leave" }, callback);
 
         const ins = await env.DB.prepare(
-          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 1, "").run();
+        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, "").run();
 
         const stub = locksStub(env);
         ctx.waitUntil(stub.fetch("https://locks/do", {
           method: "POST",
           headers: { "content-type":"application/json" },
-          body: JSON.stringify({ action:"lock_release", badge, task, session, device_id })
+          body: JSON.stringify({ action:"lock_release", badge, task, session, operator_id })
         }).catch(() => {}));
 
         if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
@@ -564,9 +560,9 @@ export default {
 
       // ===== other events =====
       const ins = await env.DB.prepare(
-        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, device_id, 1, "").run();
+      ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, "").run();
 
       if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
       return jsonpOrJson({ ok:true, saved:true }, callback);
@@ -578,14 +574,14 @@ export default {
       if (!badge) return jsonpOrJson({ ok:false, error:"missing badge" }, callback);
       const task = String(p.task || "").trim();
       const session = String(p.session || "").trim();
-      const device_id = String(p.device_id || "").trim();
+      const operator_id = String(p.operator_id || "").trim();
       const biz = String(p.biz || "").trim();
       const server_ms = now;
       const event_id = "admin-fl-" + badge + "-" + now;
       await env.DB.prepare(
-        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind(server_ms, server_ms, event_id, "leave", badge, biz||"ADMIN", task||"ADMIN", session||"", "", device_id||"", 1, "admin_force_leave").run();
+      ).bind(server_ms, server_ms, event_id, "leave", badge, biz||"ADMIN", task||"ADMIN", session||"", "", operator_id||"", 1, "admin_force_leave").run();
       const stub = locksStub(env);
       await stub.fetch("https://locks/do", {
         method: "POST",
@@ -599,8 +595,8 @@ export default {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const biz = String(p.biz || "").trim();
       let sessionsSql = biz
-        ? `SELECT session,status,biz,task,created_ms,created_by_device,closed_ms,closed_by_device FROM sessions WHERE biz=? ORDER BY created_ms DESC LIMIT 50`
-        : `SELECT session,status,biz,task,created_ms,created_by_device,closed_ms,closed_by_device FROM sessions ORDER BY created_ms DESC LIMIT 50`;
+        ? `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator FROM sessions WHERE biz=? ORDER BY created_ms DESC LIMIT 50`
+        : `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator FROM sessions ORDER BY created_ms DESC LIMIT 50`;
       const sessionRows = biz
         ? (await env.DB.prepare(sessionsSql).bind(biz).all()).results || []
         : (await env.DB.prepare(sessionsSql).all()).results || [];
@@ -657,17 +653,17 @@ export default {
         }).catch(() => {});
         const evId = "admin-force-end-" + badge + "-" + now;
         await env.DB.prepare(
-          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(now, now, evId, "leave", badge, String(lk.biz||""), String(lk.task||""), session, "", String(lk.device_id||""), 1, "admin_force_end").run();
+        ).bind(now, now, evId, "leave", badge, String(lk.biz||""), String(lk.task||""), session, "", String(lk.operator_id||""), 1, "admin_force_end").run();
         released.push(badge);
       }
       await env.DB.prepare(
-        `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_device='admin' WHERE session=?`
+        `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator='admin' WHERE session=?`
       ).bind(now, session).run();
       const endEvId = "admin-force-end-session-" + session + "-" + now;
       await env.DB.prepare(
-        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,device_id,ok,note)
+        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(now, now, endEvId, "end", "", "ADMIN", "SESSION", session, "", "", 1, "admin_force_end_session").run();
       return jsonpOrJson({ ok:true, released, session }, callback);

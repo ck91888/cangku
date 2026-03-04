@@ -782,7 +782,7 @@ async function submitEventSync_(o, silent){
     pick_session_id: o.pick_session_id || "NA",
     wave_id: o.wave_id || "",
     da_id: o.da_id || "",
-    device_id: makeDeviceId(),
+    operator_id: getOperatorId(),
     client_ms: (o.client_ms || Date.now())
   };
 
@@ -797,7 +797,7 @@ async function submitEventSync_(o, silent){
     cleanupLocalSession_();
     throw new Error("该趟次已被关闭（可能是管理员强制结束）。\n本地已自动清除，请重新开始新的趟次。");
   }
-    if(er === "device_has_open_session"){
+    if(er === "operator_has_open_session"){
   const ob = (res && res.open_biz) ? res.open_biz : "";
   const ot = (res && res.open_task) ? res.open_task : "";
   const os = (res && res.open_session) ? res.open_session : "";
@@ -816,7 +816,7 @@ async function submitEventSync_(o, silent){
     var msg =
       "该工牌已在其它设备作业中，无法加入。\n\n" +
       "占用任务: " + (lk.task || "未知") + "\n" +
-      "占用设备: " + (lk.device_id || "未知") + "\n" +
+      "占用设备: " + (lk.operator_id || "未知") + "\n" +
       "占用趟次: " + (lk.session || "未知") + "\n\n" +
       "请先在原设备退出（leave）后再加入。";
     throw new Error(msg);
@@ -837,7 +837,7 @@ async function sessionCloseServer_(){
   var res = await jsonp(LOCK_URL, {
     action: "session_close",
     session: currentSessionId,
-    device_id: makeDeviceId()
+    operator_id: getOperatorId()
   });
   if(!res || res.ok !== true) throw new Error(res && res.error ? res.error : "session_close_failed");
   return res;
@@ -1070,14 +1070,14 @@ async function refreshActiveNow(){
           var dur = fmtDur(now - (x.since||now));
           var forceBtn = isAdmin
             ? '<button class="small bad" style="margin-top:6px;width:auto;" ' +
-                'data-badge="'+esc(x.badge)+'" data-task="'+esc(x.task||"")+'" data-session="'+esc(x.session||"")+'" data-biz="'+esc(x.biz||"")+'" data-device="'+esc(x.device_id||"")+'" ' +
+                'data-badge="'+esc(x.badge)+'" data-task="'+esc(x.task||"")+'" data-session="'+esc(x.session||"")+'" data-biz="'+esc(x.biz||"")+'" ' +
                 'onclick="adminForceLeave(this)">强制下线 / 강제 퇴장</button>'
             : "";
           return (
             '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
               '<div style="font-weight:700;">'+esc(x.badge)+'</div>' +
               '<div class="muted" style="margin-top:4px;">作业: '+esc(x.biz)+' / '+esc(x.task)+' ｜ 在岗: '+esc(dur)+'</div>' +
-              '<div class="muted" style="margin-top:4px;">session: '+esc(x.session||"")+' ｜ device: '+esc(x.device_id||"")+'</div>' +
+              '<div class="muted" style="margin-top:4px;">session: '+esc(x.session||"")+'</div>' +
               forceBtn +
             '</div>'
           );
@@ -1098,12 +1098,11 @@ async function adminForceLeave(btn){
   var task = btn.getAttribute("data-task") || "";
   var session = btn.getAttribute("data-session") || "";
   var biz = btn.getAttribute("data-biz") || "";
-  var device_id = btn.getAttribute("data-device") || "";
   var ok = confirm("强制下线 / 강제 퇴장\n\n工牌：" + badge + "\n任务：" + biz + " / " + task + "\n\n确定要强制下线吗？\n정말 강제 퇴장하시겠습니까?");
   if(!ok) return;
   try{
     setStatus("强制下线中... ⏳", true);
-    var res = await jsonp(LOCK_URL, { action:"admin_force_leave", k:adminKey_(), badge:badge, task:task, session:session, biz:biz, device_id:device_id });
+    var res = await jsonp(LOCK_URL, { action:"admin_force_leave", k:adminKey_(), badge:badge, task:task, session:session, biz:biz });
     if(!res || res.ok !== true){
       setStatus("强制下线失败 ❌ " + (res && res.error ? res.error : ""), false);
       alert("强制下线失败：" + (res && res.error ? res.error : "unknown"));
