@@ -1276,26 +1276,25 @@ async function adminForceEndSession(btn){
 
   try{
     var biz = "B2C", task = "理货";
+    var newSid = makePickSessionId();
 
-    // ✅ A：每次开始都新建本任务趟次
-    currentSessionId = makePickSessionId();
+    // ✅ 先调服务器确认（避免有未关闭趟次时写入错误的本地 session）
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
+    addRecent(evId);
+
+    // ✅ 服务器确认后才写入本地状态
+    currentSessionId = newSid;
     CUR_CTX = { biz: biz, task: task, page: "b2c_tally" };
-    setSess_(biz, task, currentSessionId);
-
-    // ✅ 清空本任务本地状态（避免上一趟数据带入）
+    setSess_(biz, task, newSid);
     scannedInbounds = new Set();
     activeTally = new Set();
     persistState();
     refreshUI();
 
-    // ✅ start 必须同步确认（后端会强制：没 start 不允许 join）
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
-    addRecent(evId);
-
     renderActiveLists();
     renderInboundCountUI();
-    setStatus("理货开始 ✅ 新趟次: " + currentSessionId, true);
+    setStatus("理货开始 ✅ 新趟次: " + newSid, true);
     }catch(e){
     setStatus("理货开始失败 ❌ " + e, false);
     alert(String(e));
@@ -1315,23 +1314,23 @@ async function startBulkOut(){
 
   try{
     var biz = "B2C", task = "批量出库";
+    var newSid = makePickSessionId();
 
-    currentSessionId = makePickSessionId();
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
+    addRecent(evId);
+
+    currentSessionId = newSid;
     CUR_CTX = { biz: biz, task: task, page: "b2c_bulkout" };
-    setSess_(biz, task, currentSessionId);
-
+    setSess_(biz, task, newSid);
     scannedBulkOutOrders = new Set();
     activeBulkOut = new Set();
     persistState();
     refreshUI();
 
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
-    addRecent(evId);
-
     renderActiveLists();
     renderBulkOutUI();
-    setStatus("批量出库开始 ✅ 新趟次: " + currentSessionId, true);
+    setStatus("批量出库开始 ✅ 新趟次: " + newSid, true);
     }catch(e){
     setStatus("理货开始失败 ❌ " + e, false);
     alert(String(e));
@@ -1351,17 +1350,18 @@ async function startB2bTally(){
   if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
   try{
     var biz = "B2B", task = "B2B入库理货";
-    currentSessionId = makePickSessionId();
+    var newSid = makePickSessionId();
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
+    addRecent(evId);
+    currentSessionId = newSid;
     CUR_CTX = { biz: biz, task: task, page: "b2b_tally" };
-    setSess_(biz, task, currentSessionId);
+    setSess_(biz, task, newSid);
     scannedB2bTallyOrders = new Set();
     activeB2bTally = new Set();
     persistState(); refreshUI();
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
-    addRecent(evId);
     renderActiveLists(); renderB2bTallyUI();
-    setStatus("B2B理货开始 ✅ 新趟次: " + currentSessionId, true);
+    setStatus("B2B理货开始 ✅ 新趟次: " + newSid, true);
   }catch(e){
     setStatus("B2B理货开始失败 ❌ " + e, false); alert(String(e));
   }finally{
@@ -1424,17 +1424,18 @@ async function startB2bWorkorder(){
   if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
   try{
     var biz = "B2B", task = "B2B工单操作";
-    currentSessionId = makePickSessionId();
+    var newSid = makePickSessionId();
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
+    addRecent(evId);
+    currentSessionId = newSid;
     CUR_CTX = { biz: biz, task: task, page: "b2b_workorder" };
-    setSess_(biz, task, currentSessionId);
+    setSess_(biz, task, newSid);
     scannedB2bWorkorders = new Set();
     activeB2bWorkorder = new Set();
     persistState(); refreshUI();
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
-    addRecent(evId);
     renderActiveLists(); renderB2bWorkorderUI();
-    setStatus("B2B工单操作开始 ✅ 新趟次: " + currentSessionId, true);
+    setStatus("B2B工单操作开始 ✅ 新趟次: " + newSid, true);
   }catch(e){
     setStatus("B2B工单操作开始失败 ❌ " + e, false); alert(String(e));
   }finally{
@@ -1497,11 +1498,15 @@ async function startPicking(){
 
   try{
     var biz = "B2C", task = "拣货";
+    var newSid = makePickSessionId();
 
-    currentSessionId = makePickSessionId();
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
+    addRecent(evId);
+
+    currentSessionId = newSid;
     CUR_CTX = { biz: biz, task: task, page: "b2c_pick" };
-    setSess_(biz, task, currentSessionId);
-
+    setSess_(biz, task, newSid);
     scannedWaves = new Set();
     activePick = new Set();
     leaderPickOk = false;
@@ -1509,12 +1514,8 @@ async function startPicking(){
     persistState();
     refreshUI();
 
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
-    addRecent(evId);
-
     renderActiveLists();
-    setStatus("拣货开始 ✅ 新趟次: " + currentSessionId, true);
+    setStatus("拣货开始 ✅ 新趟次: " + newSid, true);
     }catch(e){
     setStatus("拣货开始失败 ❌ " + e, false);
     alert(String(e));
@@ -1548,23 +1549,23 @@ async function startRelabel(){
 
   try{
     var biz = "B2C", task = "换单";
+    var newSid = makePickSessionId();
 
-    currentSessionId = makePickSessionId();
+    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
+    addRecent(evId);
+
+    currentSessionId = newSid;
     CUR_CTX = { biz: biz, task: task, page: "b2c_relabel" };
-    setSess_(biz, task, currentSessionId);
-
+    setSess_(biz, task, newSid);
     activeRelabel = new Set();
     relabelStartTs = Date.now();
     startRelabelTimer();
     persistState();
     refreshUI();
 
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: currentSessionId }, true);
-    addRecent(evId);
-
     renderActiveLists();
-    setStatus("换单开始 ✅ 新趟次: " + currentSessionId, true);
+    setStatus("换单开始 ✅ 新趟次: " + newSid, true);
     }catch(e){
     setStatus("换单开始失败 ❌ " + e, false);
     alert(String(e));
@@ -1642,7 +1643,23 @@ async function joinWork(biz, task){
 
   // 自动 session 的任务：第一次 join 时自动开新趟次，并同步发送 start
   if(!sid && taskAutoSession_(task)){
-    sid = makePickSessionId();
+    var newSid = makePickSessionId();
+
+    // ✅ 先调服务器确认，避免有未关闭趟次时写入错误的本地 session
+    var evIdStart = makeEventId({ event:"start", biz:biz, task: task, wave_id:"", badgeRaw:"" });
+    if(!hasRecent(evIdStart)){
+      try{
+        await submitEventSync_({ event:"start", event_id: evIdStart, biz: biz, task: task, pick_session_id: newSid }, true);
+        addRecent(evIdStart);
+      }catch(e){
+        setStatus("加入失败 ❌ " + e, false);
+        alert(String(e));
+        return;
+      }
+    }
+
+    // ✅ 服务器确认后才写入本地状态
+    sid = newSid;
     currentSessionId = sid;
     CUR_CTX = { biz: biz, task: task, page: getHashPage() };
     setSess_(biz, task, sid);
@@ -1661,13 +1678,6 @@ async function joinWork(biz, task){
     if(task==="B2C盘点") activeB2cInventory = new Set();
     if(task==="仓库整理") activeWarehouseCleanup = new Set();
     persistState(); refreshUI();
-
-    // ✅ start 必须同步确认（否则后端会拒绝 join）
-    var evIdStart = makeEventId({ event:"start", biz:biz, task: task, wave_id:"", badgeRaw:"" });
-    if(!hasRecent(evIdStart)){
-      await submitEventSync_({ event:"start", event_id: evIdStart, biz: biz, task: task, pick_session_id: sid }, true);
-      addRecent(evIdStart);
-    }
   }
 
   if(!sid){
