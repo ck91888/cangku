@@ -269,9 +269,9 @@ async function fetchOperatorOpenSessions(){
       var age = fmtDur(Date.now() - (s.created_ms || 0));
       var page = pageForTask(s.biz, s.task);
       var btn = page
-        ? '<button class="small" style="width:auto;white-space:nowrap;" onclick="restoreOpenSession('+
-            JSON.stringify(s.session)+','+JSON.stringify(s.biz)+','+JSON.stringify(s.task)+','+JSON.stringify(page)+
-          ')">进入 / 이동</button>'
+        ? '<button class="small" style="width:auto;white-space:nowrap;"'+
+            ' data-sid="'+esc(s.session)+'" data-biz="'+esc(s.biz)+'" data-task="'+esc(s.task)+'" data-page="'+esc(page)+'"'+
+            ' onclick="restoreOpenSession(this.dataset.sid,this.dataset.biz,this.dataset.task,this.dataset.page)">进入 / 이동</button>'
         : '';
       return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;">'+
         '<div style="flex:1;">'+
