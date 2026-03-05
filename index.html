@@ -561,6 +561,7 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('B2B','B2B卸货')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2B','B2B卸货')">结束作业 / 종료</button>
+      <button class="primary" id="btnReturnToWorkorder" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempUnload()">返回工单 / 작업지시 복귀</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bUnloadCount">0</span></div>
         <div id="b2bUnloadActiveList" class="muted">无 / 없음</div>
@@ -607,6 +608,7 @@
       <button class="primary" onclick="startB2bWorkorder(event)">开始操作 / 시작</button>
       <button class="primary" onclick="joinWork('B2B','B2B工单操作')">加入作业 / 참여</button>
       <button class="primary" onclick="leaveWork('B2B','B2B工单操作')">退出作业 / 퇴장</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <div class="listBox">
         <div><b>当前参与名单 / 참여자</b>：<span id="b2bWorkorderCount">0</span></div>
         <div id="b2bWorkorderActiveList" class="muted">无 / 없음</div>
@@ -723,6 +725,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=52"></script>
+  <script src="./app.js?v=53"></script>
 </body>
 </html>
