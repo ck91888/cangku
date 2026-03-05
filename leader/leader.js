@@ -409,7 +409,7 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
   // ===== 总览卡片 =====
   var COST_PER_MIN = 290; // 韩币/人·分钟
   var totalCost = totalMinutes * COST_PER_MIN;
-  var costStr = totalCost >= 10000 ? Math.round(totalCost / 10000) + '만' : totalCost.toLocaleString();
+  var costStr = totalCost.toLocaleString();
 
   var overviewHtml =
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">' +
@@ -458,7 +458,7 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
       var pct = totalTaskMinutes > 0 ? Math.round(x.minutes / totalTaskMinutes * 100) : 0;
       var barW = Math.max(2, pct);
       var taskCost = x.minutes * COST_PER_MIN;
-      var taskCostStr = taskCost >= 10000 ? Math.round(taskCost / 10000) + '\uB9CC' : taskCost.toLocaleString();
+      var taskCostStr = taskCost.toLocaleString();
       taskHtml += '<tr>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(x.key.replace("|"," / ")) + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;font-size:13px;">' + fmtHM_(x.minutes) + '</td>' +
