@@ -469,7 +469,7 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
     taskHtml += '<tr>' +
       '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
       '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总工时</th>' +
-      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">人力费(\\u20A9)</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">人力费(\u20A9)</th>' +
       '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">占比</th>' +
     '</tr>';
     out.taskTotals.forEach(function(x){
