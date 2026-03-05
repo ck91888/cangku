@@ -1642,11 +1642,12 @@ async function tempSwitchToUnload_(){
       badges = members.slice();
     } else {
       var indices = choice.split(/[,，\s]+/);
+      var seen = {};
       badges = [];
       for(var i = 0; i < indices.length; i++){
         var idx = parseInt(indices[i], 10) - 1;
         if(isNaN(idx) || idx < 0 || idx >= members.length){ alert("无效序号：" + indices[i]); return; }
-        badges.push(members[idx]);
+        if(!seen[idx]){ seen[idx] = true; badges.push(members[idx]); }
       }
     }
     if(badges.length === 0){ alert("未选择任何人员"); return; }
@@ -1731,7 +1732,7 @@ async function tempSwitchToUnload_(){
   localStorage.setItem("tempSwitchFromWorkorder", JSON.stringify(ctx));
 
   // 4. 导航到卸货页
-  setStatus("已切换到卸货 ✅（" + joinedUnload.length + "/" + leftBadges.length + "人已加入）", true);
+  setStatus("已切换到卸货 ✅（" + joinedUnload.length + "/" + leftBadges.length + "人已加入）", false);
   go("b2b_unload");
   refreshUI();
   renderActiveLists();
@@ -1750,7 +1751,11 @@ async function returnFromTempUnload_(){
   var allBadges = ctx.badges || (ctx.badge ? [ctx.badge] : []);
   var woSid = ctx.workorderSession;
 
-  if(allBadges.length === 0){ alert("没有找到工牌信息"); return; }
+  // 如果上下文里badges为空（B设备远程检测），用当前内存中的卸货在岗名单
+  if(allBadges.length === 0){
+    allBadges = Array.from(activeB2bUnload);
+  }
+  if(allBadges.length === 0){ alert("没有找到工牌信息，请先在卸货页加入作业。"); return; }
 
   // 选择要返回的人
   var returning;
@@ -1766,11 +1771,12 @@ async function returnFromTempUnload_(){
       returning = allBadges.slice();
     } else {
       var indices = choice.split(/[,，\s]+/);
+      var seen2 = {};
       returning = [];
       for(var k = 0; k < indices.length; k++){
         var idx = parseInt(indices[k], 10) - 1;
         if(isNaN(idx) || idx < 0 || idx >= allBadges.length){ alert("无效序号：" + indices[k]); return; }
-        returning.push(allBadges[idx]);
+        if(!seen2[idx]){ seen2[idx] = true; returning.push(allBadges[idx]); }
       }
     }
     if(returning.length === 0){ alert("未选择任何人员"); return; }
@@ -1798,8 +1804,14 @@ async function returnFromTempUnload_(){
       }
       persistState();
       // 触发自动结束（如果最后一人离开）
+      // 保护工单数据：cleanupLocalSession_ 会清空所有 active set
+      var savedWoActive = new Set(activeB2bWorkorder);
+      var savedWoSess = getSess_("B2B", "B2B工单操作");
       laborTask = "B2B卸货"; laborBiz = "B2B";
       await tryAutoEndSessionAfterLeave_();
+      // 恢复工单数据
+      activeB2bWorkorder = savedWoActive;
+      if(savedWoSess) setSess_("B2B", "B2B工单操作", savedWoSess);
     }
   }
 
@@ -1855,13 +1867,13 @@ async function returnFromTempUnload_(){
     refreshUI();
     renderActiveLists();
     updateReturnButton_();
-    setStatus("已返回工单 " + joinedCount + " 人，还有 " + remaining.length + " 人在卸货 ✅", true);
+    setStatus("已返回工单 " + joinedCount + " 人，还有 " + remaining.length + " 人在卸货 ✅", false);
   } else {
     go("b2b_workorder");
     refreshUI();
     renderB2bWorkorderUI();
     updateReturnButton_();
-    setStatus("全部已返回工单 ✅（" + joinedCount + "/" + returning.length + "人）", true);
+    setStatus("全部已返回工单 ✅（" + joinedCount + "/" + returning.length + "人）", false);
   }
 }
 
