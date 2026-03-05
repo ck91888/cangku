@@ -2485,6 +2485,13 @@ function reportLoadToday(){
   reportLoadRange();
 }
 
+function fmtKST_(ms){
+  if(!ms) return "-";
+  var d = new Date(ms + 9*3600*1000);
+  return d.getUTCFullYear() + "-" + pad2_(d.getUTCMonth()+1) + "-" + pad2_(d.getUTCDate()) +
+    " " + pad2_(d.getUTCHours()) + ":" + pad2_(d.getUTCMinutes()) + ":" + pad2_(d.getUTCSeconds());
+}
+
 function buildReportSummary_(){
   var header = REPORT_CACHE.header || [];
   var rows = REPORT_CACHE.rows || [];
@@ -2494,14 +2501,25 @@ function buildReportSummary_(){
   var iBadge = header.indexOf("badge");
   var iBiz = header.indexOf("biz");
   var iTask = header.indexOf("task");
+  var iSession = header.indexOf("session");
+  var iWaveId = header.indexOf("wave_id");
+  var iOperator = header.indexOf("operator_id");
+  var iNote = header.indexOf("note");
   var iOk = header.indexOf("ok");
-  if(iOk < 0) iOk = header.indexOf("ok"); // just in case
 
-  var active = {}; // badge -> {t, biz, task}
+  var active = {}; // badge -> {t, biz, task, session, note}
   var acc = {};    // badge -> { total_ms, tasks: {biz|task:ms} }
-  var timelineByBadge = {}; // badge -> [{biz,task,start_ms,end_ms,duration_ms,status}]
+  var timelineByBadge = {}; // badge -> [{biz,task,start_ms,end_ms,duration_ms,status,session,note}]
   var anomalies = { open:0, leave_without_join:0, rejoin_without_leave:0 };
   var anomaliesList = [];
+
+  // session-level collection
+  var sessionInfo = {}; // session -> {biz, task, start_ms, end_ms, operator, badges:Set, waves:Set}
+
+  function ensureSession(sid, biz, task){
+    if(!sid) return;
+    if(!sessionInfo[sid]) sessionInfo[sid] = { biz:biz||"", task:task||"", start_ms:0, end_ms:0, operator:"", badges:{}, waves:{} };
+  }
 
   function addDur(badge, biz, task, dur){
     if(!acc[badge]) acc[badge] = { total_ms:0, tasks:{} };
@@ -2509,29 +2527,27 @@ function buildReportSummary_(){
     var k = biz + "|" + task;
     acc[badge].tasks[k] = (acc[badge].tasks[k]||0) + dur;
   }
-  function addTimeline(badge, biz, task, startMs, endMs, status){
+  function addTimeline(badge, biz, task, startMs, endMs, status, session, note){
     if(!timelineByBadge[badge]) timelineByBadge[badge] = [];
     timelineByBadge[badge].push({
-      biz: biz || "",
-      task: task || "",
-      start_ms: startMs || 0,
-      end_ms: endMs || 0,
+      biz: biz || "", task: task || "",
+      start_ms: startMs || 0, end_ms: endMs || 0,
       duration_ms: Math.max(0, (endMs||0) - (startMs||0)),
-      status: status || "NORMAL"
+      status: status || "NORMAL",
+      session: session || "", note: note || ""
     });
   }
   function addAnomaly(type, badge, biz, task, atMs, note){
     anomaliesList.push({
-      type: type || "unknown",
-      badge: badge || "",
-      biz: biz || "",
-      task: task || "",
-      at_ms: atMs || 0,
-      note: note || ""
+      type: type || "unknown", badge: badge || "",
+      biz: biz || "", task: task || "",
+      at_ms: atMs || 0, note: note || ""
     });
   }
 
   var now = Date.now();
+
+  // First pass: collect ALL events for session-level data
   for(var r=0;r<rows.length;r++){
     var row = rows[r];
     if(!row) continue;
@@ -2541,29 +2557,49 @@ function buildReportSummary_(){
     }
 
     var ev = String(row[iEvent]||"").trim();
-    if(ev!=="join" && ev!=="leave") continue;
-
     var badge = String(row[iBadge]||"").trim();
-    if(!badge) continue;
     var biz = String(row[iBiz]||"").trim();
     var task = String(row[iTask]||"").trim();
     var t = Number(row[iServer]||0) || 0;
+    var sid = iSession >= 0 ? String(row[iSession]||"").trim() : "";
+    var waveId = iWaveId >= 0 ? String(row[iWaveId]||"").trim() : "";
+    var operator = iOperator >= 0 ? String(row[iOperator]||"").trim() : "";
+    var note = iNote >= 0 ? String(row[iNote]||"").trim() : "";
 
-    if(ev==="join"){
-      // 若已有未结束，先按当前时间截断
+    // session-level: start/end/wave
+    if(ev === "start" && sid){
+      ensureSession(sid, biz, task);
+      if(!sessionInfo[sid].start_ms || t < sessionInfo[sid].start_ms) sessionInfo[sid].start_ms = t;
+      if(operator) sessionInfo[sid].operator = operator;
+    }else if(ev === "end" && sid){
+      ensureSession(sid, biz, task);
+      if(!sessionInfo[sid].end_ms || t > sessionInfo[sid].end_ms) sessionInfo[sid].end_ms = t;
+    }else if(ev === "wave" && sid){
+      ensureSession(sid, biz, task);
+      if(waveId) sessionInfo[sid].waves[waveId] = true;
+    }
+
+    // join/leave processing
+    if(ev === "join"){
+      if(!badge) continue;
       if(active[badge]){
         var durRejoin = Math.max(0, t - active[badge].t);
         addDur(badge, active[badge].biz, active[badge].task, durRejoin);
-        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "AUTO_CLOSE_REJOIN");
+        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "AUTO_CLOSE_REJOIN", active[badge].session, active[badge].note);
         anomalies.rejoin_without_leave++;
         addAnomaly("rejoin_without_leave", badge, active[badge].biz, active[badge].task, t, "join 前未 leave，已自动截断上一段");
       }
-      active[badge] = { t:t, biz:biz, task:task };
-    }else if(ev==="leave"){
+      active[badge] = { t:t, biz:biz, task:task, session:sid, note:note };
+      if(sid){
+        ensureSession(sid, biz, task);
+        sessionInfo[sid].badges[badge] = true;
+      }
+    }else if(ev === "leave"){
+      if(!badge) continue;
       if(active[badge]){
         var durLeave = Math.max(0, t - active[badge].t);
         addDur(badge, active[badge].biz, active[badge].task, durLeave);
-        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "NORMAL");
+        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "NORMAL", active[badge].session, active[badge].note);
         delete active[badge];
       }else{
         anomalies.leave_without_join++;
@@ -2577,7 +2613,7 @@ function buildReportSummary_(){
     anomalies.open++;
     var durOpen = Math.max(0, now - active[b].t);
     addDur(b, active[b].biz, active[b].task, durOpen);
-    addTimeline(b, active[b].biz, active[b].task, active[b].t, now, "OPEN");
+    addTimeline(b, active[b].biz, active[b].task, active[b].t, now, "OPEN", active[b].session, active[b].note);
     addAnomaly("open_not_left", b, active[b].biz, active[b].task, now, "统计截止时仍在岗");
   });
 
@@ -2592,27 +2628,16 @@ function buildReportSummary_(){
     Object.keys(tasks).sort().forEach(function(k){
       var parts = k.split("|");
       var mins = msToMin_(tasks[k]);
-      taskRows.push({
-        biz: parts[0]||"",
-        task: parts[1]||"",
-        minutes: mins
-      });
+      taskRows.push({ biz: parts[0]||"", task: parts[1]||"", minutes: mins });
 
       out.push({
-        badge: badge,
-        biz: parts[0]||"",
-        task: parts[1]||"",
-        minutes: mins,
-        total_minutes: msToMin_(obj.total_ms)
+        badge: badge, biz: parts[0]||"", task: parts[1]||"",
+        minutes: mins, total_minutes: msToMin_(obj.total_ms)
       });
     });
 
     taskRows.sort(function(a,b){ return b.minutes - a.minutes; });
-    people.push({
-      badge: badge,
-      total_minutes: msToMin_(obj.total_ms),
-      tasks: taskRows
-    });
+    people.push({ badge: badge, total_minutes: msToMin_(obj.total_ms), tasks: taskRows });
   });
 
   people.sort(function(a,b){ return b.total_minutes - a.total_minutes; });
@@ -2622,12 +2647,10 @@ function buildReportSummary_(){
       return (a.start_ms||0) - (b.start_ms||0);
     }).map(function(x){
       return {
-        biz: x.biz,
-        task: x.task,
-        start_ms: x.start_ms,
-        end_ms: x.end_ms,
-        minutes: msToMin_(x.duration_ms),
-        status: x.status
+        biz: x.biz, task: x.task,
+        start_ms: x.start_ms, end_ms: x.end_ms,
+        minutes: msToMin_(x.duration_ms), status: x.status,
+        session: x.session, note: x.note
       };
     });
     return { badge: badge, items: items };
@@ -2635,11 +2658,50 @@ function buildReportSummary_(){
 
   anomaliesList.sort(function(a,b){ return (b.at_ms||0) - (a.at_ms||0); });
 
+  // Build detail_rows (工时明细): one row per work segment
+  var detailRows = [];
+  timeline.forEach(function(tl){
+    (tl.items || []).forEach(function(it){
+      detailRows.push({
+        badge: tl.badge, biz: it.biz, task: it.task,
+        session: it.session,
+        join_time: fmtKST_(it.start_ms), leave_time: fmtKST_(it.end_ms),
+        minutes: it.minutes, status: it.status, note: it.note
+      });
+    });
+  });
+
+  // Build session_summary (趟次汇总): one row per session
+  var sessionSummary = [];
+  Object.keys(sessionInfo).sort().forEach(function(sid){
+    var s = sessionInfo[sid];
+    var badgeList = Object.keys(s.badges).sort();
+    var waveList = Object.keys(s.waves).sort();
+    var totalMs = 0;
+    // sum durations from timeline segments belonging to this session
+    timeline.forEach(function(tl){
+      (tl.items||[]).forEach(function(it){
+        if(it.session === sid) totalMs += (it.minutes||0);
+      });
+    });
+    sessionSummary.push({
+      session: sid, biz: s.biz, task: s.task,
+      start_time: fmtKST_(s.start_ms), end_time: fmtKST_(s.end_ms),
+      total_minutes: totalMs, worker_count: badgeList.length,
+      wave_count: waveList.length,
+      wave_list: waveList.join("; "),
+      workers: badgeList.join("; "),
+      operator: s.operator
+    });
+  });
+
   REPORT_CACHE.summary = out;
   REPORT_CACHE.people = people;
   REPORT_CACHE.timeline = timeline;
   REPORT_CACHE.anomalies_list = anomaliesList;
   REPORT_CACHE.meta.anomalies = anomalies;
+  REPORT_CACHE.detail_rows = detailRows;
+  REPORT_CACHE.session_summary = sessionSummary;
 }
 
 function renderReport_(){
@@ -2705,9 +2767,12 @@ function renderReport_(){
       timeline.map(function(x){
         var lines = (x.items || []).map(function(it){
           var statusText = it.status === "OPEN" ? "（未退出）" : (it.status === "AUTO_CLOSE_REJOIN" ? "（重复join自动截断）" : "");
+          var extra = "";
+          if(it.session) extra += ' ｜ <span class="muted" style="font-size:11px;">趟次:' + esc(it.session) + '</span>';
+          if(it.note) extra += ' ｜ <span style="color:#e67e22;font-size:12px;">备注:' + esc(it.note) + '</span>';
           return (
             '<div style="border-top:1px dashed #eee;padding:6px 0;">' +
-              '<div>' + esc(it.biz + '/' + it.task) + ' ｜ ' + esc(String(it.minutes)) + ' 分 ' + esc(statusText) + '</div>' +
+              '<div>' + esc(it.biz + '/' + it.task) + ' ｜ ' + esc(String(it.minutes)) + ' 分 ' + esc(statusText) + extra + '</div>' +
               '<div class="muted">' + esc(fmtTs_(it.start_ms)) + ' → ' + esc(fmtTs_(it.end_ms)) + '</div>' +
             '</div>'
           );
@@ -2752,36 +2817,64 @@ function renderReport_(){
   tableEl.innerHTML = html;
 }
 
+function csvVal_(v){
+  var s = String(v==null?"":v);
+  if(s.indexOf(",")>=0 || s.indexOf('"')>=0 || s.indexOf("\n")>=0)
+    return '"' + s.replace(/"/g,'""') + '"';
+  return s;
+}
+
+function downloadCSV_(filename, headerArr, dataRows){
+  var csv = [];
+  csv.push(headerArr.join(","));
+  for(var i=0;i<dataRows.length;i++){
+    csv.push(dataRows[i].map(csvVal_).join(","));
+  }
+  var blob = new Blob(["\uFEFF" + csv.join("\n")], {type:"text/csv;charset=utf-8;"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
+
 function reportExportCSV(){
+  reportExportDetailCSV();
+}
+
+function reportExportDetailCSV(){
   if(!adminIsUnlocked_()){
     alert("管理员功能：请先解锁（标题连点 7 次）");
     return;
   }
-  var sum = REPORT_CACHE.summary || [];
-  if(sum.length===0){
-    alert("没有可导出的数据（先点：拉取今天数据）");
+  var detail = REPORT_CACHE.detail_rows || [];
+  if(detail.length===0){
+    alert("没有可导出的工时明细（先拉取数据）");
     return;
   }
-
-  var csv = [];
-  csv.push(["badge","biz","task","minutes","badge_total_minutes"].join(","));
-  for(var i=0;i<sum.length;i++){
-    var r = sum[i];
-    csv.push([
-      '"' + String(r.badge).replace(/"/g,'""') + '"',
-      '"' + String(r.biz).replace(/"/g,'""') + '"',
-      '"' + String(r.task).replace(/"/g,'""') + '"',
-      String(r.minutes||0),
-      String(r.total_minutes||0)
-    ].join(","));
-  }
-
-  var blob = new Blob(["\uFEFF" + csv.join("\n")], {type:"text/csv;charset=utf-8;"});
-  var a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
+  var h = ["工牌","业务线","任务","趟次session","加入时间(KST)","退出时间(KST)","工时(分钟)","状态","备注"];
+  var data = detail.map(function(r){
+    return [r.badge, r.biz, r.task, r.session, r.join_time, r.leave_time, r.minutes, r.status, r.note];
+  });
   var rangeText = (REPORT_CACHE.meta.rangeLabel || "range").replace(/[^0-9A-Za-z_-]+/g, "_");
-  a.download = "ck_report_" + rangeText + "_" + Date.now() + ".csv";
-  a.click();
+  downloadCSV_("ck_工时明细_" + rangeText + "_" + Date.now() + ".csv", h, data);
+}
+
+function reportExportSessionCSV(){
+  if(!adminIsUnlocked_()){
+    alert("管理员功能：请先解锁（标题连点 7 次）");
+    return;
+  }
+  var ss = REPORT_CACHE.session_summary || [];
+  if(ss.length===0){
+    alert("没有可导出的趟次汇总（先拉取数据）");
+    return;
+  }
+  var h = ["趟次session","业务线","任务","开始时间(KST)","结束时间(KST)","总工时(人*分钟)","参与人数","单号数量","单号列表","参与人员","发起人"];
+  var data = ss.map(function(r){
+    return [r.session, r.biz, r.task, r.start_time, r.end_time, r.total_minutes, r.worker_count, r.wave_count, r.wave_list, r.workers, r.operator];
+  });
+  var rangeText = (REPORT_CACHE.meta.rangeLabel || "range").replace(/[^0-9A-Za-z_-]+/g, "_");
+  downloadCSV_("ck_趟次汇总_" + rangeText + "_" + Date.now() + ".csv", h, data);
 }
 
 function adminLogout(){

@@ -257,7 +257,8 @@
 
       <button class="primary" onclick="reportLoadRange()">拉取区间数据</button>
       <button onclick="reportLoadToday()">快捷：今天</button>
-      <button class="primary" onclick="reportExportCSV()">导出 CSV</button>
+      <button class="primary" onclick="reportExportDetailCSV()">导出工时明细 CSV</button>
+      <button class="primary" onclick="reportExportSessionCSV()">导出趟次汇总 CSV</button>
 
       <div id="reportMeta" class="muted" style="margin-top:8px;"></div>
       <div id="reportAnomalies" style="margin-top:10px;"></div>
@@ -722,6 +723,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=51"></script>
+  <script src="./app.js?v=52"></script>
 </body>
 </html>
