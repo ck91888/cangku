@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CK 看板 / Dashboard</title>
+  <!-- 复用你现有样式 -->
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    body{max-width:1200px;margin:16px auto;}
+    .tabs{display:flex;gap:10px;flex-wrap:wrap}
+    .tabs button{width:auto;min-width:160px}
+    .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    @media (max-width: 900px){ .grid3{grid-template-columns:1fr} }
+    .cardTitle{font-size:18px;font-weight:800;margin-bottom:6px}
+    .bigNum{font-size:34px;font-weight:900;line-height:1}
+    .sub{font-size:12px;color:#666;margin-top:6px}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <div>
+      <div class="title">CK 看板 / Dashboard</div>
+      <div class="subtitle">只读 · 全局在岗 + 工时汇总</div>
+    </div>
+    <div class="pill" id="asofPill">--</div>
+  </div>
+
+  <div class="card">
+    <div class="cardTitle">查看口令（只用于“劳效/工时汇总”）</div>
+    <div class="muted" style="margin-bottom:10px;">
+      全局在岗不需要口令；工时报表会调用 <span class="mono">admin_events_tail</span>，需要输入一次口令（浏览器会记住）。
+    </div>
+    <div class="row">
+      <div>
+        <small>口令</small>
+        <input id="keyInput" type="password" placeholder="输入口令" />
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:10px;">
+        <button class="primary" style="width:auto;min-width:140px" onclick="saveKey()">保存</button>
+        <button style="width:auto;min-width:140px" onclick="logout()">退出</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <button class="primary" style="width:auto" onclick="showTab('active')">全局在岗</button>
+      <button class="primary" style="width:auto" onclick="showTab('report')">劳效/工时汇总</button>
+      <button style="width:auto" onclick="refreshAll()">手动刷新</button>
+    </div>
+  </div>
+
+  <!-- Active -->
+  <div id="tab-active" class="card">
+    <div class="cardTitle">全局在岗</div>
+    <div id="activeMeta" class="muted"></div>
+    <div id="activeCards" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Report -->
+  <div id="tab-report" class="card" style="display:none;">
+    <div class="cardTitle">劳效 / 工时汇总（join/leave 统计）</div>
+
+    <div class="row">
+      <div>
+        <small>开始日期（KST）</small>
+        <input id="fromDate" type="date" />
+      </div>
+      <div>
+        <small>结束日期（KST）</small>
+        <input id="toDate" type="date" />
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="primary" style="width:auto" onclick="loadReport()">拉取区间数据</button>
+      <button style="width:auto" onclick="loadToday()">快捷：今天</button>
+    </div>
+
+    <div id="reportMeta" class="muted" style="margin-top:8px;"></div>
+    <div id="reportTop" style="margin-top:10px;"></div>
+    <div id="reportTable" style="margin-top:10px;"></div>
+  </div>
+
+  <script src="./leader.js"></script>
+</body>
+</html>
