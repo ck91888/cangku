@@ -163,14 +163,20 @@ export class LocksDO {
 }
 
 // ===== Worker HTTP API =====
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type"
+};
+
 function jsonpOrJson(obj, callback) {
   if (callback) {
     return new Response(`${callback}(${JSON.stringify(obj)});`, {
-      headers: { "content-type": "application/javascript; charset=utf-8" }
+      headers: { "content-type": "application/javascript; charset=utf-8", ...CORS_HEADERS }
     });
   }
   return new Response(JSON.stringify(obj), {
-    headers: { "content-type": "application/json; charset=utf-8" }
+    headers: { "content-type": "application/json; charset=utf-8", ...CORS_HEADERS }
   });
 }
 
@@ -271,6 +277,11 @@ function isView_(p, env){
 }
 export default {
   async fetch(request, env, ctx) {
+    // CORS preflight
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     const url = new URL(request.url);
     const q = Object.fromEntries(url.searchParams);
     const body = await readBody(request);
@@ -289,7 +300,7 @@ export default {
       return jsonpOrJson({ ok:true, asof: now, pong:true }, callback);
     }
 
-    if (action === "lock_acquire" || action === "lock_release" || action === "lock_status" || action === "locks_by_session") {
+    if (action === "lock_acquire" || action === "lock_release" || action === "lock_status") {
       const stub = locksStub(env);
       const r = await stub.fetch("https://locks/do", {
         method: "POST",
@@ -381,18 +392,13 @@ export default {
       return jsonpOrJson({ ok:true, closed:true, session, closed_ms, closed_by_operator: operator_id }, callback);
     }
 
-    // admin_events_tail：只要口令正确就允许
-    if (action === "admin_events_tail") {
-     if (!(isAdmin_(p, env) || isView_(p, env))) {
-      return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
-    }
-  // 不 return，继续走 events_tail 查询逻辑
-   }
-
-    if (action === "events_tail" || action === "admin_events_tail") {
-      // 如果你想“events_tail 也必须口令”，保留这段；想公开就删掉这个 if
-      if (action === "events_tail" && !isAdmin_(p, env)) {
-        return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+    if (action === “events_tail” || action === “admin_events_tail”) {
+      // events_tail: 需要 admin 权限; admin_events_tail: admin 或 view 权限
+      if (action === “events_tail” && !isAdmin_(p, env)) {
+        return jsonpOrJson({ ok:false, error:”unauthorized” }, callback);
+      }
+      if (action === “admin_events_tail” && !(isAdmin_(p, env) || isView_(p, env))) {
+        return jsonpOrJson({ ok:false, error:”unauthorized” }, callback);
       }
 
       const limit = Math.min(Math.max(parseInt(p.limit || "5000", 10) || 5000, 1), 20000);
@@ -575,13 +581,8 @@ export default {
           if (lr && lr.released) {
             lockReleased = true;
           } else if (lr && !lr.released && (lr.reason === "different_task" || lr.reason === "different_session")) {
-            // ✅ task/session 不匹配时 fallback 强制释放，防止锁永远卡住
-            const fr = await (await stub.fetch("https://locks/do", {
-              method: "POST",
-              headers: { "content-type":"application/json" },
-              body: JSON.stringify({ action:"lock_force_release", badge })
-            })).json();
-            lockReleased = !!(fr && fr.released);
+            // Badge已移至其他task/session，旧锁已被覆盖，不应强制释放新锁
+            lockReleased = true;
           } else if (lr && !lr.released && lr.reason === "not_found") {
             lockReleased = true; // 锁已经不存在，视为成功
           }

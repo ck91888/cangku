@@ -36,7 +36,7 @@ function setAsofPill_(ms){
   catch(e){ el.textContent = String(ms||"--"); }
 }
 
-// ===== JSONP（从你 app.js 精简版改出来的） :contentReference[oaicite:6]{index=6} =====
+// ===== JSONP (public endpoints) =====
 function jsonp(url, params){
   return new Promise(function(resolve, reject){
     var cb = "cb_" + Math.random().toString(16).slice(2);
@@ -71,6 +71,16 @@ function jsonp(url, params){
     script.src = src;
     document.body.appendChild(script);
   });
+}
+
+// ===== fetchApi (admin endpoints, POST body hides sensitive key) =====
+async function fetchApi(params){
+  var res = await fetch(LOCK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params)
+  });
+  return await res.json();
 }
 
 // ===== 登录/口令 =====
@@ -205,7 +215,7 @@ async function loadReport(){
 
   meta.textContent = "拉取中…";
   try{
-    var res = await jsonp(LOCK_URL, {
+    var res = await fetchApi({
       action:"admin_events_tail",
       k:k,
       limit:20000,
@@ -226,6 +236,11 @@ async function loadReport(){
     var out = buildSummary_(header, rows);
     renderReport_(dayFrom, dayTo, rows.length, out);
 
+    if(rows.length >= 20000){
+      var warnEl = document.getElementById("reportMeta");
+      if(warnEl) warnEl.textContent += " | ⚠️ 已达上限20000条，数据可能不完整，请缩小日期范围";
+    }
+
   }catch(e){
     meta.textContent = "异常：" + String(e && e.message ? e.message : e);
   }
@@ -241,13 +256,13 @@ function buildSummary_(header, rows){
 
   var active = {}; // badge -> {t,biz,task}
   var acc = {};    // badge -> { total_ms, tasks: {k:ms} }
-  var totalsByTask = {}; // "biz/task" -> ms
+  var totalsByTask = {}; // "biz|task" -> ms
   var anomalies = { open:0, leave_without_join:0, rejoin_without_leave:0 };
 
   function addDur(badge, biz, task, dur){
     if(!acc[badge]) acc[badge] = { total_ms:0, tasks:{} };
     acc[badge].total_ms += dur;
-    var k = biz + "/" + task;
+    var k = biz + "|" + task;
     totalsByTask[k] = (totalsByTask[k]||0) + dur;
     acc[badge].tasks[k] = (acc[badge].tasks[k]||0) + dur;
   }
@@ -309,9 +324,9 @@ function buildSummary_(header, rows){
     people.push({ badge:badge, total_minutes: totalMin });
 
     Object.keys(o.tasks).forEach(function(k){
-      var parts = k.split("/");
-      var biz = parts[0]||"";
-      var task = parts[1]||"";
+      var idx = k.indexOf("|");
+      var biz = idx >= 0 ? k.substring(0, idx) : k;
+      var task = idx >= 0 ? k.substring(idx + 1) : "";
       summary.push({
         badge: badge,
         biz: biz,
@@ -353,7 +368,7 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
 
   // 顶部：按任务汇总 + TOP 人员
   var taskHtml = out.taskTotals.slice(0,12).map(function(x){
-    return '<span class="tag">'+esc(x.key)+' · '+esc(x.minutes)+'m</span>';
+    return '<span class="tag">'+esc(x.key.replace("|","/"))+' · '+esc(x.minutes)+'m</span>';
   }).join("");
 
   var peopleHtml = out.people.slice(0,12).map(function(p){

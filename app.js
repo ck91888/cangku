@@ -51,7 +51,7 @@ async function adminVerifyKey_(key){
   key = String(key||"").trim();
   if(!key) return false;
   try{
-    var res = await jsonp(LOCK_URL, { action:"admin_events_tail", k:key, limit: 1 });
+    var res = await fetchApi({ action:"admin_events_tail", k:key, limit: 1 });
     return !!(res && res.ok===true);
   }catch(e){
     return false;
@@ -665,7 +665,7 @@ function restoreState(){
 async function syncActiveFromServer_(){
   if(!currentSessionId) return;
   try{
-    var res = await jsonp(LOCK_URL, { action:"locks_by_session", session: currentSessionId }, { skipBusy: true });
+    var res = await jsonp(LOCK_URL, { action:"session_info", session: currentSessionId }, { skipBusy: true });
     if(!res || !res.ok) return;
     var serverLocks = res.active || [];
     // 按 task 分组
@@ -891,6 +891,16 @@ function jsonp(url, params, opts){
   });
 }
 
+/** ===== fetchApi (admin endpoints, POST body hides sensitive key) ===== */
+async function fetchApi(params){
+  var res = await fetch(LOCK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params)
+  });
+  return await res.json();
+}
+
 /** ===== Async event queue (non-locking events) ===== */
 var QUEUE_KEY = "event_queue_v1";
 var FLUSHING = false;
@@ -988,6 +998,30 @@ async function submitEventSync_(o, silent){
   }
 
   return res;
+}
+
+async function submitEventSyncWithRetry_(payload, maxRetries){
+  maxRetries = maxRetries || 2;
+  var lastErr;
+  for(var attempt = 0; attempt <= maxRetries; attempt++){
+    try{
+      return await submitEventSync_(payload);
+    }catch(e){
+      lastErr = e;
+      var msg = String(e && e.message ? e.message : e);
+      if(msg.indexOf("task_not_started") >= 0 ||
+         msg.indexOf("session_closed") >= 0 ||
+         msg.indexOf("operator_has_open_session") >= 0 ||
+         msg.indexOf("已在其它设备") >= 0 ||
+         msg.indexOf("locked_by_other") >= 0){
+        throw e;
+      }
+      if(attempt < maxRetries){
+        await new Promise(function(r){ setTimeout(r, 1000 * (attempt + 1)); });
+      }
+    }
+  }
+  throw lastErr;
 }
 
 async function submitEvent(o){
@@ -1345,7 +1379,7 @@ async function adminForceLeave(btn){
   if(!ok) return;
   try{
     setStatus("强制下线中... ⏳", true);
-    var res = await jsonp(LOCK_URL, { action:"admin_force_leave", k:adminKey_(), badge:badge, task:task, session:session, biz:biz });
+    var res = await fetchApi({ action:"admin_force_leave", k:adminKey_(), badge:badge, task:task, session:session, biz:biz });
     if(!res || res.ok !== true){
       setStatus("强制下线失败 ❌ " + (res && res.error ? res.error : ""), false);
       alert("强制下线失败：" + (res && res.error ? res.error : "unknown"));
@@ -1366,7 +1400,7 @@ async function refreshGlobalSessions(){
   var metaEl = document.getElementById("sessionListMeta");
   if(metaEl) metaEl.textContent = "加载中... ⏳";
   try{
-    var res = await jsonp(LOCK_URL, { action:"admin_sessions_list", k:adminKey_() });
+    var res = await fetchApi({ action:"admin_sessions_list", k:adminKey_() });
     if(!res || res.ok !== true){
       if(metaEl) metaEl.textContent = "加载失败 ❌ " + (res && res.error ? res.error : "");
       return;
@@ -1470,7 +1504,7 @@ async function adminForceEndSession(btn){
   if(!ok) return;
   try{
     setStatus("强制结束中... ⏳", true);
-    var res = await jsonp(LOCK_URL, { action:"admin_force_end_session", k:adminKey_(), session:session });
+    var res = await fetchApi({ action:"admin_force_end_session", k:adminKey_(), session:session });
     if(!res || res.ok !== true){
       setStatus("强制结束失败 ❌ " + (res && res.error ? res.error : ""), false);
       alert("强制结束失败：" + (res && res.error ? res.error : "unknown"));
@@ -1484,111 +1518,47 @@ async function adminForceEndSession(btn){
   }
 }
 
-/** ===== Start / End: B2C tasks ===== */
-  async function startTally(){
-  // ✅ 防连点保护
+/** ===== Start / End: Generic + Task-specific ===== */
+async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
   if(currentSessionId){
     var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
     if(!ok) return;
   }
-  var btn = event && event.target ? event.target : null;
+  var btn = e && e.target ? e.target : null;
+  var origText = btn ? btn.textContent : "";
   if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
 
-
   try{
-    var biz = "B2C", task = "理货";
     var newSid = makePickSessionId();
-
-    // ✅ 先调服务器确认（避免有未关闭趟次时写入错误的本地 session）
     var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
     await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
     addRecent(evId);
 
-    // ✅ 服务器确认后才写入本地状态
     currentSessionId = newSid;
-    CUR_CTX = { biz: biz, task: task, page: "b2c_tally" };
+    CUR_CTX = { biz: biz, task: task, page: page };
     setSess_(biz, task, newSid);
-    scannedInbounds = new Set();
-    activeTally = new Set();
+    if(resetFn) resetFn();
     persistState();
     refreshUI();
-
     renderActiveLists();
-    renderInboundCountUI();
-    setStatus("理货开始 ✅ 新趟次: " + newSid, true);
-    }catch(e){
-    setStatus("理货开始失败 ❌ " + e, false);
-    alert(String(e));
+    if(postRenderFn) postRenderFn();
+    setStatus(task + "开始 ✅ 新趟次: " + newSid, true);
+  }catch(err){
+    setStatus(task + "开始失败 ❌ " + err, false);
+    alert(String(err));
   }finally{
-    if(btn){ btn.disabled = false; btn.textContent = "开始理货 시작"; }
+    if(btn){ btn.disabled = false; btn.textContent = origText; }
   }
 }
+
+function startTally(e){ startGeneric_(e, "B2C", "理货", "b2c_tally", function(){ scannedInbounds = new Set(); activeTally = new Set(); }, renderInboundCountUI); }
 async function endTally(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
-async function startBulkOut(){
-  if(currentSessionId){
-    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
-    if(!ok) return;
-  }
-  var btn = event && event.target ? event.target : null;
-  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
-
-  try{
-    var biz = "B2C", task = "批量出库";
-    var newSid = makePickSessionId();
-
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
-    addRecent(evId);
-
-    currentSessionId = newSid;
-    CUR_CTX = { biz: biz, task: task, page: "b2c_bulkout" };
-    setSess_(biz, task, newSid);
-    scannedBulkOutOrders = new Set();
-    activeBulkOut = new Set();
-    persistState();
-    refreshUI();
-
-    renderActiveLists();
-    renderBulkOutUI();
-    setStatus("批量出库开始 ✅ 新趟次: " + newSid, true);
-    }catch(e){
-    setStatus("理货开始失败 ❌ " + e, false);
-    alert(String(e));
-  }finally{
-    if(btn){ btn.disabled = false; btn.textContent = "开始批量出库 시작"; }
-  }
-}
+function startBulkOut(e){ startGeneric_(e, "B2C", "批量出库", "b2c_bulkout", function(){ scannedBulkOutOrders = new Set(); activeBulkOut = new Set(); }, renderBulkOutUI); }
 async function endBulkOut(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 /** ===== B2B Tally (like B2C Tally) ===== */
-async function startB2bTally(){
-  if(currentSessionId){
-    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？");
-    if(!ok) return;
-  }
-  var btn = event && event.target ? event.target : null;
-  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
-  try{
-    var biz = "B2B", task = "B2B入库理货";
-    var newSid = makePickSessionId();
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
-    addRecent(evId);
-    currentSessionId = newSid;
-    CUR_CTX = { biz: biz, task: task, page: "b2b_tally" };
-    setSess_(biz, task, newSid);
-    scannedB2bTallyOrders = new Set();
-    activeB2bTally = new Set();
-    persistState(); refreshUI();
-    renderActiveLists(); renderB2bTallyUI();
-    setStatus("B2B理货开始 ✅ 新趟次: " + newSid, true);
-  }catch(e){
-    setStatus("B2B理货开始失败 ❌ " + e, false); alert(String(e));
-  }finally{
-    if(btn){ btn.disabled = false; btn.textContent = "开始理货 시작"; }
-  }
-}
+function startB2bTally(e){ startGeneric_(e, "B2B", "B2B入库理货", "b2b_tally", function(){ scannedB2bTallyOrders = new Set(); activeB2bTally = new Set(); }, renderB2bTallyUI); }
 async function endB2bTally(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 async function openScannerB2bTallyOrder(){
@@ -1636,33 +1606,7 @@ function renderB2bTallyUI(){
 }
 
 /** ===== B2B Workorder (like B2C BulkOut) ===== */
-async function startB2bWorkorder(){
-  if(currentSessionId){
-    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？");
-    if(!ok) return;
-  }
-  var btn = event && event.target ? event.target : null;
-  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
-  try{
-    var biz = "B2B", task = "B2B工单操作";
-    var newSid = makePickSessionId();
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
-    addRecent(evId);
-    currentSessionId = newSid;
-    CUR_CTX = { biz: biz, task: task, page: "b2b_workorder" };
-    setSess_(biz, task, newSid);
-    scannedB2bWorkorders = new Set();
-    activeB2bWorkorder = new Set();
-    persistState(); refreshUI();
-    renderActiveLists(); renderB2bWorkorderUI();
-    setStatus("B2B工单操作开始 ✅ 新趟次: " + newSid, true);
-  }catch(e){
-    setStatus("B2B工单操作开始失败 ❌ " + e, false); alert(String(e));
-  }finally{
-    if(btn){ btn.disabled = false; btn.textContent = "开始操作 시작"; }
-  }
-}
+function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); }, renderB2bWorkorderUI); }
 async function endB2bWorkorder(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 async function openScannerB2bWorkorder(){
@@ -1709,41 +1653,7 @@ function renderB2bWorkorderUI(){
   }
 }
 
-async function startPicking(){
-  if(currentSessionId){
-    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
-    if(!ok) return;
-  }
-  var btn = event && event.target ? event.target : null;
-  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
-
-  try{
-    var biz = "B2C", task = "拣货";
-    var newSid = makePickSessionId();
-
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
-    addRecent(evId);
-
-    currentSessionId = newSid;
-    CUR_CTX = { biz: biz, task: task, page: "b2c_pick" };
-    setSess_(biz, task, newSid);
-    scannedWaves = new Set();
-    activePick = new Set();
-    leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0");
-    syncLeaderPickUI();
-    persistState();
-    refreshUI();
-
-    renderActiveLists();
-    setStatus("拣货开始 ✅ 新趟次: " + newSid, true);
-    }catch(e){
-    setStatus("拣货开始失败 ❌ " + e, false);
-    alert(String(e));
-  }finally{
-    if(btn){ btn.disabled = false; btn.textContent = "开始拣货 시작"; }
-  }
-}
+function startPicking(e){ startGeneric_(e, "B2C", "拣货", "b2c_pick", function(){ scannedWaves = new Set(); activePick = new Set(); leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0"); syncLeaderPickUI(); }); }
 
 function setRelabelTimerText(text){
   var el = document.getElementById("relabelTimer");
@@ -1760,40 +1670,7 @@ function startRelabelTimer(){
   }, 1000);
 }
 
-async function startRelabel(){
-  if(currentSessionId){
-    var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
-    if(!ok) return;
-  }
-  var btn = event && event.target ? event.target : null;
-  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
-
-  try{
-    var biz = "B2C", task = "换单";
-    var newSid = makePickSessionId();
-
-    var evId = makeEventId({ event:"start", biz:biz, task:task, wave_id:"", badgeRaw:"" });
-    await submitEventSync_({ event:"start", event_id: evId, biz:biz, task:task, pick_session_id: newSid }, true);
-    addRecent(evId);
-
-    currentSessionId = newSid;
-    CUR_CTX = { biz: biz, task: task, page: "b2c_relabel" };
-    setSess_(biz, task, newSid);
-    activeRelabel = new Set();
-    relabelStartTs = Date.now();
-    startRelabelTimer();
-    persistState();
-    refreshUI();
-
-    renderActiveLists();
-    setStatus("换单开始 ✅ 新趟次: " + newSid, true);
-    }catch(e){
-    setStatus("换单开始失败 ❌ " + e, false);
-    alert(String(e));
-  }finally{
-    if(btn){ btn.disabled = false; btn.textContent = "开始换单 시작"; }
-  }
-}
+function startRelabel(e){ startGeneric_(e, "B2C", "换单", "b2c_relabel", function(){ activeRelabel = new Set(); relabelStartTs = Date.now(); startRelabelTimer(); }); }
 async function endRelabel(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 /** ===== PICK end ===== */
@@ -2374,7 +2251,7 @@ async function openScannerCommon(){
         };
         if(tripNote) submitPayload.note = tripNote;
 
-        var syncRes = await submitEventSync_(submitPayload);
+        var syncRes = await submitEventSyncWithRetry_(submitPayload);
 
         addRecent(evId);
 
@@ -2482,13 +2359,14 @@ function cleanupOldLocalStorage_(){
     for(var i=0; i<localStorage.length; i++){
       keysToCheck.push(localStorage.key(i));
     }
-    // 收集所有带 PS- session ID 的 key
+    // 收集所有带 PS- session ID 的 key（含 session_id_ 前缀的映射 key）
     var sessionKeys = {};
     keysToCheck.forEach(function(k){
       if(!k) return;
-      var m = k.match(/_(PS-(\d{8})-\d{6}-.+)$/);
+      // 匹配 key 中嵌入的 PS-YYYYMMDD-... 格式
+      var m = k.match(/PS-(\d{8})-/);
       if(!m) return;
-      var dateStr = m[2]; // e.g. "20260305"
+      var dateStr = m[1];
       if(!sessionKeys[dateStr]) sessionKeys[dateStr] = [];
       sessionKeys[dateStr].push(k);
     });
@@ -2563,7 +2441,7 @@ function reportLoadRange(){
 
   setStatus("拉取区间数据中... ⏳", true);
 
-  jsonp(LOCK_URL, {
+  fetchApi({
     action: "admin_events_tail",
     k: k,
     limit: 20000,
@@ -2587,6 +2465,10 @@ function reportLoadRange(){
 
     buildReportSummary_();
     renderReport_();
+    if((REPORT_CACHE.rows||[]).length >= 20000){
+      var wEl = document.getElementById("reportMeta");
+      if(wEl) wEl.textContent += " | ⚠️ 已达上限20000条，数据可能不完整，请缩小日期范围";
+    }
     setStatus("拉取完成 ✅", true);
   }).catch(function(e){
     setStatus("拉取异常 ❌", false);

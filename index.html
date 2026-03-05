@@ -346,7 +346,7 @@
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 入库单号扫码（去重计数）。</div>
 
-      <button class="primary" onclick="startTally()">开始理货 / 시작</button>
+      <button class="primary" onclick="startTally(event)">开始理货 / 시작</button>
 
       <button class="primary" onclick="joinWork('B2C','理货')">加入作业 / 참여</button>
       <button class="primary" onclick="leaveWork('B2C','理货')">退出作业 / 퇴장</button>
@@ -377,7 +377,7 @@
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 出库单号扫码（去重计数）。</div>
 
-      <button class="primary" onclick="startBulkOut()">开始批量出库 / 시작</button>
+      <button class="primary" onclick="startBulkOut(event)">开始批量出库 / 시작</button>
 
       <button class="primary" onclick="joinWork('B2C','批量出库')">加入作业 / 참여</button>
       <button class="primary" onclick="leaveWork('B2C','批量出库')">退出作业 / 퇴장</button>
@@ -470,7 +470,7 @@
     </div>
 
     <div class="card">
-      <button class="primary" onclick="startPicking()">开始拣货 / 시작</button>
+      <button class="primary" onclick="startPicking(event)">开始拣货 / 시작</button>
 
       <button class="primary" onclick="joinWork('B2C','拣货')">加入作业 / 참여</button>
       <button class="primary" onclick="leaveWork('B2C','拣货')">退出作业 / 퇴장</button>
@@ -496,7 +496,7 @@
     <div class="card">
       <div class="muted">本页面只记录开始/结束 + 加入/退出（0额外扫码）。</div>
 
-      <button class="primary" onclick="startRelabel()">开始换单 / 시작</button>
+      <button class="primary" onclick="startRelabel(event)">开始换单 / 시작</button>
 
       <button class="primary" onclick="joinWork('B2C','换单')">加入作业 / 참여</button>
       <button class="primary" onclick="leaveWork('B2C','换单')">退出作业 / 퇴장</button>
@@ -575,7 +575,7 @@
     </div>
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 理货单号扫码或手动输入（去重计数）。</div>
-      <button class="primary" onclick="startB2bTally()">开始理货 / 시작</button>
+      <button class="primary" onclick="startB2bTally(event)">开始理货 / 시작</button>
       <button class="primary" onclick="joinWork('B2B','B2B入库理货')">加入作业 / 참여</button>
       <button class="primary" onclick="leaveWork('B2B','B2B入库理货')">退出作业 / 퇴장</button>
       <div class="listBox">
@@ -603,7 +603,7 @@
     </div>
     <div class="card">
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 工单号扫码或手动输入（去重计数）。</div>
-      <button class="primary" onclick="startB2bWorkorder()">开始操作 / 시작</button>
+      <button class="primary" onclick="startB2bWorkorder(event)">开始操作 / 시작</button>
       <button class="primary" onclick="joinWork('B2B','B2B工单操作')">加入作业 / 참여</button>
       <button class="primary" onclick="leaveWork('B2B','B2B工单操作')">退出作业 / 퇴장</button>
       <div class="listBox">
@@ -722,6 +722,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=50"></script>
+  <script src="./app.js?v=51"></script>
 </body>
 </html>
