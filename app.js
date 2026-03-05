@@ -1877,11 +1877,30 @@ async function returnFromTempUnload_(){
   }
 }
 
+function b2bUnloadBack(){
+  var saved = localStorage.getItem("tempSwitchFromWorkorder");
+  if(saved){
+    var go_ = confirm("您正在临时卸货中，直接返回会导致卸货锁未释放。\n\n• 点【确定】→ 先自动返回工单再离开\n• 点【取消】→ 留在卸货页");
+    if(go_) returnFromTempUnload();
+    return;
+  }
+  back();
+}
+
 function updateReturnButton_(){
   var btn = document.getElementById("btnReturnToWorkorder");
   if(!btn) return;
   var saved = localStorage.getItem("tempSwitchFromWorkorder");
   if(saved){
+    // 过期检查：超过12小时自动清除
+    try{
+      var ctx = JSON.parse(saved);
+      if(ctx.timestamp && Date.now() - ctx.timestamp > 12 * 3600 * 1000){
+        localStorage.removeItem("tempSwitchFromWorkorder");
+        btn.style.display = "none";
+        return;
+      }
+    }catch(e){}
     btn.style.display = "block";
     return;
   }
