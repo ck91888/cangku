@@ -1,5 +1,5 @@
 // ===== 配置 =====
-var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev"; // 你主系统同款 :contentReference[oaicite:4]{index=4}
+var LOCK_URL = "https://api.ck91888.cn"; // 你主系统同款 :contentReference[oaicite:4]{index=4}
 var KEY_STORAGE = "leader_view_k_v1";
 
 // ===== 小工具 =====
