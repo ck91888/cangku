@@ -1679,7 +1679,49 @@ async function tempSwitchToUnload_(){
     return;
   }
 
-  // 2. 保存工单上下文到 localStorage（badges 数组）
+  // 2. 自动 start 卸货 session + 自动 join 所有人
+  setStatus("正在加入卸货... ⏳", true);
+  var unloadSid = getSess_("B2B", "B2B卸货");
+  if(!unloadSid){
+    // 创建新的卸货 session
+    unloadSid = makePickSessionId();
+    var evStart = makeEventId({ event:"start", biz:"B2B", task:"B2B卸货", wave_id:"", badgeRaw:"" });
+    try{
+      await submitEventSync_({ event:"start", event_id: evStart, biz:"B2B", task:"B2B卸货", pick_session_id: unloadSid }, true);
+      addRecent(evStart);
+      activeB2bUnload = new Set();
+    }catch(e){
+      setStatus("创建卸货趟次失败 ❌ " + e, false);
+      alert("创建卸货趟次失败：" + e + "\n\n已退出工单，请手动在卸货页加入。");
+      // 仍然保存上下文，让用户可以手动操作后返回
+      localStorage.setItem("tempSwitchFromWorkorder", JSON.stringify({
+        badges: leftBadges, workorderSession: woSid,
+        workorders: Array.from(scannedB2bWorkorders), timestamp: Date.now()
+      }));
+      go("b2b_unload"); refreshUI(); updateReturnButton_();
+      return;
+    }
+  }
+  currentSessionId = unloadSid;
+  CUR_CTX = { biz:"B2B", task:"B2B卸货", page:"b2b_unload" };
+  setSess_("B2B", "B2B卸货", unloadSid);
+
+  // 逐个 join 卸货
+  var joinedUnload = [];
+  for(var u = 0; u < leftBadges.length; u++){
+    try{
+      var evJoin = makeEventId({ event:"join", biz:"B2B", task:"B2B卸货", wave_id:"", badgeRaw: leftBadges[u] });
+      await submitEventSyncWithRetry_({ event:"join", event_id: evJoin, biz:"B2B", task:"B2B卸货", pick_session_id: unloadSid, da_id: leftBadges[u] });
+      addRecent(evJoin);
+      applyActive("B2B卸货", "join", leftBadges[u]);
+      joinedUnload.push(leftBadges[u]);
+    }catch(e){
+      alert("加入卸货失败（" + badgeDisplay(leftBadges[u]) + "）：" + e);
+    }
+  }
+  persistState();
+
+  // 3. 保存工单上下文到 localStorage
   var ctx = {
     badges: leftBadges,
     workorderSession: woSid,
@@ -1688,10 +1730,11 @@ async function tempSwitchToUnload_(){
   };
   localStorage.setItem("tempSwitchFromWorkorder", JSON.stringify(ctx));
 
-  // 3. 导航到卸货页（joinWork 由用户在卸货页正常操作）
-  setStatus("已退出工单（" + leftBadges.length + "人），请在卸货页扫码加入 ✅", true);
+  // 4. 导航到卸货页
+  setStatus("已切换到卸货 ✅（" + joinedUnload.length + "/" + leftBadges.length + "人已加入）", true);
   go("b2b_unload");
   refreshUI();
+  renderActiveLists();
   updateReturnButton_();
 }
 

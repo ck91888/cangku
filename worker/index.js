@@ -470,16 +470,21 @@ export default {
       if (event === "start" && session) {
         if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
 
-        // 查这个设备是否已有未结束 session，拣货 session（B2C/PICK）允许与其他 session 同时存在
+        // 查这个设备是否已有未结束 session
+        // 豁免：拣货 session 和 B2B卸货 session 允许与其他 session 同时存在（临时去卸货场景）
         const open = await env.DB.prepare(
           `SELECT session,biz,task FROM sessions
            WHERE status='OPEN' AND created_by_operator=?
            AND NOT (biz='B2C' AND task='拣货')
+           AND NOT (biz='B2B' AND task='B2B卸货')
            ORDER BY created_ms DESC
            LIMIT 1`
         ).bind(operator_id).first();
 
-        if (open && String(open.session || "") !== session) {
+        // 反向检查：如果当前要 start 的不是卸货/拣货，也要排除已有的卸货/拣货 session
+        const isExempt = (biz==='B2C' && task==='拣货') || (biz==='B2B' && task==='B2B卸货');
+
+        if (open && String(open.session || "") !== session && !isExempt) {
           return jsonpOrJson({
             ok:false,
             error:"operator_has_open_session",
