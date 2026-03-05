@@ -628,7 +628,8 @@ function makeEventId(params){
     (params.biz||""),
     (params.task||""),
     (params.event||""),
-    (params.badgeRaw||"")
+    (params.badgeRaw||""),
+    String(Date.now())
   ].join("|");
 }
 
