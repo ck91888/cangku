@@ -1869,7 +1869,40 @@ function updateReturnButton_(){
   var btn = document.getElementById("btnReturnToWorkorder");
   if(!btn) return;
   var saved = localStorage.getItem("tempSwitchFromWorkorder");
-  btn.style.display = saved ? "block" : "none";
+  if(saved){
+    btn.style.display = "block";
+    return;
+  }
+  // 本机没有切换记录时，查服务端：当前操作员是否同时有工单 session 在开
+  btn.style.display = "none";
+  var op = getOperatorId();
+  if(!op) return;
+  jsonp(LOCK_URL, { action:"operator_open_sessions", operator_id: op }, { skipBusy: true }).then(function(res){
+    if(!res || !res.sessions) return;
+    var woSession = null;
+    var inUnload = false;
+    for(var i = 0; i < res.sessions.length; i++){
+      var s = res.sessions[i];
+      if(s.biz === "B2B" && s.task === "B2B工单操作") woSession = s;
+      if(s.biz === "B2B" && s.task === "B2B卸货") inUnload = true;
+    }
+    if(woSession && inUnload){
+      // 有工单+卸货同时在开 → 说明是临时卸货场景，自动创建上下文
+      // 查服务端获取卸货 session 里当前在岗的人
+      var unloadSid = getSess_("B2B", "B2B卸货");
+      var activeBadges = Array.from(activeB2bUnload);
+      localStorage.setItem("tempSwitchFromWorkorder", JSON.stringify({
+        badges: activeBadges,
+        workorderSession: woSession.session,
+        workorders: [],
+        timestamp: Date.now(),
+        fromRemote: true
+      }));
+      // 同步设置工单 session 到本地
+      setSess_("B2B", "B2B工单操作", woSession.session);
+      btn.style.display = "block";
+    }
+  }).catch(function(){});
 }
 
 async function openScannerB2bWorkorder(){
