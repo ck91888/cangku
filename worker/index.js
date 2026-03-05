@@ -392,13 +392,13 @@ export default {
       return jsonpOrJson({ ok:true, closed:true, session, closed_ms, closed_by_operator: operator_id }, callback);
     }
 
-    if (action === “events_tail” || action === “admin_events_tail”) {
+    if (action === "events_tail" || action === "admin_events_tail") {
       // events_tail: 需要 admin 权限; admin_events_tail: admin 或 view 权限
-      if (action === “events_tail” && !isAdmin_(p, env)) {
-        return jsonpOrJson({ ok:false, error:”unauthorized” }, callback);
+      if (action === "events_tail" && !isAdmin_(p, env)) {
+        return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       }
-      if (action === “admin_events_tail” && !(isAdmin_(p, env) || isView_(p, env))) {
-        return jsonpOrJson({ ok:false, error:”unauthorized” }, callback);
+      if (action === "admin_events_tail" && !(isAdmin_(p, env) || isView_(p, env))) {
+        return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       }
 
       const limit = Math.min(Math.max(parseInt(p.limit || "5000", 10) || 5000, 1), 20000);
@@ -491,7 +491,7 @@ export default {
 
         await ensureSessionOpen(env, session, operator_id, biz, task);
 
-        // ✅✅ 关键修复：start 时把该任务标记为 OPEN，join 才不会说“没开始”
+        // ✅✅ 关键修复：start 时把该任务标记为 OPEN，join 才不会说"没开始"
         if (task && task !== "SESSION" && requireStart_(task)) {
           await taskStateOpen_(env, session, biz, task, server_ms, operator_id);
         }

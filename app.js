@@ -1774,7 +1774,7 @@ async function joinWork_(biz, task){
   }
 
   if(!sid){
-    // 非自动任务（TALLY/PICK/RELABEL/批量出库）：必须先点“开始”生成新趟次
+    // 非自动任务（TALLY/PICK/RELABEL/批量出库）：必须先点"开始"生成新趟次
     setStatus("请先点【开始】生成新趟次", false);
     alert("该环节必须先点【开始】生成新趟次（session），再扫码加入。");
     return;

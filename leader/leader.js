@@ -10,7 +10,7 @@ function esc(s){
 }
 function pad2_(n){ n=String(n); return n.length<2 ? ("0"+n) : n; }
 
-// 你原系统用“+9小时偏移”来实现 KST 日期边界 :contentReference[oaicite:5]{index=5}
+// 你原系统用"+9小时偏移"来实现 KST 日期边界 :contentReference[oaicite:5]{index=5}
 function kstDayKey_(ms){
   var d = new Date(ms + 9*3600*1000);
   return d.getUTCFullYear() + "-" + pad2_(d.getUTCMonth()+1) + "-" + pad2_(d.getUTCDate());
@@ -413,7 +413,7 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
 // ===== 一键刷新 + 自动刷新 =====
 async function refreshAll(){
   await refreshActive();
-  // 报表不强制刷新（避免频繁拉 20000 rows），用户可点“拉取区间数据”
+  // 报表不强制刷新（避免频繁拉 20000 rows），用户可点"拉取区间数据"
 }
 
 (function init(){
