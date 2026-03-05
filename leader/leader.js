@@ -407,6 +407,10 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
     '</span>';
 
   // ===== 总览卡片 =====
+  var COST_PER_MIN = 290; // 韩币/人·分钟
+  var totalCost = totalMinutes * COST_PER_MIN;
+  var costStr = totalCost >= 10000 ? Math.round(totalCost / 10000) + '만' : totalCost.toLocaleString();
+
   var overviewHtml =
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">' +
       '<div style="background:#f0f7ff;border-radius:12px;padding:16px;text-align:center;">' +
@@ -420,6 +424,10 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
       '<div style="background:#fffbf0;border-radius:12px;padding:16px;text-align:center;">' +
         '<div style="font-size:32px;font-weight:900;color:#e67e22;">' + fmtHM_(avgMinutes) + '</div>' +
         '<div style="font-size:13px;color:#666;margin-top:4px;">人均工时</div>' +
+      '</div>' +
+      '<div style="background:#fff0f0;border-radius:12px;padding:16px;text-align:center;">' +
+        '<div style="font-size:28px;font-weight:900;color:#e74c3c;">\u20A9' + esc(costStr) + '</div>' +
+        '<div style="font-size:13px;color:#666;margin-top:4px;">\uD83D\uDCB8 累计人力费</div>' +
       '</div>' +
     '</div>';
 
