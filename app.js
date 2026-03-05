@@ -12,7 +12,7 @@ var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
 /** ===== Router ===== */
 var pages = [
   "home","badge","global_menu","b2c_menu",
-  "import_menu","import_unload","import_scan_pallet","import_loadout",
+  "import_menu","import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
   "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound","b2b_inventory",
   "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_inventory","b2c_disposal","b2c_relabel",
   "warehouse_cleanup",
@@ -136,6 +136,8 @@ function renderPages(){
   if(cur==="import_unload"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="import_scan_pallet"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="import_loadout"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="import_pickup"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="import_problem"){ restoreState(); renderActiveLists(); refreshUI(); }
 
   if(cur==="b2b_menu"){ refreshUI(); }
   if(cur==="b2b_unload"){ restoreState(); renderActiveLists(); refreshUI(); }
@@ -153,7 +155,8 @@ function renderPages(){
 
   // 进入任务页时异步同步服务器在岗列表（解决换设备/刷新后本地列表为空的问题）
   var taskPages = ["b2c_tally","b2c_bulkout","b2c_pick","b2c_pack","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
-    "import_unload","import_scan_pallet","import_loadout","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound",
+    "import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
+    "b2b_unload","b2b_tally","b2b_workorder","b2b_outbound",
     "b2b_inventory","b2c_inventory","warehouse_cleanup"];
   if(taskPages.indexOf(cur) >= 0 && currentSessionId){
     syncActiveFromServer_();
@@ -216,6 +219,8 @@ var PAGE_CTX = {
   "import_unload":      { biz:"进口", task:"卸货" },
   "import_scan_pallet": { biz:"进口", task:"过机扫描码托" },
   "import_loadout":     { biz:"进口", task:"装柜/出货" },
+  "import_pickup":      { biz:"进口", task:"取/送货" },
+  "import_problem":     { biz:"进口", task:"问题处理" },
 
   // ===== B2B =====
   "b2b_unload":    { biz:"B2B", task:"B2B卸货" },
@@ -242,6 +247,8 @@ var TASK_DISPLAY = {
   "进口/卸货":        "进口 卸货 / 수입 하차",
   "进口/过机扫描码托": "进口 过机扫描 / 수입 기계스캔",
   "进口/装柜/出货":   "进口 装柜出货 / 수입 컨테이너적재",
+  "进口/取/送货":     "进口 取/送货 / 수입 픽업·배송",
+  "进口/问题处理":     "进口 问题处理 / 수입 문제처리",
   "B2B/B2B卸货":        "B2B 卸货 / B2B 하차",
   "B2B/B2B入库理货":    "B2B 理货 / B2B 입고정리",
   "B2B/B2B工单操作":    "B2B 工单 / B2B 작업지시",
@@ -363,6 +370,11 @@ var activeB2bOutbound = new Set();
 var activeB2bInventory = new Set();
 var activeB2cInventory = new Set();
 var activeWarehouseCleanup = new Set();
+var activeImportPickup = new Set();
+var activeImportProblem = new Set();
+// 备注映射：badge -> note（本地缓存，用于UI显示）
+var importPickupNotes = {};
+var importProblemNotes = {};
 
 var relabelTimerHandle = null;
 var relabelStartTs = null;
@@ -539,6 +551,10 @@ function keyActiveB2bOutbound(){ return "activeB2bOutbound_" + (currentSessionId
 function keyActiveB2bInventory(){ return "activeB2bInventory_" + (currentSessionId || "NA"); }
 function keyActiveB2cInventory(){ return "activeB2cInventory_" + (currentSessionId || "NA"); }
 function keyActiveWarehouseCleanup(){ return "activeWarehouseCleanup_" + (currentSessionId || "NA"); }
+function keyActiveImportPickup(){ return "activeImportPickup_" + (currentSessionId || "NA"); }
+function keyActiveImportProblem(){ return "activeImportProblem_" + (currentSessionId || "NA"); }
+function keyImportPickupNotes(){ return "importPickupNotes_" + (currentSessionId || "NA"); }
+function keyImportProblemNotes(){ return "importProblemNotes_" + (currentSessionId || "NA"); }
 
 function keyInbounds(){ return "inbounds_" + (currentSessionId || "NA"); }
 function keyBulkOutOrders(){ return "bulkoutOrders_" + (currentSessionId || "NA"); }
@@ -574,7 +590,9 @@ var TASK_REGISTRY = [
   { task:"B2B出库",      get:function(){return activeB2bOutbound;},    set:function(s){activeB2bOutbound=s;},    countId:"b2bOutboundCount",       listId:"b2bOutboundActiveList",       keyFn:keyActiveB2bOutbound,   emptyMsg:"当前没有人在B2B出库作业中（无需退出）。" },
   { task:"B2B盘点",      get:function(){return activeB2bInventory;},   set:function(s){activeB2bInventory=s;},   countId:"b2bInventoryCount",      listId:"b2bInventoryActiveList",      keyFn:keyActiveB2bInventory,  emptyMsg:"当前没有人在B2B盘点作业中（无需退出）。" },
   { task:"B2C盘点",      get:function(){return activeB2cInventory;},   set:function(s){activeB2cInventory=s;},   countId:"b2cInventoryCount",      listId:"b2cInventoryActiveList",      keyFn:keyActiveB2cInventory,  emptyMsg:"当前没有人在B2C盘点作业中（无需退出）。" },
-  { task:"仓库整理",      get:function(){return activeWarehouseCleanup;},set:function(s){activeWarehouseCleanup=s;},countId:"warehouseCleanupCount",listId:"warehouseCleanupActiveList",  keyFn:keyActiveWarehouseCleanup, emptyMsg:"当前没有人在仓库整理作业中（无需退出）。" }
+  { task:"仓库整理",      get:function(){return activeWarehouseCleanup;},set:function(s){activeWarehouseCleanup=s;},countId:"warehouseCleanupCount",listId:"warehouseCleanupActiveList",  keyFn:keyActiveWarehouseCleanup, emptyMsg:"当前没有人在仓库整理作业中（无需退出）。" },
+  { task:"取/送货",        get:function(){return activeImportPickup;},   set:function(s){activeImportPickup=s;},   countId:"importPickupCount",      listId:"importPickupActiveList",      keyFn:keyActiveImportPickup,  emptyMsg:"当前没有人在取/送货作业中（无需退出）。" },
+  { task:"问题处理",        get:function(){return activeImportProblem;},  set:function(s){activeImportProblem=s;},  countId:"importProblemCount",      listId:"importProblemActiveList",      keyFn:keyActiveImportProblem, emptyMsg:"当前没有人在问题处理作业中（无需退出）。" }
 ];
 
 function taskReg_(task){
@@ -624,6 +642,8 @@ function persistState(){
   TASK_REGISTRY.forEach(function(reg){
     localStorage.setItem(reg.keyFn(), JSON.stringify(Array.from(reg.get())));
   });
+  localStorage.setItem(keyImportPickupNotes(), JSON.stringify(importPickupNotes));
+  localStorage.setItem(keyImportProblemNotes(), JSON.stringify(importProblemNotes));
 }
 
 function restoreState(){
@@ -636,6 +656,8 @@ function restoreState(){
   TASK_REGISTRY.forEach(function(reg){
     try{ reg.set(new Set(JSON.parse(localStorage.getItem(reg.keyFn()) || "[]"))); }catch(e){ reg.set(new Set()); }
   });
+  try{ importPickupNotes = JSON.parse(localStorage.getItem(keyImportPickupNotes()) || "{}"); }catch(e){ importPickupNotes = {}; }
+  try{ importProblemNotes = JSON.parse(localStorage.getItem(keyImportProblemNotes()) || "{}"); }catch(e){ importProblemNotes = {}; }
 }
 
 /** ===== Sync active list from server (multi-device) ===== */
@@ -919,7 +941,8 @@ async function submitEventSync_(o, silent){
     wave_id: o.wave_id || "",
     da_id: o.da_id || "",
     operator_id: getOperatorId(),
-    client_ms: (o.client_ms || Date.now())
+    client_ms: (o.client_ms || Date.now()),
+    note: o.note || ""
   };
 
   var res = await jsonp(LOCK_URL, params, silent ? { skipBusy: true } : undefined);
@@ -993,6 +1016,10 @@ function cleanupLocalSession_(){
   localStorage.removeItem(keyB2bTallyOrders());
   localStorage.removeItem(keyB2bWorkorders());
   localStorage.removeItem(keyRecent());
+  localStorage.removeItem(keyImportPickupNotes());
+  localStorage.removeItem(keyImportProblemNotes());
+  importPickupNotes = {};
+  importProblemNotes = {};
   TASK_REGISTRY.forEach(function(reg){
     localStorage.removeItem(reg.keyFn());
     reg.set(new Set());
@@ -1042,7 +1069,8 @@ async function endSessionGlobal_(){
 function taskAutoSession_(task){
   return task === "打包" || task === "退件入库" || task === "质检" || task === "废弃处理" || task === "卸货" || task === "过机扫描码托" || task === "装柜/出货"
     || task === "B2B卸货" || task === "B2B出库" || task === "B2B盘点"
-    || task === "B2C盘点" || task === "仓库整理";
+    || task === "B2C盘点" || task === "仓库整理"
+    || task === "取/送货" || task === "问题处理";
 }
 
 async function tryAutoEndSessionAfterLeave_(){
@@ -1115,12 +1143,27 @@ function renderSetToHtml(setObj){
   return arr.map(function(x){ return '<span class="tag">' + esc(badgeDisplay(x)) + '</span>'; }).join("");
 }
 
+function renderSetWithNotesToHtml(setObj, notesMap){
+  var arr = Array.from(setObj);
+  if(arr.length === 0) return '<span class="muted">无 / 없음</span>';
+  return arr.map(function(x){
+    var display = badgeDisplay(x);
+    var note = notesMap[x];
+    if(note) display += " · " + note;
+    return '<span class="tag">' + esc(display) + '</span>';
+  }).join("");
+}
+
 function renderActiveLists(){
   TASK_REGISTRY.forEach(function(reg){
     var cnt = reg.countId ? document.getElementById(reg.countId) : null;
     var lst = reg.listId ? document.getElementById(reg.listId) : null;
     if(cnt) cnt.textContent = String(reg.get().size);
-    if(lst) lst.innerHTML = renderSetToHtml(reg.get());
+    if(lst){
+      if(reg.task === "取/送货") lst.innerHTML = renderSetWithNotesToHtml(reg.get(), importPickupNotes);
+      else if(reg.task === "问题处理") lst.innerHTML = renderSetWithNotesToHtml(reg.get(), importProblemNotes);
+      else lst.innerHTML = renderSetToHtml(reg.get());
+    }
   });
 }
 
@@ -1134,7 +1177,7 @@ function renderInboundCountUI(){
     }else{
       var arr = Array.from(scannedInbounds);
       var show = arr.slice(Math.max(0, arr.length - 30));
-      l.innerHTML = show.map(function(x){ return '<span class="tag">'+String(x)+'</span>'; }).join(" ");
+      l.innerHTML = show.map(function(x){ return '<span class="tag">'+esc(String(x))+'</span>'; }).join(" ");
     }
   }
 }
@@ -1149,7 +1192,7 @@ function renderBulkOutUI(){
     }else{
       var arr = Array.from(scannedBulkOutOrders);
       var show = arr.slice(Math.max(0, arr.length - 30));
-      l.innerHTML = show.map(function(x){ return '<span class="tag">'+String(x)+'</span>'; }).join(" ");
+      l.innerHTML = show.map(function(x){ return '<span class="tag">'+esc(String(x))+'</span>'; }).join(" ");
     }
   }
 }
@@ -1581,7 +1624,7 @@ function renderB2bTallyUI(){
     }else{
       var arr = Array.from(scannedB2bTallyOrders);
       var show = arr.slice(Math.max(0, arr.length - 30));
-      l.innerHTML = show.map(function(x){ return '<span class="tag">'+String(x)+'</span>'; }).join(" ");
+      l.innerHTML = show.map(function(x){ return '<span class="tag">'+esc(String(x))+'</span>'; }).join(" ");
     }
   }
 }
@@ -1655,7 +1698,7 @@ function renderB2bWorkorderUI(){
     }else{
       var arr = Array.from(scannedB2bWorkorders);
       var show = arr.slice(Math.max(0, arr.length - 30));
-      l.innerHTML = show.map(function(x){ return '<span class="tag">'+String(x)+'</span>'; }).join(" ");
+      l.innerHTML = show.map(function(x){ return '<span class="tag">'+esc(String(x))+'</span>'; }).join(" ");
     }
   }
 }
@@ -1805,6 +1848,11 @@ async function openScannerBulkOutOrder(){
   await openScannerCommon();
 }
 
+/** ===== Trip note helper (取/送货, 问题处理 need a note on join) ===== */
+function needsTripNote_(task){
+  return task === "取/送货" || task === "问题处理";
+}
+
 /** ===== Labor (join/leave) ===== */
 async function joinWork(biz, task){
   if(!acquireBusy_()) return;
@@ -1853,6 +1901,8 @@ async function joinWork_(biz, task){
     if(task==="B2B盘点") activeB2bInventory = new Set();
     if(task==="B2C盘点") activeB2cInventory = new Set();
     if(task==="仓库整理") activeWarehouseCleanup = new Set();
+    if(task==="取/送货") { activeImportPickup = new Set(); importPickupNotes = {}; }
+    if(task==="问题处理") { activeImportProblem = new Set(); importProblemNotes = {}; }
     persistState(); refreshUI();
   }
 
@@ -2304,24 +2354,52 @@ async function openScannerCommon(){
 
       scanBusy = true;
       await pauseScanner();
+
+      // ✅ 取/送货、问题处理：join 时弹出 prompt 输入备注
+      var tripNote = "";
+      if(laborAction === "join" && needsTripNote_(laborTask)){
+        tripNote = prompt("请输入本趟备注（去哪取/送货 或 处理了什么）：") || "";
+        tripNote = tripNote.trim();
+        if(!tripNote){
+          alert("请输入备注后重试");
+          scanBusy = false;
+          await closeScanner();
+          return;
+        }
+      }
+
       setStatus("处理中... 请稍等 ⏳（join/leave 需确认锁）", true);
 
       try{
         var evId = makeEventId({ event:laborAction, biz:laborBiz, task:laborTask, wave_id:"", badgeRaw:p2.raw });
         if(hasRecent(evId)){ setStatus("重复扫描已忽略 ⏭️", false); await closeScanner(); return; }
 
-        var syncRes = await submitEventSync_({
+        var submitPayload = {
           event: laborAction,
           event_id: evId,
           biz: laborBiz,
           task: laborTask,
           pick_session_id: currentSessionId,
           da_id: p2.raw
-        });
+        };
+        if(tripNote) submitPayload.note = tripNote;
+
+        var syncRes = await submitEventSync_(submitPayload);
 
         addRecent(evId);
 
         applyActive(laborTask, laborAction, p2.raw);
+
+        // ✅ 本地缓存备注（用于 UI 显示）
+        if(laborAction === "join" && tripNote){
+          if(laborTask === "取/送货") importPickupNotes[p2.raw] = tripNote;
+          if(laborTask === "问题处理") importProblemNotes[p2.raw] = tripNote;
+        }
+        if(laborAction === "leave"){
+          if(laborTask === "取/送货") delete importPickupNotes[p2.raw];
+          if(laborTask === "问题处理") delete importProblemNotes[p2.raw];
+        }
+
         renderActiveLists();
         persistState();
 

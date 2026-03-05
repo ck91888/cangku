@@ -276,6 +276,11 @@ export default {
     const callback = String(p.callback || "").trim();
     const now = Date.now();
 
+    // JSONP callback 验证：防止注入
+    if (callback && !/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(callback)) {
+      return new Response('invalid callback', { status: 400 });
+    }
+
     if (action === "ping") {
       return jsonpOrJson({ ok:true, asof: now, pong:true }, callback);
     }
@@ -423,6 +428,7 @@ export default {
       const wave_id = String(p.wave_id || "").trim();
       const operator_id = String(p.operator_id || "").trim();
       const client_ms = Number(p.client_ms || p.ts_ms || 0) || 0;
+      const note = String(p.note || "").trim();
 
       if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
       if (!event) return jsonpOrJson({ ok:false, error:"missing event" }, callback);
@@ -532,7 +538,7 @@ export default {
         const ins = await env.DB.prepare(
           `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, "").run();
+        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, note).run();
 
         if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
         return jsonpOrJson({ ok:true, saved:true, locked:true }, callback);

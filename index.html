@@ -99,6 +99,8 @@
       <button class="primary" onclick="go('import_unload')">卸货 / 하차</button>
       <button class="primary" onclick="go('import_scan_pallet')">过机扫描码托 / 스캔</button>
       <button class="primary" onclick="go('import_loadout')">装柜/出货 / 적재/출고</button>
+      <button class="primary" onclick="go('import_pickup')">取/送货 / 픽업·배송</button>
+      <button class="primary" onclick="go('import_problem')">问题处理 / 문제 처리</button>
     </div>
   </div>
 
@@ -158,6 +160,46 @@
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importLoadoutCount">0</span></div>
         <div id="importLoadoutActiveList" class="muted">无 / 없음</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT PICKUP (取/送货) -->
+  <div id="page-import_pickup" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
+      <div class="grow pill">进口快件 取/送货 / 픽업·배송</div>
+    </div>
+
+    <div class="card">
+      <div class="pill">✅ 开始=扫工牌+输入备注；结束=扫工牌</div>
+
+      <button class="primary" onclick="joinWork('进口','取/送货')">开始取/送货 / 시작</button>
+      <button class="primary" onclick="leaveWork('进口','取/送货')">结束取/送货 / 종료</button>
+
+      <div class="listBox">
+        <div><b>当前在岗 / 작업중</b>：<span id="importPickupCount">0</span></div>
+        <div id="importPickupActiveList" class="muted">无 / 없음</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT PROBLEM (问题处理) -->
+  <div id="page-import_problem" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
+      <div class="grow pill">进口快件 问题处理 / 문제 처리</div>
+    </div>
+
+    <div class="card">
+      <div class="pill">✅ 开始=扫工牌+输入备注；结束=扫工牌</div>
+
+      <button class="primary" onclick="joinWork('进口','问题处理')">开始问题处理 / 시작</button>
+      <button class="primary" onclick="leaveWork('进口','问题处理')">结束问题处理 / 종료</button>
+
+      <div class="listBox">
+        <div><b>当前在岗 / 작업중</b>：<span id="importProblemCount">0</span></div>
+        <div id="importProblemActiveList" class="muted">无 / 없음</div>
       </div>
     </div>
   </div>
@@ -675,6 +717,6 @@
 
   <!-- 四件套：先 UI 再 App -->
   <script src="./ui.js"></script>
-  <script src="./app.js?v=48"></script>
+  <script src="./app.js?v=49"></script>
 </body>
 </html>
