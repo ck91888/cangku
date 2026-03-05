@@ -264,7 +264,11 @@ function isAdmin_(p, env){
   const secret = String(env.ADMINKEY || "").trim(); // 后端 secret
   return !!(secret && key && key === secret);
 }
-
+function isView_(p, env){
+  const key = String(p.k || "").trim();            // 前端还是传 k=口令
+  const secret = String(env.VIEWKEY || "").trim(); // 新增只读口令
+  return !!(secret && key && key === secret);
+}
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -379,9 +383,11 @@ export default {
 
     // admin_events_tail：只要口令正确就允许
     if (action === "admin_events_tail") {
-      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
-      // 不 return，继续走 events_tail 查询逻辑
+     if (!(isAdmin_(p, env) || isView_(p, env))) {
+      return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
     }
+  // 不 return，继续走 events_tail 查询逻辑
+   }
 
     if (action === "events_tail" || action === "admin_events_tail") {
       // 如果你想“events_tail 也必须口令”，保留这段；想公开就删掉这个 if
