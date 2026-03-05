@@ -1791,26 +1791,10 @@ async function startRelabel(){
 }
 async function endRelabel(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
-/** ===== PICK end (leader confirmation) ===== */
+/** ===== PICK end ===== */
 async function endPicking(){
-  try{
-    if(!currentSessionId){ setStatus("没有未结束趟次", false); return; }
-    if(!(await guardSessionOpenOrAlert_("该趟次已结束（无法结束拣货），请重新开始新的趟次。"))) return;
-
-    if(!leaderPickOk){ setStatus("需要组长先登录（扫码）", false); return; }
-    if(activePick.size > 0){
-      setStatus("还有人员未退出，禁止结束", false);
-      alert("还有人员未退出作业，不能结束拣货。");
-      return;
-    }
-
-    pendingLeaderEnd = { biz:"B2C", task:"拣货" };
-    scanMode = "leaderEndPick";
-    document.getElementById("scanTitle").textContent = "扫码组长工牌确认结束 / 팀장 종료 확인";
-    await openScannerCommon();
-  }catch(e){
-    setStatus("结束确认失败 ❌ " + e, false);
-  }
+  if(!acquireBusy_()) return;
+  try{ await endSessionGlobal_(); }finally{ releaseBusy_(); }
 }
 
 async function openScannerWave(){
@@ -2459,7 +2443,7 @@ async function openScannerCommon(){
   };
 
   try{
-    await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 240, height: 240 } }, onScan);
+    await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 280, height: 160 } }, onScan);
   }catch(e){
     var cams = await Html5Qrcode.getCameras();
     var camId = cams && cams[0] ? cams[0].id : null;
