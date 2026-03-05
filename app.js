@@ -579,8 +579,8 @@ var TASK_REGISTRY = [
   { task:"理货",        get:function(){return activeTally;},          set:function(s){activeTally=s;},          countId:"tallyCount",             listId:"tallyActiveList",             keyFn:keyActiveTally,         emptyMsg:"当前没有人在理货作业中（无需退出）。" },
   { task:"批量出库",      get:function(){return activeBulkOut;},        set:function(s){activeBulkOut=s;},        countId:"bulkoutCount",           listId:"bulkoutActiveList",           keyFn:keyActiveBulkOut,       emptyMsg:"当前没有人在批量出库作业中（无需退出）。" },
   { task:"退件入库",      get:function(){return activeReturn;},         set:function(s){activeReturn=s;},         countId:"returnCount",            listId:"returnActiveList",            keyFn:keyActiveReturn,        emptyMsg:"当前没有人在退件入库作业中（无需退出）。" },
-  { task:"质检",         get:function(){return activeQc;},             set:function(s){activeQc=s;},             countId:null,                     listId:null,                          keyFn:keyActiveQc,            emptyMsg:"当前没有人在质检作业中（无需退出）。" },
-  { task:"废弃处理",      get:function(){return activeDisposal;},       set:function(s){activeDisposal=s;},       countId:null,                     listId:null,                          keyFn:keyActiveDisposal,      emptyMsg:"当前没有人在废弃处理作业中（无需退出）。" },
+  { task:"质检",         get:function(){return activeQc;},             set:function(s){activeQc=s;},             countId:"qcCount",                listId:"qcActiveList",                keyFn:keyActiveQc,            emptyMsg:"当前没有人在质检作业中（无需退出）。" },
+  { task:"废弃处理",      get:function(){return activeDisposal;},       set:function(s){activeDisposal=s;},       countId:"disposalCount",          listId:"disposalActiveList",          keyFn:keyActiveDisposal,      emptyMsg:"当前没有人在废弃处理作业中（无需退出）。" },
   { task:"卸货",         get:function(){return activeImportUnload;},   set:function(s){activeImportUnload=s;},   countId:"importUnloadCount",      listId:"importUnloadActiveList",      keyFn:keyActiveImportUnload,  emptyMsg:"当前没有人在卸货作业中（无需退出）。" },
   { task:"过机扫描码托",  get:function(){return activeImportScanPallet;},set:function(s){activeImportScanPallet=s;},countId:"importScanPalletCount", listId:"importScanPalletActiveList",  keyFn:keyActiveImportScanPallet, emptyMsg:"当前没有人在过机扫描码托作业中（无需退出）。" },
   { task:"装柜/出货",    get:function(){return activeImportLoadout;},  set:function(s){activeImportLoadout=s;},  countId:"importLoadoutCount",     listId:"importLoadoutActiveList",     keyFn:keyActiveImportLoadout, emptyMsg:"当前没有人在装柜/出货作业中（无需退出）。" },
@@ -677,11 +677,16 @@ async function syncActiveFromServer_(){
     });
     var changed = false;
     TASK_REGISTRY.forEach(function(reg){
-      var badges = byTask[reg.task] || [];
+      var serverBadges = byTask[reg.task] || [];
+      var serverSet = new Set(serverBadges);
       var localSet = reg.get();
-      // 合并服务器数据到本地（添加本地没有的）
-      badges.forEach(function(b){
+      // 添加服务器有但本地没有的
+      serverBadges.forEach(function(b){
         if(!localSet.has(b)){ localSet.add(b); changed = true; }
+      });
+      // 移除本地有但服务器已不存在的（已在其他设备leave）
+      Array.from(localSet).forEach(function(b){
+        if(!serverSet.has(b)){ localSet.delete(b); changed = true; }
       });
     });
     if(changed){
@@ -2469,6 +2474,37 @@ function comingSoon(msg){
   alert((msg||"准备中") + "\n\n我们会逐步上线。");
 }
 
+/** ===== localStorage 清理：删除超过7天的旧 session 数据 ===== */
+function cleanupOldLocalStorage_(){
+  try{
+    var now = Date.now();
+    var keysToCheck = [];
+    for(var i=0; i<localStorage.length; i++){
+      keysToCheck.push(localStorage.key(i));
+    }
+    // 收集所有带 PS- session ID 的 key
+    var sessionKeys = {};
+    keysToCheck.forEach(function(k){
+      if(!k) return;
+      var m = k.match(/_(PS-(\d{8})-\d{6}-.+)$/);
+      if(!m) return;
+      var dateStr = m[2]; // e.g. "20260305"
+      if(!sessionKeys[dateStr]) sessionKeys[dateStr] = [];
+      sessionKeys[dateStr].push(k);
+    });
+    // 删除超过7天的
+    for(var dateStr in sessionKeys){
+      var y = parseInt(dateStr.substring(0,4),10);
+      var mo = parseInt(dateStr.substring(4,6),10) - 1;
+      var d = parseInt(dateStr.substring(6,8),10);
+      var ts = new Date(y, mo, d).getTime();
+      if(now - ts > 7 * 24 * 3600 * 1000){
+        sessionKeys[dateStr].forEach(function(k){ localStorage.removeItem(k); });
+      }
+    }
+  }catch(e){}
+}
+
 
 /** ===== Report (Admin-only) ===== */
 var REPORT_CACHE = { header:[], rows:[], summary:[], people:[], timeline:[], anomalies_list:[], meta:{} };
@@ -2858,7 +2894,7 @@ function reportExportCSV(){
     ].join(","));
   }
 
-  var blob = new Blob([csv.join("\n")], {type:"text/csv;charset=utf-8;"});
+  var blob = new Blob(["\uFEFF" + csv.join("\n")], {type:"text/csv;charset=utf-8;"});
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   var rangeText = (REPORT_CACHE.meta.rangeLabel || "range").replace(/[^0-9A-Za-z_-]+/g, "_");
@@ -2886,4 +2922,5 @@ adminApplyUI_();
 setReportDefaultDates_();
 renderPages();
 flushQueue_();
+cleanupOldLocalStorage_();
 

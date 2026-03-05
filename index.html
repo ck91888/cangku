@@ -434,6 +434,11 @@
 
       <button class="primary" onclick="joinWork('B2C','质检')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2C','质检')">结束作业 / 종료</button>
+
+      <div class="listBox">
+        <div><b>当前在岗 / 작업중</b>：<span id="qcCount">0</span></div>
+        <div id="qcActiveList" class="muted">无 / 없음</div>
+      </div>
     </div>
   </div>
 
@@ -449,6 +454,11 @@
 
       <button class="primary" onclick="joinWork('B2C','废弃处理')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2C','废弃处理')">结束作业 / 종료</button>
+
+      <div class="listBox">
+        <div><b>当前在岗 / 작업중</b>：<span id="disposalCount">0</span></div>
+        <div id="disposalActiveList" class="muted">无 / 없음</div>
+      </div>
     </div>
   </div>
 
@@ -712,8 +722,6 @@
     </div>
   </div>
 
-  <!-- 四件套：先 UI 再 App -->
-  <script src="./ui.js"></script>
-  <script src="./app.js?v=49"></script>
+  <script src="./app.js?v=50"></script>
 </body>
 </html>

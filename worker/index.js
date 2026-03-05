@@ -371,6 +371,9 @@ export default {
         `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator=? WHERE session=?`
       ).bind(closed_ms, operator_id, session).run();
 
+      // ✅ 关闭该 session 下所有 task_state
+      await taskStateCloseAll_(env, session, closed_ms, operator_id);
+
       return jsonpOrJson({ ok:true, closed:true, session, closed_ms, closed_by_operator: operator_id }, callback);
     }
 
@@ -551,7 +554,7 @@ export default {
         const ins = await env.DB.prepare(
           `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, "").run();
+        ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, note).run();
 
         // ✅ 同步等待锁释放，不再 fire-and-forget
         const stub = locksStub(env);
