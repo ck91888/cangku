@@ -498,8 +498,11 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
     });
 
     out.people.forEach(function(p){
-      var tasks = badgeTaskMap[p.badge] || [];
-      var taskStr = tasks.map(function(t){ return t.task + ' ' + fmtHM_(t.minutes); }).join('，');
+      var tasks = (badgeTaskMap[p.badge] || []).slice().sort(function(a,b){ return b.minutes - a.minutes; });
+      var taskStr = tasks.map(function(t){
+        var pct = p.total_minutes > 0 ? Math.round(t.minutes / p.total_minutes * 100) : 0;
+        return t.task + ' ' + fmtHM_(t.minutes) + '(' + pct + '%)';
+      }).join('，');
       var maxMin = out.people[0] ? out.people[0].total_minutes : 1;
       var barW = maxMin > 0 ? Math.max(2, Math.round(p.total_minutes / maxMin * 100)) : 0;
 
