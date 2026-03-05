@@ -350,10 +350,22 @@ function buildSummary_(header, rows){
   }).sort(function(a,b){ return b.minutes - a.minutes; });
 
   var typeOrder = { "\u5458\u5DE5":0, "\u957F\u671F\u65E5\u5F53":1, "\u65E5\u5F53":2 }; // 员工0 长期日当1 日当2
+  function daSuffix_(badge){
+    // DA-20260305-张三B → "B", DA-20260305-린린B → "B"
+    var s = String(badge||"");
+    if(!s.startsWith("DA-")) return "";
+    var last = s.charAt(s.length - 1);
+    return (last >= "A" && last <= "Z") ? last : "";
+  }
   people.sort(function(a,b){
     var ta = typeOrder[badgeType_(a.badge)]; if(ta===undefined) ta=9;
     var tb = typeOrder[badgeType_(b.badge)]; if(tb===undefined) tb=9;
     if(ta !== tb) return ta - tb;
+    // 日当：按末尾字母(组别)排序
+    if(ta === 2){
+      var sa = daSuffix_(a.badge), sb = daSuffix_(b.badge);
+      if(sa !== sb) return sa.localeCompare(sb);
+    }
     return b.total_minutes - a.total_minutes;
   });
 
