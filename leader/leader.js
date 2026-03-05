@@ -354,60 +354,193 @@ function buildSummary_(header, rows){
   return { anomalies: anomalies, summary: summary, taskTotals: taskTotals, people: people };
 }
 
+function fmtHM_(min){
+  if(!min || min <= 0) return "0m";
+  var h = Math.floor(min / 60);
+  var m = min % 60;
+  if(h > 0) return h + "h" + (m > 0 ? String(m).padStart(2,"0") + "m" : "");
+  return m + "m";
+}
+
+function badgeName_(badge){
+  // "DA-20260305-张三B" → "张三B", "EMP-金俊辰" → "金俊辰", "DAF-千俊晖" → "千俊晖"
+  var s = String(badge||"");
+  if(s.startsWith("DA-") && s.length > 12) return s.substring(12);
+  if(s.startsWith("EMP-")) return s.substring(4);
+  if(s.startsWith("DAF-")) return s.substring(4);
+  return s;
+}
+function badgeType_(badge){
+  var s = String(badge||"");
+  if(s.startsWith("EMP-")) return "员工";
+  if(s.startsWith("DAF-")) return "长期日当";
+  if(s.startsWith("DA-")) return "日当";
+  return "其他";
+}
+
 function renderReport_(dayFrom, dayTo, rowCount, out){
   var meta = document.getElementById("reportMeta");
   var top = document.getElementById("reportTop");
   var table = document.getElementById("reportTable");
 
-  meta.textContent =
-    "区间(KST): " + dayFrom + " ~ " + dayTo +
-    " ｜ rows=" + rowCount +
-    " ｜ open=" + out.anomalies.open +
-    " ｜ leave无join=" + out.anomalies.leave_without_join +
-    " ｜ 重复join=" + out.anomalies.rejoin_without_leave;
+  // ===== 总览数字 =====
+  var totalPeople = out.people.length;
+  var totalMinutes = 0;
+  out.people.forEach(function(p){ totalMinutes += p.total_minutes; });
+  var avgMinutes = totalPeople > 0 ? Math.round(totalMinutes / totalPeople) : 0;
+  var totalTaskMinutes = 0;
+  out.taskTotals.forEach(function(t){ totalTaskMinutes += t.minutes; });
 
-  // 顶部：按任务汇总 + TOP 人员
-  var taskHtml = out.taskTotals.slice(0,12).map(function(x){
-    return '<span class="tag">'+esc(x.key.replace("|","/"))+' · '+esc(x.minutes)+'m</span>';
-  }).join("");
+  // 按人员类型统计
+  var typeStats = {};
+  out.people.forEach(function(p){
+    var t = badgeType_(p.badge);
+    if(!typeStats[t]) typeStats[t] = { count:0, minutes:0 };
+    typeStats[t].count++;
+    typeStats[t].minutes += p.total_minutes;
+  });
 
-  var peopleHtml = out.people.slice(0,12).map(function(p){
-    return '<span class="tag">'+esc(p.badge)+' · '+esc(p.total_minutes)+'m</span>';
-  }).join("");
+  meta.innerHTML =
+    '<span style="font-size:12px;color:#999;">区间(KST): ' + esc(dayFrom) + ' ~ ' + esc(dayTo) +
+    ' ｜ 事件数=' + rowCount +
+    (out.anomalies.open > 0 ? ' ｜ <span style="color:#e67e22;">仍在岗=' + out.anomalies.open + '</span>' : '') +
+    '</span>';
 
-  top.innerHTML =
-    '<div class="listBox"><b>按任务汇总（Top 12）</b><div style="margin-top:6px;">'+(taskHtml||'<span class="muted">无</span>')+'</div></div>' +
-    '<div class="listBox"><b>人员总工时（Top 12）</b><div style="margin-top:6px;">'+(peopleHtml||'<span class="muted">无</span>')+'</div></div>';
+  // ===== 总览卡片 =====
+  var overviewHtml =
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">' +
+      '<div style="background:#f0f7ff;border-radius:12px;padding:16px;text-align:center;">' +
+        '<div style="font-size:32px;font-weight:900;color:#2c3e50;">' + totalPeople + '</div>' +
+        '<div style="font-size:13px;color:#666;margin-top:4px;">出勤人数</div>' +
+      '</div>' +
+      '<div style="background:#f0fff4;border-radius:12px;padding:16px;text-align:center;">' +
+        '<div style="font-size:32px;font-weight:900;color:#27ae60;">' + fmtHM_(totalMinutes) + '</div>' +
+        '<div style="font-size:13px;color:#666;margin-top:4px;">总工时</div>' +
+      '</div>' +
+      '<div style="background:#fffbf0;border-radius:12px;padding:16px;text-align:center;">' +
+        '<div style="font-size:32px;font-weight:900;color:#e67e22;">' + fmtHM_(avgMinutes) + '</div>' +
+        '<div style="font-size:13px;color:#666;margin-top:4px;">人均工时</div>' +
+      '</div>' +
+    '</div>';
 
-  // 明细表
-  var sum = out.summary || [];
-  if(sum.length===0){
-    table.innerHTML = '<div class="muted">暂无数据（区间内没有 join/leave）</div>';
-    return;
+  // 人员类型分布
+  var typeKeys = Object.keys(typeStats).sort();
+  if(typeKeys.length > 0){
+    overviewHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">';
+    typeKeys.forEach(function(t){
+      var st = typeStats[t];
+      overviewHtml += '<span class="tag" style="font-size:13px;">' + esc(t) + '：' + st.count + '人 / ' + fmtHM_(st.minutes) + '</span>';
+    });
+    overviewHtml += '</div>';
   }
 
-  var html = '<div style="overflow:auto;border:1px solid #eee;border-radius:12px;">';
-  html += '<table style="border-collapse:collapse;width:100%;min-width:700px;">';
-  html += '<tr>' +
-    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">badge</th>' +
-    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">biz</th>' +
-    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">task</th>' +
-    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">minutes</th>' +
-    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">badge total</th>' +
-  '</tr>';
+  // ===== 任务汇总（全部） =====
+  var taskHtml = '<div class="listBox"><b>任务汇总</b><div style="margin-top:8px;">';
+  if(out.taskTotals.length === 0){
+    taskHtml += '<span class="muted">无</span>';
+  } else {
+    taskHtml += '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;">';
+    taskHtml += '<tr>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总工时</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">占比</th>' +
+    '</tr>';
+    out.taskTotals.forEach(function(x){
+      var pct = totalTaskMinutes > 0 ? Math.round(x.minutes / totalTaskMinutes * 100) : 0;
+      var barW = Math.max(2, pct);
+      taskHtml += '<tr>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(x.key.replace("|"," / ")) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;font-size:13px;">' + fmtHM_(x.minutes) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:12px;">' +
+          '<div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;">' +
+            '<div style="width:60px;height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden;">' +
+              '<div style="width:'+barW+'%;height:100%;background:#3498db;border-radius:4px;"></div>' +
+            '</div>' +
+            '<span>' + pct + '%</span>' +
+          '</div>' +
+        '</td>' +
+      '</tr>';
+    });
+    taskHtml += '</table></div>';
+  }
+  taskHtml += '</div></div>';
 
+  // ===== 人员工时（全部） =====
+  var peopleHtml = '<div class="listBox"><b>人员工时（全部 ' + totalPeople + ' 人）</b><div style="margin-top:8px;">';
+  if(out.people.length === 0){
+    peopleHtml += '<span class="muted">无</span>';
+  } else {
+    peopleHtml += '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;">';
+    peopleHtml += '<tr>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">姓名</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">类型</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总工时</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务明细</th>' +
+    '</tr>';
+
+    // 为每个人构建任务明细
+    var badgeTaskMap = {};
+    (out.summary || []).forEach(function(s){
+      if(!badgeTaskMap[s.badge]) badgeTaskMap[s.badge] = [];
+      badgeTaskMap[s.badge].push({ task: s.biz + "/" + s.task, minutes: s.minutes });
+    });
+
+    out.people.forEach(function(p){
+      var tasks = badgeTaskMap[p.badge] || [];
+      var taskStr = tasks.map(function(t){ return t.task + ' ' + fmtHM_(t.minutes); }).join('，');
+      var maxMin = out.people[0] ? out.people[0].total_minutes : 1;
+      var barW = maxMin > 0 ? Math.max(2, Math.round(p.total_minutes / maxMin * 100)) : 0;
+
+      peopleHtml += '<tr>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;font-weight:700;white-space:nowrap;">' + esc(badgeName_(p.badge)) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:12px;color:#888;white-space:nowrap;">' + esc(badgeType_(p.badge)) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;font-size:13px;white-space:nowrap;">' +
+          '<div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;">' +
+            '<div style="width:50px;height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden;">' +
+              '<div style="width:'+barW+'%;height:100%;background:#27ae60;border-radius:4px;"></div>' +
+            '</div>' +
+            fmtHM_(p.total_minutes) +
+          '</div>' +
+        '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:12px;color:#666;">' + esc(taskStr) + '</td>' +
+      '</tr>';
+    });
+    peopleHtml += '</table></div>';
+  }
+  peopleHtml += '</div></div>';
+
+  top.innerHTML = overviewHtml + taskHtml + peopleHtml;
+
+  // 明细表默认隐藏
+  table.innerHTML =
+    '<div style="margin-top:10px;">' +
+      '<button onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'" ' +
+        'style="width:auto;min-width:160px;font-size:13px;">展开/收起明细表</button>' +
+      '<div style="display:none;margin-top:10px;">' + renderDetailTable_(out.summary) + '</div>' +
+    '</div>';
+}
+
+function renderDetailTable_(sum){
+  if(!sum || sum.length === 0) return '<div class="muted">暂无数据</div>';
+  var html = '<div style="overflow:auto;border:1px solid #eee;border-radius:12px;">';
+  html += '<table style="border-collapse:collapse;width:100%;min-width:600px;">';
+  html += '<tr>' +
+    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;font-size:13px;">姓名</th>' +
+    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;font-size:13px;">任务</th>' +
+    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;font-size:13px;">工时</th>' +
+    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;font-size:13px;">个人合计</th>' +
+  '</tr>';
   for(var i=0;i<sum.length;i++){
     var r = sum[i];
     html += '<tr>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.badge) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.biz) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.task) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;text-align:right;">' + esc(r.minutes) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;text-align:right;">' + esc(r.total_minutes) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;font-size:13px;">' + esc(badgeName_(r.badge)) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;font-size:13px;">' + esc(r.biz + '/' + r.task) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;text-align:right;font-size:13px;">' + fmtHM_(r.minutes) + '</td>' +
+      '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;text-align:right;font-weight:700;font-size:13px;">' + fmtHM_(r.total_minutes) + '</td>' +
     '</tr>';
   }
   html += '</table></div>';
-  table.innerHTML = html;
+  return html;
 }
 
 // ===== 一键刷新 + 自动刷新 =====
