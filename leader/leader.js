@@ -349,7 +349,13 @@ function buildSummary_(header, rows){
     return { key:k, minutes: Math.round(totalsByTask[k]/60000) };
   }).sort(function(a,b){ return b.minutes - a.minutes; });
 
-  people.sort(function(a,b){ return b.total_minutes - a.total_minutes; });
+  var typeOrder = { "\u5458\u5DE5":0, "\u957F\u671F\u65E5\u5F53":1, "\u65E5\u5F53":2 }; // 员工0 长期日当1 日当2
+  people.sort(function(a,b){
+    var ta = typeOrder[badgeType_(a.badge)]; if(ta===undefined) ta=9;
+    var tb = typeOrder[badgeType_(b.badge)]; if(tb===undefined) tb=9;
+    if(ta !== tb) return ta - tb;
+    return b.total_minutes - a.total_minutes;
+  });
 
   return { anomalies: anomalies, summary: summary, taskTotals: taskTotals, people: people };
 }
