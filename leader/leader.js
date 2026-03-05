@@ -451,14 +451,18 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
     taskHtml += '<tr>' +
       '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
       '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总工时</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">人力费(\\u20A9)</th>' +
       '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">占比</th>' +
     '</tr>';
     out.taskTotals.forEach(function(x){
       var pct = totalTaskMinutes > 0 ? Math.round(x.minutes / totalTaskMinutes * 100) : 0;
       var barW = Math.max(2, pct);
+      var taskCost = x.minutes * COST_PER_MIN;
+      var taskCostStr = taskCost >= 10000 ? Math.round(taskCost / 10000) + '\uB9CC' : taskCost.toLocaleString();
       taskHtml += '<tr>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(x.key.replace("|"," / ")) + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;font-size:13px;">' + fmtHM_(x.minutes) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;color:#e74c3c;">' + esc(taskCostStr) + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:12px;">' +
           '<div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;">' +
             '<div style="width:60px;height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden;">' +
