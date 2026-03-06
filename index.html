@@ -107,7 +107,7 @@
   <!-- IMPORT UNLOAD -->
   <div id="page-import_unload" class="page" style="display:none;">
     <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
+      <button class="back small" onclick="tempUnloadBack_()">返回 / 뒤로</button>
       <div class="grow pill">进口快件 卸货 / 하차</div>
     </div>
 
@@ -116,6 +116,7 @@
 
       <button class="primary" onclick="joinWork('进口','卸货')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('进口','卸货')">结束作业 / 종료</button>
+      <button class="primary" id="btnReturnFromUnload_import" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempUnload()">返回原任务 / 원래 작업 복귀</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importUnloadCount">0</span></div>
@@ -136,6 +137,7 @@
 
       <button class="primary" onclick="joinWork('进口','过机扫描码托')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('进口','过机扫描码托')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importScanPalletCount">0</span></div>
@@ -156,6 +158,7 @@
 
       <button class="primary" onclick="joinWork('进口','装柜/出货')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('进口','装柜/出货')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importLoadoutCount">0</span></div>
@@ -176,6 +179,7 @@
 
       <button class="primary" onclick="joinWork('进口','取/送货')">开始取/送货 / 시작</button>
       <button class="primary" onclick="leaveWork('进口','取/送货')">结束取/送货 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importPickupCount">0</span></div>
@@ -196,6 +200,7 @@
 
       <button class="primary" onclick="joinWork('进口','问题处理')">开始问题处理 / 시작</button>
       <button class="primary" onclick="leaveWork('进口','问题处理')">结束问题处理 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importProblemCount">0</span></div>
@@ -364,6 +369,7 @@
         <div id="inboundList" class="muted">无 / 없음</div>
       </div>
 
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <button class="primary" onclick="endTally()">结束理货 / 종료</button>
     </div>
   </div>
@@ -395,6 +401,7 @@
         <div id="bulkoutOrderList" class="muted">无 / 없음</div>
       </div>
 
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <button class="primary" onclick="endBulkOut()">结束批量出库 / 종료</button>
     </div>
   </div>
@@ -411,6 +418,7 @@
 
       <button class="primary" onclick="joinWork('B2C','退件入库')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2C','退件入库')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="returnCount">0</span></div>
@@ -435,6 +443,7 @@
 
       <button class="primary" onclick="joinWork('B2C','质检')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2C','质检')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="qcCount">0</span></div>
@@ -455,6 +464,7 @@
 
       <button class="primary" onclick="joinWork('B2C','废弃处理')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2C','废弃处理')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="disposalCount">0</span></div>
@@ -483,6 +493,7 @@
 
       <button class="primary" onclick="openScannerWave()">扫码波次 / 웨이브</button>
 
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <button class="primary" onclick="endPicking()">结束拣货 / 종료</button>
     </div>
   </div>
@@ -507,6 +518,7 @@
         <div id="relabelActiveList" class="muted">无 / 없음</div>
       </div>
 
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <button class="primary" onclick="endRelabel()">结束换单 / 종료</button>
       <div class="pill" id="relabelTimer" style="margin-top:10px;">未开始 / 미시작</div>
     </div>
@@ -524,6 +536,7 @@
 
       <button class="primary" onclick="joinWork('B2C','打包')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2C','打包')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="packCount">0</span></div>
@@ -561,7 +574,8 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('B2B','B2B卸货')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2B','B2B卸货')">结束作业 / 종료</button>
-      <button class="primary" id="btnReturnToWorkorder" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempUnload()">返回工单 / 작업지시 복귀</button>
+      <button class="primary" id="btnReturnToWorkorder" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempUnload()">返回原任务 / 원래 작업 복귀</button>
+      <button class="primary" id="btnReturnFromUnload_b2b" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempUnload()">返回原任务 / 원래 작업 복귀</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bUnloadCount">0</span></div>
         <div id="b2bUnloadActiveList" class="muted">无 / 없음</div>
@@ -593,6 +607,7 @@
         <div><b>已扫理货单（去重）</b>：<span id="b2bTallyOrderCount">0</span></div>
         <div id="b2bTallyOrderList" class="muted">无 / 없음</div>
       </div>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <button class="primary" onclick="endB2bTally()">结束理货 / 종료</button>
     </div>
   </div>
@@ -636,6 +651,7 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('B2B','B2B出库')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2B','B2B出库')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bOutboundCount">0</span></div>
         <div id="b2bOutboundActiveList" class="muted">无 / 없음</div>
@@ -653,6 +669,7 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('B2B','B2B盘点')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2B','B2B盘点')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bInventoryCount">0</span></div>
         <div id="b2bInventoryActiveList" class="muted">无 / 없음</div>
@@ -670,6 +687,7 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('B2C','B2C盘点')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2C','B2C盘点')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2cInventoryCount">0</span></div>
         <div id="b2cInventoryActiveList" class="muted">无 / 없음</div>
@@ -687,6 +705,7 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('仓库','仓库整理')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('仓库','仓库整理')">结束作业 / 종료</button>
+      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="warehouseCleanupCount">0</span></div>
         <div id="warehouseCleanupActiveList" class="muted">无 / 없음</div>
@@ -725,6 +744,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=54"></script>
+  <script src="./app.js?v=55"></script>
 </body>
 </html>
