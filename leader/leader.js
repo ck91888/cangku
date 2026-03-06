@@ -383,7 +383,7 @@ function fmtHM_(min){
 function badgeName_(badge){
   // "DA-20260305-张三B" → "张三B", "EMP-金俊辰" → "金俊辰", "DAF-千俊晖" → "千俊晖"
   var s = String(badge||"");
-  if(s.startsWith("DA-") && s.length > 12) return s.substring(12);
+  if(s.startsWith("DA-")){ var m = s.match(/^DA-\d{6,8}-(.+)$/); if(m) return m[1]; }
   if(s.startsWith("EMP-")) return s.substring(4);
   if(s.startsWith("DAF-")) return s.substring(4);
   return s;

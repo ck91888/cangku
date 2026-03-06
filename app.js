@@ -1152,7 +1152,7 @@ function parseBadge(code){
   var name = (parts[1] || "").trim();
   return { raw: raw, id: id, name: name };
 }
-function isDaId(id){ return /^DA-\d{8}-.+$/.test(id); }
+function isDaId(id){ return /^DA-\d{6,8}-.+$/.test(id); }
 function isEmpId(id){ return /^EMP-.+$/.test(id); }
 function isPermanentDaId(id){ return /^DAF-.+$/.test(id); }
 function isOperatorBadge(raw){
@@ -2189,10 +2189,10 @@ function generateDailyBadgesByName(){
     setDaStatus("生成中...", true);
 
     var d = new Date();
-    var yyyy = d.getFullYear();
+    var yy = String(d.getFullYear()).slice(-2);
     var mm = String(d.getMonth()+1).padStart(2,'0');
     var dd = String(d.getDate()).padStart(2,'0');
-    var dateStr = yyyy + mm + dd;
+    var dateStr = yy + mm + dd;
 
     names.forEach(function(name, idx){
       var da = "DA-" + dateStr + "-" + name;
