@@ -73,7 +73,7 @@ export class LocksDO {
         return Response.json({ ok:true, locked:true, lock: locks[badge] });
       }
 
-      if (cur.task === task && cur.session === session) {
+      if (cur.biz === biz && cur.task === task && cur.session === session) {
         cur.locked_at = now;
         cur.expires_at = expires;
         locks[badge] = cur;
@@ -612,7 +612,7 @@ export default {
       const ins = await env.DB.prepare(
         `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, "").run();
+      ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, note).run();
 
       if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
       return jsonpOrJson({ ok:true, saved:true }, callback);

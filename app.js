@@ -855,7 +855,7 @@ function jsonp(url, params, opts){
         perfLog_("TIMEOUT action=" + action + " dt=" + dt + "ms src=" + src);
       }
       reject(new Error("jsonp timeout"));
-    }, 12000);
+    }, 20000);
 
     function cleanup(){
       try{ delete window[cb]; }catch(e){ window[cb]=undefined; }
@@ -1104,6 +1104,22 @@ async function endSessionGlobal_(){
 
   setStatus("趟次已结束 ✅", true);
   cleanupLocalSession_();
+}
+
+async function endAllTask(biz, task){
+  if(!acquireBusy_()) return;
+  try{
+    var sid = getSess_(biz, task);
+    if(!sid){ alert("当前没有进行中的作业 / 진행 중인 작업 없음"); return; }
+    var reg = taskReg_(task);
+    var cnt = reg ? reg.get().size : 0;
+    if(!confirm("确定全员结束？" + cnt + "人将自动退出。\n전원 종료하시겠습니까? " + cnt + "명 자동 퇴장.")) return;
+    currentSessionId = sid;
+    CUR_CTX = { biz: biz, task: task, page: getHashPage() };
+    await endSessionGlobal_();
+    refreshUI();
+    renderActiveLists();
+  }finally{ releaseBusy_(); }
 }
 
 function taskAutoSession_(task){
@@ -1520,9 +1536,10 @@ async function adminForceEndSession(btn){
 
 /** ===== Start / End: Generic + Task-specific ===== */
 async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
+  if(!acquireBusy_()) return;
   if(currentSessionId){
     var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
-    if(!ok) return;
+    if(!ok){ releaseBusy_(); return; }
   }
   var btn = e && e.target ? e.target : null;
   var origText = btn ? btn.textContent : "";
@@ -1548,6 +1565,7 @@ async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
     alert(String(err));
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = origText; }
+    releaseBusy_();
   }
 }
 
@@ -1766,6 +1784,16 @@ async function tempSwitchToUnload_(){
   // 2. 自动 start 卸货 session + 自动 join 所有人
   setStatus("正在加入卸货... ⏳", true);
   var unloadSid = getSess_(target.biz, target.task);
+  // 检查已有卸货session是否还开着
+  if(unloadSid){
+    try{
+      var sInfo = await jsonp(LOCK_URL, { action:"session_info", session: unloadSid }, { skipBusy: true });
+      if(sInfo && String(sInfo.status||"").toUpperCase() === "CLOSED"){
+        clearSess_(target.biz, target.task);
+        unloadSid = null;
+      }
+    }catch(e){ /* 查询失败继续使用 */ }
+  }
   if(!unloadSid){
     unloadSid = makePickSessionId();
     var evStart = makeEventId({ event:"start", biz:target.biz, task:target.task, wave_id:"", badgeRaw:"" });
@@ -1906,7 +1934,7 @@ async function returnFromTempUnload_(){
   // 2. 检查源 session 是否还在
   try{
     var info = await jsonp(LOCK_URL, { action:"session_info", session: srcSid }, { skipBusy: true });
-    if(info && info.closed){
+    if(info && String(info.status||"").toUpperCase() === "CLOSED"){
       alert("原任务趟次已被关闭（可能已被其他人结束），需要重新开始。");
       clearTempSwitchCtx_();
       go(srcPage);
@@ -1984,8 +2012,7 @@ function updateReturnButton_(){
   // 两个卸货页都可能有返回按钮
   var btns = [
     document.getElementById("btnReturnFromUnload_b2b"),
-    document.getElementById("btnReturnFromUnload_import"),
-    document.getElementById("btnReturnToWorkorder") // 兼容旧id
+    document.getElementById("btnReturnFromUnload_import")
   ];
   var ctx = loadTempSwitchCtx_();
   var show = !!ctx;
@@ -2000,7 +2027,7 @@ function updateReturnButton_(){
   var curPage = getHashPage();
   btns.forEach(function(b){
     if(!b) return;
-    if(b.id === "btnReturnFromUnload_b2b" || b.id === "btnReturnToWorkorder")
+    if(b.id === "btnReturnFromUnload_b2b")
       b.style.display = (curPage === "b2b_unload" && show) ? "block" : "none";
     if(b.id === "btnReturnFromUnload_import")
       b.style.display = (curPage === "import_unload" && show) ? "block" : "none";
@@ -2042,7 +2069,7 @@ function detectRemoteTempSwitch_(){
     // 显示对应按钮
     var curPage = getHashPage();
     var btn;
-    if(curPage === "b2b_unload") btn = document.getElementById("btnReturnFromUnload_b2b") || document.getElementById("btnReturnToWorkorder");
+    if(curPage === "b2b_unload") btn = document.getElementById("btnReturnFromUnload_b2b");
     if(curPage === "import_unload") btn = document.getElementById("btnReturnFromUnload_import");
     if(btn) btn.style.display = "block";
   }).catch(function(){});

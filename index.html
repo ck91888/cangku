@@ -6,7 +6,7 @@
   <title>仓库作业 / 창고 작업</title>
 
   <!-- 扫码/二维码库 -->
-  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
   <!-- 四件套：样式 -->
@@ -122,6 +122,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importUnloadCount">0</span></div>
         <div id="importUnloadActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('进口','卸货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -143,6 +144,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importScanPalletCount">0</span></div>
         <div id="importScanPalletActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('进口','过机扫描码托')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -164,6 +166,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importLoadoutCount">0</span></div>
         <div id="importLoadoutActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('进口','装柜/出货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -185,6 +188,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importPickupCount">0</span></div>
         <div id="importPickupActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('进口','取/送货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -206,6 +210,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importProblemCount">0</span></div>
         <div id="importProblemActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('进口','问题处理')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -282,7 +287,7 @@
 
     <div class="card">
       <h3>日当工牌 / 일용직 명찰（DA-日期-姓名）</h3>
-      <div class="muted">输入姓名（每行一个），生成格式：DA-20260303-张三。每天生成，报表里直接看到名字。</div>
+      <div class="muted">输入姓名（每行一个），生成格式：DA-260303-张三。每天生成，报表里直接看到名字。</div>
 
       <small>姓名列表（每行一个） / 이름 목록</small>
       <textarea id="daNameList" placeholder="张三&#10;李四&#10;김민수&#10;박지훈"></textarea>
@@ -424,6 +429,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="returnCount">0</span></div>
         <div id="returnActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2C','退件入库')">全员结束 / 전원 종료</button>
 
       <div class="pill" style="margin-top:10px;">
         📌 人效/时效：用退件入库 join~leave 的时段，在本地模型匹配 WMS 导出的退件订单/认领表的签收时间计算产能。
@@ -449,6 +455,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="qcCount">0</span></div>
         <div id="qcActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2C','质检')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -470,6 +477,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="disposalCount">0</span></div>
         <div id="disposalActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2C','废弃处理')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -542,6 +550,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="packCount">0</span></div>
         <div id="packActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2C','打包')">全员结束 / 전원 종료</button>
 
       <div class="pill" style="margin-top:10px;">
         📌 产出不在这里扫码：用 PACK 的 start~end 时间段匹配系统导出的当日出库数据（发货时间）计算人效。
@@ -574,12 +583,12 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('B2B','B2B卸货')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2B','B2B卸货')">结束作业 / 종료</button>
-      <button class="primary" id="btnReturnToWorkorder" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempUnload()">返回原任务 / 원래 작업 복귀</button>
       <button class="primary" id="btnReturnFromUnload_b2b" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempUnload()">返回原任务 / 원래 작업 복귀</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bUnloadCount">0</span></div>
         <div id="b2bUnloadActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2B','B2B卸货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -656,6 +665,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="b2bOutboundCount">0</span></div>
         <div id="b2bOutboundActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2B','B2B出库')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -674,6 +684,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="b2bInventoryCount">0</span></div>
         <div id="b2bInventoryActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2B','B2B盘点')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -692,6 +703,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="b2cInventoryCount">0</span></div>
         <div id="b2cInventoryActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('B2C','B2C盘点')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -710,6 +722,7 @@
         <div><b>当前在岗 / 작업중</b>：<span id="warehouseCleanupCount">0</span></div>
         <div id="warehouseCleanupActiveList" class="muted">无 / 없음</div>
       </div>
+      <button class="bad" onclick="endAllTask('仓库','仓库整理')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -744,6 +757,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=55"></script>
+  <script src="./app.js?v=56"></script>
 </body>
 </html>

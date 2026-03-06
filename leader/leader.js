@@ -1,6 +1,7 @@
 // ===== 配置 =====
 var LOCK_URL = "https://api.ck91888.cn"; // 你主系统同款 :contentReference[oaicite:4]{index=4}
 var KEY_STORAGE = "leader_view_k_v1";
+var COST_PER_MIN = 290; // 韩币/人·分钟，修改费率只改这里
 
 // ===== 小工具 =====
 function esc(s){
@@ -233,7 +234,7 @@ async function loadReport(){
     var header = res.header || [];
     var rows = res.rows || [];
 
-    var out = buildSummary_(header, rows);
+    var out = buildSummary_(header, rows, res.asof);
     renderReport_(dayFrom, dayTo, rows.length, out);
 
     if(rows.length >= 20000){
@@ -246,7 +247,7 @@ async function loadReport(){
   }
 }
 
-function buildSummary_(header, rows){
+function buildSummary_(header, rows, serverNow){
   var iServer = header.indexOf("server_ms");
   var iEvent  = header.indexOf("event");
   var iBadge  = header.indexOf("badge");
@@ -267,7 +268,7 @@ function buildSummary_(header, rows){
     acc[badge].tasks[k] = (acc[badge].tasks[k]||0) + dur;
   }
 
-  var now = Date.now();
+  var now = serverNow || Date.now();
   for(var r=0; r<rows.length; r++){
     var row = rows[r];
     if(!row) continue;
@@ -300,6 +301,10 @@ function buildSummary_(header, rows){
       if(!active[badge]){
         anomalies.leave_without_join++;
         continue;
+      }
+      // 校验biz/task匹配：不匹配时仍用join时记录的biz/task计算工时
+      if(active[badge].biz !== biz || active[badge].task !== task){
+        anomalies.rejoin_without_leave++;
       }
       var dur = Math.max(0, t - active[badge].t);
       addDur(badge, active[badge].biz, active[badge].task, dur);
@@ -351,7 +356,7 @@ function buildSummary_(header, rows){
 
   var typeOrder = { "\u5458\u5DE5":0, "\u957F\u671F\u65E5\u5F53":1, "\u65E5\u5F53":2 }; // 员工0 长期日当1 日当2
   function daSuffix_(badge){
-    // DA-20260305-张三B → "B", DA-20260305-린린B → "B"
+    // DA-260305-张三B → "B", DA-260305-린린B → "B"
     var s = String(badge||"");
     if(!s.startsWith("DA-")) return "";
     var last = s.charAt(s.length - 1);
@@ -425,7 +430,6 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
     '</span>';
 
   // ===== 总览卡片 =====
-  var COST_PER_MIN = 290; // 韩币/人·分钟
   var totalCost = totalMinutes * COST_PER_MIN;
   var costStr = totalCost.toLocaleString();
 
