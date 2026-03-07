@@ -514,6 +514,14 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
   }
 
   // ===== 任务汇总（全部） =====
+  // 构建每个任务的参与人员集合
+  var taskWorkerSets = {};
+  (out.summary || []).forEach(function(s){
+    var k = s.biz + "|" + s.task;
+    if(!taskWorkerSets[k]) taskWorkerSets[k] = {};
+    taskWorkerSets[k][s.badge] = true;
+  });
+
   var taskHtml = '<div class="listBox"><b>任务汇总</b><div style="margin-top:8px;">';
   if(out.taskTotals.length === 0){
     taskHtml += '<span class="muted">无</span>';
@@ -521,17 +529,30 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
     taskHtml += '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;">';
     taskHtml += '<tr>' +
       '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">参与人数</th>' +
       '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总工时</th>' +
       '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">人力费(\u20A9)</th>' +
       '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">占比</th>' +
     '</tr>';
     out.taskTotals.forEach(function(x){
+      var badgeList = Object.keys(taskWorkerSets[x.key] || {});
+      var tc = {};
+      badgeList.forEach(function(b){ var t = badgeType_(b); tc[t] = (tc[t]||0) + 1; });
+      var tp = [];
+      if(tc["员工"]) tp.push("员工" + tc["员工"]);
+      if(tc["长期日当"]) tp.push("长期" + tc["长期日当"]);
+      if(tc["日当"]) tp.push("日当" + tc["日当"]);
+      if(tc["其他"]) tp.push("其他" + tc["其他"]);
       var pct = totalTaskMinutes > 0 ? Math.round(x.minutes / totalTaskMinutes * 100) : 0;
       var barW = Math.max(2, pct);
       var taskCost = x.minutes * COST_PER_MIN;
       var taskCostStr = taskCost.toLocaleString();
       taskHtml += '<tr>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(x.key.replace("|"," / ")) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' +
+          '<b>' + badgeList.length + '</b>人' +
+          '<div style="font-size:11px;color:#888;">' + esc(tp.join(" / ")) + '</div>' +
+        '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;font-size:13px;">' + fmtHM_(x.minutes) + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;color:#e74c3c;">' + esc(taskCostStr) + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:12px;">' +
@@ -547,30 +568,6 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
     taskHtml += '</table></div>';
   }
   taskHtml += '</div></div>';
-
-  // ===== 效率指标 =====
-  var effHtml = '';
-  var effList = out.taskEfficiency || [];
-  if(effList.length > 0){
-    effHtml = '<div class="listBox"><b>任务效率（含扫码数据的任务）</b><div style="margin-top:8px;overflow:auto;">';
-    effHtml += '<table style="border-collapse:collapse;width:100%;">';
-    effHtml += '<tr>' +
-      '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
-      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">扫码数</th>' +
-      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总人时</th>' +
-      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">效率(件/人时)</th>' +
-    '</tr>';
-    effList.forEach(function(e){
-      var effStr = e.efficiency > 0 ? e.efficiency.toFixed(1) : "-";
-      effHtml += '<tr>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(e.biz + ' / ' + e.task) + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;">' + e.total_waves + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;">' + e.person_hours.toFixed(1) + 'h (' + e.unique_workers + '人)</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;color:#2980b9;font-size:15px;">' + effStr + '</td>' +
-      '</tr>';
-    });
-    effHtml += '</table></div></div>';
-  }
 
   // ===== 人员工时（全部） =====
   var peopleHtml = '<div class="listBox"><b>人员工时（全部 ' + totalPeople + ' 人）</b><div style="margin-top:8px;">';
@@ -619,7 +616,7 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
   }
   peopleHtml += '</div></div>';
 
-  top.innerHTML = overviewHtml + taskHtml + effHtml + peopleHtml;
+  top.innerHTML = overviewHtml + taskHtml + peopleHtml;
 
   // 明细表默认隐藏
   table.innerHTML =
