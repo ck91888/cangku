@@ -652,6 +652,33 @@ export default {
       return jsonpOrJson({ ok:true, released:true }, callback);
     }
 
+    // ===== 补录修正：管理员手动插入 join/leave 事件（指定自定义时间戳） =====
+    if (action === "admin_event_insert") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const badge = String(p.badge || "").trim();
+      const biz = String(p.biz || "").trim();
+      const task = String(p.task || "").trim();
+      const session = String(p.session || "").trim();
+      const event = String(p.event || "").trim(); // join or leave
+      const custom_ms = Number(p.custom_ms || 0);  // 自定义时间戳(ms)
+      const operator_id = String(p.operator_id || "").trim();
+      const note = String(p.note || "").trim() || "manual_correction";
+
+      if (!badge) return jsonpOrJson({ ok:false, error:"missing badge" }, callback);
+      if (!biz) return jsonpOrJson({ ok:false, error:"missing biz" }, callback);
+      if (!task) return jsonpOrJson({ ok:false, error:"missing task" }, callback);
+      if (event !== "join" && event !== "leave") return jsonpOrJson({ ok:false, error:"event must be join or leave" }, callback);
+      if (!custom_ms || custom_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid custom_ms (need ms timestamp)" }, callback);
+
+      const event_id = "manual-" + event + "-" + badge + "-" + custom_ms + "-" + now;
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(custom_ms, custom_ms, event_id, event, badge, biz, task, session, "", operator_id, 1, note).run();
+
+      return jsonpOrJson({ ok:true, inserted:true, event_id, event, badge, custom_ms }, callback);
+    }
+
     if (action === "admin_sessions_list") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const biz = String(p.biz || "").trim();

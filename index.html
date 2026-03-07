@@ -83,6 +83,7 @@
       <button class="primary" onclick="go('active_now')">全局在岗 / Active Now</button>
       <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 / Report</button>
       <button class="primary" id="btnSessions" style="display:none;" onclick="go('global_sessions')">全局Session / Sessions</button>
+      <button class="primary" id="btnCorrection" style="display:none;" onclick="go('correction')">补录修正 / Correction</button>
     </div>
   </div>
 
@@ -122,7 +123,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importUnloadCount">0</span></div>
         <div id="importUnloadActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('进口','卸货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -144,7 +144,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importScanPalletCount">0</span></div>
         <div id="importScanPalletActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('进口','过机扫描码托')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -166,7 +165,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importLoadoutCount">0</span></div>
         <div id="importLoadoutActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('进口','装柜/出货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -188,7 +186,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importPickupCount">0</span></div>
         <div id="importPickupActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('进口','取/送货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -210,7 +207,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="importProblemCount">0</span></div>
         <div id="importProblemActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('进口','问题处理')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -246,6 +242,88 @@
     </div>
   </div>
 
+  <!-- CORRECTION (Admin-only) -->
+  <div id="page-correction" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
+      <div class="grow pill">补录修正 / Manual Correction</div>
+    </div>
+
+    <div class="card">
+      <div class="muted" style="margin-bottom:10px;">手动补录 join/leave 事件，用于修正工时记录。补录数据会标记为 manual_correction。</div>
+
+      <div class="row">
+        <div style="flex:1;">
+          <small>工牌 Badge</small>
+          <input id="corrBadge" type="text" placeholder="DA-260308-张三 / EMP-金俊辰" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div style="flex:1;">
+          <small>业务线 Biz</small>
+          <select id="corrBiz" onchange="corrUpdateTasks()">
+            <option value="">-- 选择 --</option>
+            <option value="B2C">B2C</option>
+            <option value="B2B">B2B</option>
+            <option value="进口">进口</option>
+            <option value="仓库">仓库</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <small>任务 Task</small>
+          <select id="corrTask">
+            <option value="">-- 先选业务线 --</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div style="flex:1;">
+          <small>Session（可选，留空自动生成）</small>
+          <input id="corrSession" type="text" placeholder="PS-20260308-..." />
+        </div>
+      </div>
+
+      <div class="row">
+        <div style="flex:1;">
+          <small>加入时间 Join Time (KST)</small>
+          <input id="corrJoinTime" type="datetime-local" step="60" />
+        </div>
+        <div style="flex:1;">
+          <small>退出时间 Leave Time (KST)</small>
+          <input id="corrLeaveTime" type="datetime-local" step="60" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div style="flex:1;">
+          <small>备注 Note（可选）</small>
+          <input id="corrNote" type="text" placeholder="补录原因" />
+        </div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <button class="primary" onclick="corrPreview()">预览 / Preview</button>
+      </div>
+
+      <div id="corrPreviewArea" style="display:none;margin-top:10px;padding:12px;background:#fffbf0;border:1px solid #ffe2a8;border-radius:12px;">
+      </div>
+
+      <div id="corrSubmitArea" style="display:none;margin-top:10px;">
+        <button class="primary" style="background:#e74c3c;border-color:#e74c3c;" onclick="corrSubmit()">确认提交补录</button>
+      </div>
+
+      <div id="corrResult" class="muted" style="margin-top:10px;"></div>
+
+      <hr style="margin-top:20px;border:none;border-top:1px solid #eee;" />
+      <div style="margin-top:10px;">
+        <div class="cardTitle" style="font-size:15px;">最近补录记录</div>
+        <div id="corrHistory" class="muted">无</div>
+      </div>
+    </div>
+  </div>
+
   <!-- REPORT (Admin-only) -->
   <div id="page-report" class="page" style="display:none;">
     <div class="topbar">
@@ -267,10 +345,20 @@
 
       <button class="primary" onclick="reportLoadRange()">拉取区间数据</button>
       <button onclick="reportLoadToday()">快捷：今天</button>
-      <button class="primary" onclick="reportExportDetailCSV()">导出工时明细 CSV</button>
-      <button class="primary" onclick="reportExportSessionCSV()">导出趟次汇总 CSV</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="primary" onclick="reportExportDetailCSV()" style="flex:1;min-width:140px;">导出工时明细 CSV</button>
+        <button class="primary" onclick="reportExportSessionCSV()" style="flex:1;min-width:140px;">导出趟次汇总 CSV</button>
+        <button class="primary" style="flex:1;min-width:140px;background:#8e44ad;border-color:#8e44ad;" onclick="reportGenerateDaily()">生成日报文本</button>
+      </div>
+
+      <div id="reportDailyOutput" style="display:none;margin-top:10px;">
+        <textarea id="reportDailyText" readonly style="width:100%;height:300px;font-size:12px;font-family:monospace;box-sizing:border-box;white-space:pre;"></textarea>
+        <button onclick="copyDailyReport()" style="margin-top:6px;">复制到剪贴板 / 클립보드 복사</button>
+      </div>
 
       <div id="reportMeta" class="muted" style="margin-top:8px;"></div>
+      <div id="reportOverview" style="margin-top:10px;"></div>
+      <div id="reportEfficiency" style="margin-top:10px;"></div>
       <div id="reportAnomalies" style="margin-top:10px;"></div>
       <div id="reportPeople" style="margin-top:10px;"></div>
       <div id="reportTimeline" style="margin-top:10px;"></div>
@@ -429,7 +517,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="returnCount">0</span></div>
         <div id="returnActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2C','退件入库')">全员结束 / 전원 종료</button>
 
       <div class="pill" style="margin-top:10px;">
         📌 人效/时效：用退件入库 join~leave 的时段，在本地模型匹配 WMS 导出的退件订单/认领表的签收时间计算产能。
@@ -455,7 +542,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="qcCount">0</span></div>
         <div id="qcActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2C','质检')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -477,7 +563,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="disposalCount">0</span></div>
         <div id="disposalActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2C','废弃处理')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -500,6 +585,11 @@
       </div>
 
       <button class="primary" onclick="openScannerWave()">扫码波次 / 웨이브</button>
+
+      <div class="listBox">
+        <div><b>已扫波次（去重）</b>：<span id="waveCount">0</span></div>
+        <div id="waveList" class="muted">无 / 없음</div>
+      </div>
 
       <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
       <button class="primary" onclick="endPicking()">结束拣货 / 종료</button>
@@ -550,7 +640,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="packCount">0</span></div>
         <div id="packActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2C','打包')">全员结束 / 전원 종료</button>
 
       <div class="pill" style="margin-top:10px;">
         📌 产出不在这里扫码：用 PACK 的 start~end 时间段匹配系统导出的当日出库数据（发货时间）计算人效。
@@ -588,7 +677,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="b2bUnloadCount">0</span></div>
         <div id="b2bUnloadActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2B','B2B卸货')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -665,7 +753,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="b2bOutboundCount">0</span></div>
         <div id="b2bOutboundActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2B','B2B出库')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -684,7 +771,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="b2bInventoryCount">0</span></div>
         <div id="b2bInventoryActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2B','B2B盘点')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -703,7 +789,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="b2cInventoryCount">0</span></div>
         <div id="b2cInventoryActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('B2C','B2C盘点')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -722,7 +807,6 @@
         <div><b>当前在岗 / 작업중</b>：<span id="warehouseCleanupCount">0</span></div>
         <div id="warehouseCleanupActiveList" class="muted">无 / 없음</div>
       </div>
-      <button class="bad" onclick="endAllTask('仓库','仓库整理')">全员结束 / 전원 종료</button>
     </div>
   </div>
 
@@ -757,6 +841,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=56"></script>
+  <script>document.write('<script src="./app.js?v=' + Date.now() + '"><\/script>');</script>
 </body>
 </html>

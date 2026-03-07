@@ -253,12 +253,17 @@ function buildSummary_(header, rows, serverNow){
   var iBadge  = header.indexOf("badge");
   var iBiz    = header.indexOf("biz");
   var iTask   = header.indexOf("task");
+  var iSession = header.indexOf("session");
+  var iWaveId = header.indexOf("wave_id");
   var iOk     = header.indexOf("ok");
 
   var active = {}; // badge -> {t,biz,task}
   var acc = {};    // badge -> { total_ms, tasks: {k:ms} }
   var totalsByTask = {}; // "biz|task" -> ms
   var anomalies = { open:0, leave_without_join:0, rejoin_without_leave:0 };
+
+  // session/wave tracking for efficiency
+  var sessionInfo = {}; // session -> {biz, task, badges:{}, waves:{}}
 
   function addDur(badge, biz, task, dur){
     if(!acc[badge]) acc[badge] = { total_ms:0, tasks:{} };
@@ -279,14 +284,29 @@ function buildSummary_(header, rows, serverNow){
     }
 
     var ev = String(row[iEvent]||"").trim();
-    if(ev!=="join" && ev!=="leave") continue;
-
     var badge = String(row[iBadge]||"").trim();
-    if(!badge) continue;
-
     var biz = String(row[iBiz]||"").trim();
     var task = String(row[iTask]||"").trim();
     var t = Number(row[iServer]||0) || 0;
+    var sid = iSession >= 0 ? String(row[iSession]||"").trim() : "";
+    var waveId = iWaveId >= 0 ? String(row[iWaveId]||"").trim() : "";
+
+    // track session info
+    if(sid){
+      if(!sessionInfo[sid]) sessionInfo[sid] = { biz:biz, task:task, badges:{}, waves:{} };
+      if(badge) sessionInfo[sid].badges[badge] = true;
+      if(waveId) sessionInfo[sid].waves[waveId] = true;
+    }
+
+    // wave events without session: track by biz|task
+    if(ev === "wave" && waveId && !sid){
+      var wk = biz + "|" + task;
+      if(!sessionInfo["_notask_"+wk]) sessionInfo["_notask_"+wk] = { biz:biz, task:task, badges:{}, waves:{} };
+      if(waveId) sessionInfo["_notask_"+wk].waves[waveId] = true;
+    }
+
+    if(ev!=="join" && ev!=="leave") continue;
+    if(!badge) continue;
 
     if(ev==="join"){
       if(active[badge]){
@@ -374,7 +394,36 @@ function buildSummary_(header, rows, serverNow){
     return b.total_minutes - a.total_minutes;
   });
 
-  return { anomalies: anomalies, summary: summary, taskTotals: taskTotals, people: people };
+  // Task efficiency: aggregate wave counts and person-minutes by biz|task
+  var taskEff = {};
+  Object.keys(sessionInfo).forEach(function(sid){
+    var s = sessionInfo[sid];
+    var k = s.biz + "|" + s.task;
+    if(!taskEff[k]) taskEff[k] = { biz: s.biz, task: s.task, total_person_minutes: 0, total_waves: 0, workers: {} };
+    taskEff[k].total_waves += Object.keys(s.waves).length;
+    var bkeys = Object.keys(s.badges);
+    bkeys.forEach(function(b){ taskEff[k].workers[b] = true; });
+  });
+  // Add person-minutes from totalsByTask
+  Object.keys(totalsByTask).forEach(function(k){
+    if(!taskEff[k]) taskEff[k] = { biz: k.split("|")[0], task: k.split("|")[1]||"", total_person_minutes: 0, total_waves: 0, workers: {} };
+    taskEff[k].total_person_minutes += Math.round(totalsByTask[k] / 60000);
+  });
+  var taskEfficiency = Object.keys(taskEff).map(function(k){
+    var e = taskEff[k];
+    var ph = e.total_person_minutes / 60;
+    return {
+      biz: e.biz, task: e.task,
+      total_person_minutes: e.total_person_minutes,
+      total_waves: e.total_waves,
+      unique_workers: Object.keys(e.workers).length,
+      person_hours: ph,
+      efficiency: ph > 0 ? (e.total_waves / ph) : 0
+    };
+  }).filter(function(e){ return e.total_waves > 0; })
+    .sort(function(a,b){ return b.total_person_minutes - a.total_person_minutes; });
+
+  return { anomalies: anomalies, summary: summary, taskTotals: taskTotals, people: people, taskEfficiency: taskEfficiency };
 }
 
 function fmtHM_(min){
@@ -499,6 +548,30 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
   }
   taskHtml += '</div></div>';
 
+  // ===== 效率指标 =====
+  var effHtml = '';
+  var effList = out.taskEfficiency || [];
+  if(effList.length > 0){
+    effHtml = '<div class="listBox"><b>任务效率（含扫码数据的任务）</b><div style="margin-top:8px;overflow:auto;">';
+    effHtml += '<table style="border-collapse:collapse;width:100%;">';
+    effHtml += '<tr>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">扫码数</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总人时</th>' +
+      '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">效率(件/人时)</th>' +
+    '</tr>';
+    effList.forEach(function(e){
+      var effStr = e.efficiency > 0 ? e.efficiency.toFixed(1) : "-";
+      effHtml += '<tr>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(e.biz + ' / ' + e.task) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;">' + e.total_waves + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;">' + e.person_hours.toFixed(1) + 'h (' + e.unique_workers + '人)</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;color:#2980b9;font-size:15px;">' + effStr + '</td>' +
+      '</tr>';
+    });
+    effHtml += '</table></div></div>';
+  }
+
   // ===== 人员工时（全部） =====
   var peopleHtml = '<div class="listBox"><b>人员工时（全部 ' + totalPeople + ' 人）</b><div style="margin-top:8px;">';
   if(out.people.length === 0){
@@ -546,7 +619,7 @@ function renderReport_(dayFrom, dayTo, rowCount, out){
   }
   peopleHtml += '</div></div>';
 
-  top.innerHTML = overviewHtml + taskHtml + peopleHtml;
+  top.innerHTML = overviewHtml + taskHtml + effHtml + peopleHtml;
 
   // 明细表默认隐藏
   table.innerHTML =

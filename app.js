@@ -18,7 +18,8 @@ var pages = [
   "warehouse_cleanup",
   "active_now",
   "report",
-  "global_sessions"
+  "global_sessions",
+  "correction"
 ];
 
 
@@ -74,10 +75,13 @@ async function adminUnlockFlow_(){
   }
 }
 function adminApplyUI_(){
+  var show = adminIsUnlocked_() ? "block" : "none";
   var btn = document.getElementById("btnReport");
-  if(btn) btn.style.display = adminIsUnlocked_() ? "block" : "none";
+  if(btn) btn.style.display = show;
   var btnS = document.getElementById("btnSessions");
-  if(btnS) btnS.style.display = adminIsUnlocked_() ? "block" : "none";
+  if(btnS) btnS.style.display = show;
+  var btnC = document.getElementById("btnCorrection");
+  if(btnC) btnC.style.display = show;
 }
 function bindAdminEasterEgg_(){
   var el = document.querySelector(".title");
@@ -127,7 +131,7 @@ function renderPages(){
 
   if(cur==="b2c_tally"){ restoreState(); renderActiveLists(); renderInboundCountUI(); refreshUI(); }
   if(cur==="b2c_bulkout"){ restoreState(); renderActiveLists(); renderBulkOutUI(); refreshUI(); }
-  if(cur==="b2c_pick"){ syncLeaderPickUI(); restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="b2c_pick"){ syncLeaderPickUI(); restoreState(); renderActiveLists(); renderWaveUI(); refreshUI(); }
   if(cur==="b2c_pack"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2c_return"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2c_qc"){ restoreState(); renderActiveLists(); refreshUI(); }
@@ -148,7 +152,12 @@ function renderPages(){
   if(cur==="b2c_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="warehouse_cleanup"){ restoreState(); renderActiveLists(); refreshUI(); }
 
-  if(cur==="active_now"){ refreshActiveNow(); }
+  // active_now auto-refresh: start 30s interval when on page, clear when leaving
+  if(_activeNowTimer){ clearInterval(_activeNowTimer); _activeNowTimer = null; }
+  if(cur==="active_now"){
+    refreshActiveNow();
+    _activeNowTimer = setInterval(refreshActiveNow, 30000);
+  }
   if(cur==="global_sessions"){ refreshGlobalSessions(); }
   if(cur==="b2c_menu"){ refreshUI(); }
   if(cur==="import_menu"){ refreshUI(); }
@@ -629,7 +638,8 @@ function makeEventId(params){
     (params.task||""),
     (params.event||""),
     (params.badgeRaw||""),
-    String(Date.now())
+    String(Date.now()),
+    Math.random().toString(36).slice(2,8)
   ].join("|");
 }
 
@@ -768,9 +778,18 @@ function setStatus(msg, ok){
 }
 // ===== Anti double-click / Net busy guard =====
 var NET_BUSY = false;
+var NET_BUSY_TIMER = null;
 
 function netBusyOn_(action){
   NET_BUSY = true;
+  // 安全超时：30秒后自动释放，防止异常情况下永久锁死
+  if(NET_BUSY_TIMER) clearTimeout(NET_BUSY_TIMER);
+  NET_BUSY_TIMER = setTimeout(function(){
+    if(NET_BUSY){
+      NET_BUSY = false;
+      console.warn("[NET_BUSY] safety timeout released after 30s");
+    }
+  }, 30000);
   // 给用户一个明确提示，避免疯狂连点
   if(action){
     setStatus("请求中... " + action + "（请勿重复点击）⏳", true);
@@ -779,6 +798,7 @@ function netBusyOn_(action){
 
 function netBusyOff_(){
   NET_BUSY = false;
+  if(NET_BUSY_TIMER){ clearTimeout(NET_BUSY_TIMER); NET_BUSY_TIMER = null; }
 }
 function refreshUI(){
   var dev = document.getElementById("device");
@@ -1076,7 +1096,13 @@ function cleanupLocalSession_(){
 async function endSessionGlobal_(){
   if(!currentSessionId){ setStatus("没有未结束趟次", false); return; }
 
-  var r = await sessionCloseServer_();
+  // 最多重试3次（lock释放可能有延迟）
+  var r;
+  for(var _retry = 0; _retry < 3; _retry++){
+    r = await sessionCloseServer_();
+    if(!r.blocked) break;
+    if(_retry < 2) await new Promise(function(res){ setTimeout(res, 800); });
+  }
   if(r.blocked){
     var msg = "还有人员未退出，不能结束。\n\n" + formatActiveListForAlert_(r.active);
     setStatus("还有人员未退出，禁止结束", false);
@@ -1223,6 +1249,21 @@ function renderActiveLists(){
   });
 }
 
+function renderWaveUI(){
+  var c = document.getElementById("waveCount");
+  var l = document.getElementById("waveList");
+  if(c) c.textContent = String(scannedWaves.size);
+  if(l){
+    if(scannedWaves.size === 0){
+      l.innerHTML = '<span class="muted">无 / 없음</span>';
+    }else{
+      var arr = Array.from(scannedWaves);
+      var show = arr.slice(Math.max(0, arr.length - 30));
+      l.innerHTML = show.map(function(x){ return '<span class="tag">'+esc(String(x))+'</span>'; }).join(" ");
+    }
+  }
+}
+
 function renderInboundCountUI(){
   var c = document.getElementById("inboundCount");
   var l = document.getElementById("inboundList");
@@ -1271,6 +1312,7 @@ function fmtDur(ms){
 var _activeNowData = [];
 var _activeNowAsof = 0;
 var _activeNowDetailKey = null; // "biz/task" currently shown in detail
+var _activeNowTimer = null;
 
 async function refreshActiveNow(){
   try{
@@ -2349,7 +2391,7 @@ function generateDailyBadgesByName(){
       var safeId = "qrn_" + dateStr + "_" + idx;
       box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">' + da + '</div><div id="' + safeId + '"></div>';
       listEl.appendChild(box);
-      new QRCode(document.getElementById(safeId), { text: "DA-" + dateStr + "-" + encodeURIComponent(name), width: 160, height: 160 });
+      new QRCode(document.getElementById(safeId), { text: "DA-" + dateStr + "-" + name, width: 160, height: 160 });
 
       currentDaId = da;
       localStorage.setItem("da_id", currentDaId);
@@ -2391,7 +2433,7 @@ function generatePermanentDaBadges(){
     box.style.padding = "10px";
     box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
     listEl.appendChild(box);
-    new QRCode(document.getElementById(safeKey), { text: "DAF-" + encodeURIComponent(name), width: 160, height: 160 });
+    new QRCode(document.getElementById(safeKey), { text: "DAF-" + name, width: 160, height: 160 });
   });
 
   alert("已生成长期日当工牌 ✅ 共 " + names.length + " 个\n建议截图/打印发放（以后每天都用这一张）。");
@@ -2430,7 +2472,7 @@ function generateEmployeeBadges(){
     box.style.padding = "10px";
     box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
     listEl.appendChild(box);
-    new QRCode(document.getElementById(safeKey), { text: "EMP-" + encodeURIComponent(name), width: 160, height: 160 });
+    new QRCode(document.getElementById(safeKey), { text: "EMP-" + name, width: 160, height: 160 });
   });
 
   alert("已生成员工工牌 ✅ 共 "+names.length+" 个\n建议截图/打印此页面发放。");
@@ -2620,12 +2662,16 @@ async function openScannerCommon(){
     }
 
     if(scanMode === "wave"){
-      var ok = /^\d{4}-\d{4}-\d+$/.test(code);
-      if(!ok){ setStatus("波次格式不对（例：2026-0224-6）", false); return; }
+      var waveOk = /^\d{4}-\d{4}-\d+$/.test(code);
+      if(!waveOk){
+        var useAnyway = confirm("波次格式不是标准格式（标准：2026-0224-6）\n\n扫到的内容：" + code + "\n\n仍然要记录吗？");
+        if(!useAnyway){ setStatus("已取消", false); return; }
+      }
       if(scannedWaves.has(code)){ setStatus("重复波次已忽略 ⏭️ " + code, false); return; }
 
       scannedWaves.add(code);
       persistState();
+      renderWaveUI();
 
       scanBusy = true;
       await pauseScanner();
@@ -2636,7 +2682,7 @@ async function openScannerCommon(){
         submitEvent({ event:"wave", event_id: evId, biz:"B2C", task:"拣货", pick_session_id: currentSessionId, wave_id: code });
         addRecent(evId);
 
-        alert("已记录波次 ✅ " + code);
+        alert("已记录波次 ✅ " + code + "\n当前累计：" + scannedWaves.size);
         setStatus("已记录波次（待上传）✅ " + code, true);
         await closeScanner();
       } finally { scanBusy = false; }
@@ -2829,8 +2875,8 @@ function cleanupOldLocalStorage_(){
     var sessionKeys = {};
     keysToCheck.forEach(function(k){
       if(!k) return;
-      // 匹配 key 中嵌入的 PS-YYYYMMDD-... 格式
-      var m = k.match(/PS-(\d{8})-/);
+      // 匹配 key 中嵌入的 PS-YYYYMMDD-... 或 PS-YYMMDD-... 格式
+      var m = k.match(/PS-(\d{8})-/) || k.match(/PS-(\d{6})-/);
       if(!m) return;
       var dateStr = m[1];
       if(!sessionKeys[dateStr]) sessionKeys[dateStr] = [];
@@ -2838,9 +2884,17 @@ function cleanupOldLocalStorage_(){
     });
     // 删除超过7天的
     for(var dateStr in sessionKeys){
-      var y = parseInt(dateStr.substring(0,4),10);
-      var mo = parseInt(dateStr.substring(4,6),10) - 1;
-      var d = parseInt(dateStr.substring(6,8),10);
+      var y, mo, d;
+      if(dateStr.length === 8){
+        y = parseInt(dateStr.substring(0,4),10);
+        mo = parseInt(dateStr.substring(4,6),10) - 1;
+        d = parseInt(dateStr.substring(6,8),10);
+      } else {
+        // 6位: YYMMDD
+        y = 2000 + parseInt(dateStr.substring(0,2),10);
+        mo = parseInt(dateStr.substring(2,4),10) - 1;
+        d = parseInt(dateStr.substring(4,6),10);
+      }
       var ts = new Date(y, mo, d).getTime();
       if(now - ts > 7 * 24 * 3600 * 1000){
         sessionKeys[dateStr].forEach(function(k){ localStorage.removeItem(k); });
@@ -2851,7 +2905,30 @@ function cleanupOldLocalStorage_(){
 
 
 /** ===== Report (Admin-only) ===== */
-var REPORT_CACHE = { header:[], rows:[], summary:[], people:[], timeline:[], anomalies_list:[], meta:{} };
+var REPORT_CACHE = { header:[], rows:[], summary:[], people:[], timeline:[], anomalies_list:[], meta:{}, task_efficiency:[] };
+var REPORT_COST_PER_MIN = 290; // 韩币/人·分钟
+
+function fmtHM_(min){
+  if(!min || min <= 0) return "0m";
+  var h = Math.floor(min / 60);
+  var m = min % 60;
+  if(h > 0) return h + "h" + (m > 0 ? String(m).padStart(2,"0") + "m" : "");
+  return m + "m";
+}
+function badgeName_(badge){
+  var s = String(badge||"");
+  if(s.startsWith("DA-")){ var m = s.match(/^DA-\d{6,8}-(.+)$/); if(m) return m[1]; }
+  if(s.startsWith("EMP-")) return s.substring(4);
+  if(s.startsWith("DAF-")) return s.substring(4);
+  return s;
+}
+function badgeType_(badge){
+  var s = String(badge||"");
+  if(s.startsWith("EMP-")) return "员工";
+  if(s.startsWith("DAF-")) return "长期日当";
+  if(s.startsWith("DA-")) return "日当";
+  return "其他";
+}
 
 function pad2_(n){ n=String(n); return n.length<2 ? ("0"+n) : n; }
 function kstDayKey_(ms){
@@ -3106,7 +3183,24 @@ function buildReportSummary_(){
     people.push({ badge: badge, total_minutes: msToMin_(obj.total_ms), tasks: taskRows });
   });
 
-  people.sort(function(a,b){ return b.total_minutes - a.total_minutes; });
+  // 按类型排序：员工→长期日当→日当，同类型按工时降序
+  var typeOrder = { "\u5458\u5DE5":0, "\u957F\u671F\u65E5\u5F53":1, "\u65E5\u5F53":2 };
+  function daSuffix__(badge){
+    var s = String(badge||"");
+    if(!s.startsWith("DA-")) return "";
+    var last = s.charAt(s.length - 1);
+    return (last >= "A" && last <= "Z") ? last : "";
+  }
+  people.sort(function(a,b){
+    var ta = typeOrder[badgeType_(a.badge)]; if(ta===undefined) ta=9;
+    var tb = typeOrder[badgeType_(b.badge)]; if(tb===undefined) tb=9;
+    if(ta !== tb) return ta - tb;
+    if(ta === 2){
+      var sa = daSuffix__(a.badge), sb = daSuffix__(b.badge);
+      if(sa !== sb) return sa.localeCompare(sb);
+    }
+    return b.total_minutes - a.total_minutes;
+  });
 
   var timeline = Object.keys(timelineByBadge).sort().map(function(badge){
     var items = (timelineByBadge[badge] || []).slice().sort(function(a,b){
@@ -3168,15 +3262,39 @@ function buildReportSummary_(){
   REPORT_CACHE.meta.anomalies = anomalies;
   REPORT_CACHE.detail_rows = detailRows;
   REPORT_CACHE.session_summary = sessionSummary;
+
+  // Task efficiency: aggregate wave counts and person-minutes by biz|task
+  var taskEff = {};
+  sessionSummary.forEach(function(s){
+    var k = s.biz + "|" + s.task;
+    if(!taskEff[k]) taskEff[k] = { biz: s.biz, task: s.task, total_person_minutes: 0, total_waves: 0, workers: {} };
+    taskEff[k].total_person_minutes += s.total_minutes;
+    taskEff[k].total_waves += s.wave_count;
+    s.workers.split("; ").forEach(function(w){ if(w) taskEff[k].workers[w] = true; });
+  });
+  REPORT_CACHE.task_efficiency = Object.keys(taskEff).map(function(k){
+    var e = taskEff[k];
+    var ph = e.total_person_minutes / 60;
+    return {
+      biz: e.biz, task: e.task,
+      total_person_minutes: e.total_person_minutes,
+      total_waves: e.total_waves,
+      unique_workers: Object.keys(e.workers).length,
+      person_hours: ph,
+      efficiency: ph > 0 ? (e.total_waves / ph) : 0
+    };
+  }).filter(function(e){ return e.total_waves > 0; })
+    .sort(function(a,b){ return b.total_person_minutes - a.total_person_minutes; });
 }
 
 function renderReport_(){
   var metaEl = document.getElementById("reportMeta");
+  var overviewEl = document.getElementById("reportOverview");
+  var efficiencyEl = document.getElementById("reportEfficiency");
   var anomaliesEl = document.getElementById("reportAnomalies");
   var peopleEl = document.getElementById("reportPeople");
   var timelineEl = document.getElementById("reportTimeline");
   var tableEl = document.getElementById("reportTable");
-  if(!metaEl || !anomaliesEl || !peopleEl || !timelineEl || !tableEl) return;
 
   var m = REPORT_CACHE.meta || {};
   var anomalies = (m.anomalies || {});
@@ -3184,103 +3302,241 @@ function renderReport_(){
   var people = REPORT_CACHE.people || [];
   var timeline = REPORT_CACHE.timeline || [];
   var anomaliesList = REPORT_CACHE.anomalies_list || [];
+  var effList = REPORT_CACHE.task_efficiency || [];
 
-  metaEl.textContent =
+  if(metaEl) metaEl.textContent =
     "区间(KST): " + (m.rangeLabel||"-") +
-    " ｜ rows=" + (REPORT_CACHE.rows||[]).length +
-    " ｜ open=" + (anomalies.open||0) +
-    " ｜ leave无join=" + (anomalies.leave_without_join||0) +
-    " ｜ 重复join=" + (anomalies.rejoin_without_leave||0);
+    " ｜ 事件数=" + (REPORT_CACHE.rows||[]).length +
+    (anomalies.open > 0 ? " ｜ 仍在岗=" + anomalies.open : "");
 
-  if(anomaliesList.length===0){
-    anomaliesEl.innerHTML = '<div class="muted">异常列表：无</div>';
-  }else{
-    anomaliesEl.innerHTML =
-      '<div style="font-weight:700;margin-bottom:6px;">异常列表</div>' +
-      anomaliesList.map(function(a){
-        return (
-          '<div style="border:1px solid #ffe2a8;background:#fffaf0;border-radius:12px;padding:10px;margin:8px 0;">' +
-            '<div style="font-weight:700;">' + esc(a.badge || "未知工牌") + ' ｜ ' + esc(a.type) + '</div>' +
-            '<div class="muted" style="margin-top:4px;">' + esc(a.biz + '/' + a.task) + ' ｜ ' + esc(fmtTs_(a.at_ms)) + '</div>' +
-            '<div class="muted" style="margin-top:4px;">' + esc(a.note || "") + '</div>' +
-          '</div>'
-        );
-      }).join('');
-  }
+  // ===== 总览卡片 =====
+  if(overviewEl){
+    var totalMinutes = 0;
+    people.forEach(function(p){ totalMinutes += p.total_minutes; });
+    var avgMinutes = people.length > 0 ? Math.round(totalMinutes / people.length) : 0;
+    var totalCost = totalMinutes * REPORT_COST_PER_MIN;
 
-  if(people.length===0){
-    peopleEl.innerHTML = '<div class="muted">暂无人员汇总</div>';
-  }else{
-    peopleEl.innerHTML = people.map(function(p){
-      var taskText = (p.tasks||[]).map(function(t){
-        return esc(t.biz + "/" + t.task) + ": " + esc(String(t.minutes)) + " 分";
-      }).join(" ｜ ");
+    // 按人员类型统计
+    var typeStats = {};
+    people.forEach(function(p){
+      var t = badgeType_(p.badge);
+      if(!typeStats[t]) typeStats[t] = { count:0, minutes:0 };
+      typeStats[t].count++;
+      typeStats[t].minutes += p.total_minutes;
+    });
 
-      return (
-        '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
-          '<div style="font-weight:700;">' + esc(p.badge) + ' ｜ 总工时 ' + esc(String(p.total_minutes)) + ' 分</div>' +
-          '<div class="muted" style="margin-top:6px;">' + (taskText || "无任务") + '</div>' +
-        '</div>'
-      );
-    }).join("");
-  }
+    var ovHtml =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">' +
+        '<div style="background:#f0f7ff;border-radius:12px;padding:16px;text-align:center;">' +
+          '<div style="font-size:32px;font-weight:900;color:#2c3e50;">' + people.length + '</div>' +
+          '<div style="font-size:13px;color:#666;margin-top:4px;">出勤人数</div>' +
+        '</div>' +
+        '<div style="background:#f0fff4;border-radius:12px;padding:16px;text-align:center;">' +
+          '<div style="font-size:32px;font-weight:900;color:#27ae60;">' + fmtHM_(totalMinutes) + '</div>' +
+          '<div style="font-size:13px;color:#666;margin-top:4px;">总工时</div>' +
+        '</div>' +
+        '<div style="background:#fffbf0;border-radius:12px;padding:16px;text-align:center;">' +
+          '<div style="font-size:32px;font-weight:900;color:#e67e22;">' + fmtHM_(avgMinutes) + '</div>' +
+          '<div style="font-size:13px;color:#666;margin-top:4px;">人均工时</div>' +
+        '</div>' +
+        '<div style="background:#fff0f0;border-radius:12px;padding:16px;text-align:center;">' +
+          '<div style="font-size:28px;font-weight:900;color:#e74c3c;">\u20A9' + esc(totalCost.toLocaleString()) + '</div>' +
+          '<div style="font-size:13px;color:#666;margin-top:4px;">累计人力费</div>' +
+        '</div>' +
+      '</div>';
 
-  if(timeline.length===0){
-    timelineEl.innerHTML = '<div class="muted">时间线：暂无</div>';
-  }else{
-    timelineEl.innerHTML =
-      '<div style="font-weight:700;margin-bottom:6px;">每人时间线（join → leave）</div>' +
-      timeline.map(function(x){
-        var lines = (x.items || []).map(function(it){
-          var statusText = it.status === "OPEN" ? "（未退出）" : (it.status === "AUTO_CLOSE_REJOIN" ? "（重复join自动截断）" : "");
-          var extra = "";
-          if(it.session) extra += ' ｜ <span class="muted" style="font-size:11px;">趟次:' + esc(it.session) + '</span>';
-          if(it.note) extra += ' ｜ <span style="color:#e67e22;font-size:12px;">备注:' + esc(it.note) + '</span>';
-          return (
-            '<div style="border-top:1px dashed #eee;padding:6px 0;">' +
-              '<div>' + esc(it.biz + '/' + it.task) + ' ｜ ' + esc(String(it.minutes)) + ' 分 ' + esc(statusText) + extra + '</div>' +
-              '<div class="muted">' + esc(fmtTs_(it.start_ms)) + ' → ' + esc(fmtTs_(it.end_ms)) + '</div>' +
-            '</div>'
-          );
-        }).join("");
+    // 人员类型分布
+    var typeKeys = Object.keys(typeStats).sort();
+    if(typeKeys.length > 0){
+      ovHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">';
+      typeKeys.forEach(function(t){
+        var st = typeStats[t];
+        ovHtml += '<span class="tag" style="font-size:13px;">' + esc(t) + ': ' + st.count + '人 / ' + fmtHM_(st.minutes) + '</span>';
+      });
+      ovHtml += '</div>';
+    }
 
-        return (
-          '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
-            '<div style="font-weight:700;">' + esc(x.badge) + '</div>' +
-            (lines || '<div class="muted" style="margin-top:6px;">无时间段</div>') +
-          '</div>'
-        );
-      }).join("");
-  }
+    // 任务汇总表
+    var taskTotals = {};
+    var taskWorkerSets = {};
+    sum.forEach(function(s){
+      var k = s.biz + "|" + s.task;
+      taskTotals[k] = (taskTotals[k] || 0) + s.minutes;
+      if(!taskWorkerSets[k]) taskWorkerSets[k] = {};
+      taskWorkerSets[k][s.badge] = true;
+    });
+    var taskKeys = Object.keys(taskTotals).sort(function(a,b){ return taskTotals[b] - taskTotals[a]; });
+    var totalTaskMin = 0;
+    taskKeys.forEach(function(k){ totalTaskMin += taskTotals[k]; });
 
-  if(sum.length===0){
-    tableEl.innerHTML = '<div class="muted">暂无数据（今天还没有 join/leave）</div>';
-    return;
-  }
-
-  // table
-  var html = '<div style="overflow:auto;border:1px solid #eee;border-radius:12px;">';
-  html += '<table style="border-collapse:collapse;width:100%;min-width:700px;">';
-  html += '<tr>' +
-    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">badge</th>' +
-    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">biz</th>' +
-    '<th style="text-align:left;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">task</th>' +
-    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">minutes</th>' +
-    '<th style="text-align:right;border-bottom:1px solid #eee;padding:8px;background:#fafafa;">badge total</th>' +
-    '</tr>';
-
-  for(var i=0;i<sum.length;i++){
-    var r = sum[i];
-    html += '<tr>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.badge) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.biz) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;">' + esc(r.task) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;text-align:right;">' + esc(r.minutes) + '</td>' +
-      '<td style="border-bottom:1px solid #f2f2f2;padding:8px;text-align:right;">' + esc(r.total_minutes) + '</td>' +
+    if(taskKeys.length > 0){
+      ovHtml += '<div class="listBox"><b>任务汇总</b><div style="margin-top:8px;overflow:auto;"><table style="border-collapse:collapse;width:100%;">';
+      ovHtml += '<tr>' +
+        '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">人数</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总工时</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">人力费(\u20A9)</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">占比</th>' +
       '</tr>';
+      taskKeys.forEach(function(k){
+        var mins = taskTotals[k];
+        var workers = Object.keys(taskWorkerSets[k] || {}).length;
+        var pct = totalTaskMin > 0 ? Math.round(mins / totalTaskMin * 100) : 0;
+        var cost = mins * REPORT_COST_PER_MIN;
+        ovHtml += '<tr>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(k.replace("|"," / ")) + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;">' + workers + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;font-size:13px;">' + fmtHM_(mins) + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;color:#e74c3c;">' + esc(cost.toLocaleString()) + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:12px;">' +
+            '<div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;">' +
+              '<div style="width:60px;height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden;">' +
+                '<div style="width:'+Math.max(2,pct)+'%;height:100%;background:#3498db;border-radius:4px;"></div>' +
+              '</div>' + pct + '%</div></td></tr>';
+      });
+      ovHtml += '</table></div></div>';
+    }
+    overviewEl.innerHTML = ovHtml;
   }
-  html += '</table></div>';
-  tableEl.innerHTML = html;
+
+  // ===== 效率指标 =====
+  if(efficiencyEl){
+    if(effList.length === 0){
+      efficiencyEl.innerHTML = '';
+    } else {
+      var effHtml = '<div class="listBox"><b>任务效率（含扫码数据的任务）</b><div style="margin-top:8px;overflow:auto;">';
+      effHtml += '<table style="border-collapse:collapse;width:100%;">';
+      effHtml += '<tr>' +
+        '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">扫码数</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总人时</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">效率(件/人时)</th>' +
+      '</tr>';
+      effList.forEach(function(e){
+        var effStr = e.efficiency > 0 ? e.efficiency.toFixed(1) : "-";
+        effHtml += '<tr>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;">' + esc(e.biz + ' / ' + e.task) + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;">' + e.total_waves + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;">' + e.person_hours.toFixed(1) + 'h (' + e.unique_workers + '人)</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;color:#2980b9;font-size:15px;">' + effStr + '</td>' +
+        '</tr>';
+      });
+      effHtml += '</table></div></div>';
+      efficiencyEl.innerHTML = effHtml;
+    }
+  }
+
+  // ===== 异常列表 =====
+  if(anomaliesEl){
+    if(anomaliesList.length===0){
+      anomaliesEl.innerHTML = '';
+    }else{
+      anomaliesEl.innerHTML =
+        '<div style="font-weight:700;margin-bottom:6px;">异常列表 (' + anomaliesList.length + ')</div>' +
+        '<div style="max-height:300px;overflow:auto;">' +
+        anomaliesList.map(function(a){
+          return '<div style="border:1px solid #ffe2a8;background:#fffaf0;border-radius:12px;padding:10px;margin:8px 0;">' +
+            '<div style="font-weight:700;">' + esc(badgeName_(a.badge) || a.badge || "?") + ' ｜ ' + esc(a.type) + '</div>' +
+            '<div class="muted" style="margin-top:4px;">' + esc(a.biz + '/' + a.task) + ' ｜ ' + esc(fmtTs_(a.at_ms)) + '</div>' +
+            (a.note ? '<div class="muted" style="margin-top:2px;">' + esc(a.note) + '</div>' : '') +
+          '</div>';
+        }).join('') + '</div>';
+    }
+  }
+
+  // ===== 人员工时表 =====
+  if(peopleEl){
+    if(people.length===0){
+      peopleEl.innerHTML = '<div class="muted">暂无人员汇总</div>';
+    }else{
+      var pHtml = '<div class="listBox"><b>人员工时（全部 ' + people.length + ' 人）</b><div style="margin-top:8px;overflow:auto;">';
+      pHtml += '<table style="border-collapse:collapse;width:100%;">';
+      pHtml += '<tr>' +
+        '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">姓名</th>' +
+        '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">类型</th>' +
+        '<th style="text-align:right;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">总工时</th>' +
+        '<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:13px;">任务明细</th>' +
+      '</tr>';
+      var maxMin = people[0] ? people[0].total_minutes : 1;
+      people.forEach(function(p){
+        var tasks = (p.tasks||[]).slice().sort(function(a,b){ return b.minutes - a.minutes; });
+        var taskStr = tasks.map(function(t){
+          var pct = p.total_minutes > 0 ? Math.round(t.minutes / p.total_minutes * 100) : 0;
+          return t.biz + '/' + t.task + ' ' + fmtHM_(t.minutes) + '(' + pct + '%)';
+        }).join(', ');
+        var barW = maxMin > 0 ? Math.max(2, Math.round(p.total_minutes / maxMin * 100)) : 0;
+        pHtml += '<tr>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;font-weight:700;white-space:nowrap;">' + esc(badgeName_(p.badge)) + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:12px;color:#888;white-space:nowrap;">' + esc(badgeType_(p.badge)) + '</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-weight:700;font-size:13px;white-space:nowrap;">' +
+            '<div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;">' +
+              '<div style="width:50px;height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden;">' +
+                '<div style="width:'+barW+'%;height:100%;background:#27ae60;border-radius:4px;"></div>' +
+              '</div>' + fmtHM_(p.total_minutes) + '</div></td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #f5f5f5;font-size:12px;color:#666;">' + esc(taskStr) + '</td>' +
+        '</tr>';
+      });
+      pHtml += '</table></div></div>';
+      peopleEl.innerHTML = pHtml;
+    }
+  }
+
+  // ===== 时间线（折叠） =====
+  if(timelineEl){
+    if(timeline.length===0){
+      timelineEl.innerHTML = '';
+    }else{
+      var tlHtml = '<div style="margin-top:10px;">' +
+        '<button onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'" ' +
+          'style="width:auto;min-width:160px;font-size:13px;">展开/收起时间线 (' + timeline.length + '人)</button>' +
+        '<div style="display:none;margin-top:10px;">';
+      tlHtml += timeline.map(function(x){
+        var lines = (x.items || []).map(function(it){
+          var statusText = it.status === "OPEN" ? "（未退出）" : (it.status === "AUTO_CLOSE_REJOIN" ? "（自动截断）" : "");
+          var extra = "";
+          if(it.note) extra += ' · <span style="color:#e67e22;">' + esc(it.note) + '</span>';
+          return '<div style="border-top:1px dashed #eee;padding:4px 0;font-size:12px;">' +
+            esc(it.biz + '/' + it.task) + ' ' + esc(String(it.minutes)) + '分 ' + esc(statusText) + extra +
+            '<div class="muted" style="font-size:11px;">' + esc(fmtTs_(it.start_ms)) + ' → ' + esc(fmtTs_(it.end_ms)) + '</div></div>';
+        }).join("");
+        return '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
+          '<div style="font-weight:700;">' + esc(badgeName_(x.badge)) + ' <span class="muted" style="font-weight:400;font-size:12px;">' + esc(x.badge) + '</span></div>' +
+          (lines || '<div class="muted">无</div>') + '</div>';
+      }).join("");
+      tlHtml += '</div></div>';
+      timelineEl.innerHTML = tlHtml;
+    }
+  }
+
+  // ===== 明细表（折叠） =====
+  if(tableEl){
+    if(sum.length===0){
+      tableEl.innerHTML = '<div class="muted">暂无数据</div>';
+    } else {
+      var dtHtml = '<div style="margin-top:10px;">' +
+        '<button onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'" ' +
+          'style="width:auto;min-width:160px;font-size:13px;">展开/收起明细表 (' + sum.length + '行)</button>' +
+        '<div style="display:none;margin-top:10px;overflow:auto;border:1px solid #eee;border-radius:12px;">' +
+        '<table style="border-collapse:collapse;width:100%;min-width:600px;">' +
+        '<tr>' +
+          '<th style="text-align:left;border-bottom:1px solid #eee;padding:6px 8px;background:#fafafa;font-size:12px;">姓名</th>' +
+          '<th style="text-align:left;border-bottom:1px solid #eee;padding:6px 8px;background:#fafafa;font-size:12px;">任务</th>' +
+          '<th style="text-align:right;border-bottom:1px solid #eee;padding:6px 8px;background:#fafafa;font-size:12px;">工时</th>' +
+          '<th style="text-align:right;border-bottom:1px solid #eee;padding:6px 8px;background:#fafafa;font-size:12px;">个人合计</th>' +
+        '</tr>';
+      for(var i=0;i<sum.length;i++){
+        var r = sum[i];
+        dtHtml += '<tr>' +
+          '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;font-size:12px;">' + esc(badgeName_(r.badge)) + '</td>' +
+          '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;font-size:12px;">' + esc(r.biz + '/' + r.task) + '</td>' +
+          '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;text-align:right;font-size:12px;">' + fmtHM_(r.minutes) + '</td>' +
+          '<td style="border-bottom:1px solid #f2f2f2;padding:6px 8px;text-align:right;font-weight:700;font-size:12px;">' + fmtHM_(r.total_minutes) + '</td>' +
+        '</tr>';
+      }
+      dtHtml += '</table></div></div>';
+      tableEl.innerHTML = dtHtml;
+    }
+  }
 }
 
 function csvVal_(v){
@@ -3341,6 +3597,325 @@ function reportExportSessionCSV(){
   });
   var rangeText = (REPORT_CACHE.meta.rangeLabel || "range").replace(/[^0-9A-Za-z_-]+/g, "_");
   downloadCSV_("ck_趟次汇总_" + rangeText + "_" + Date.now() + ".csv", h, data);
+}
+
+function reportGenerateDaily(){
+  var people = REPORT_CACHE.people || [];
+  var effList = REPORT_CACHE.task_efficiency || [];
+  var m = REPORT_CACHE.meta || {};
+  if(people.length === 0){
+    alert("请先拉取报表数据");
+    return;
+  }
+
+  var totalMinutes = 0;
+  people.forEach(function(p){ totalMinutes += p.total_minutes; });
+  var avgMinutes = people.length > 0 ? Math.round(totalMinutes / people.length) : 0;
+  var totalCost = totalMinutes * REPORT_COST_PER_MIN;
+
+  // 按人员类型统计
+  var typeStats = {};
+  people.forEach(function(p){
+    var t = badgeType_(p.badge);
+    if(!typeStats[t]) typeStats[t] = { count:0, minutes:0 };
+    typeStats[t].count++;
+    typeStats[t].minutes += p.total_minutes;
+  });
+
+  // 按任务统计
+  var taskTotals = {};
+  var taskWorkerSets = {};
+  var sum = REPORT_CACHE.summary || [];
+  sum.forEach(function(r){
+    var k = r.biz + "/" + r.task;
+    taskTotals[k] = (taskTotals[k] || 0) + r.minutes;
+    if(!taskWorkerSets[k]) taskWorkerSets[k] = {};
+    taskWorkerSets[k][r.badge] = true;
+  });
+
+  var lines = [];
+  lines.push("====== CK 仓库日报 ======");
+  lines.push("日期范围(KST): " + (m.rangeLabel || "-"));
+  lines.push("生成时间: " + new Date().toLocaleString("zh-CN", {timeZone:"Asia/Seoul"}));
+  lines.push("");
+  lines.push("【概览】");
+  lines.push("  出勤人数: " + people.length + " 人");
+  lines.push("  总工时: " + fmtHM_(totalMinutes));
+  lines.push("  人均工时: " + fmtHM_(avgMinutes));
+  lines.push("  累计人力费: ₩" + totalCost.toLocaleString());
+  lines.push("");
+
+  // 人员类型分布
+  var typeKeys = Object.keys(typeStats);
+  if(typeKeys.length > 0){
+    lines.push("【人员分布】");
+    typeKeys.forEach(function(t){
+      var s = typeStats[t];
+      lines.push("  " + t + ": " + s.count + "人, " + fmtHM_(s.minutes));
+    });
+    lines.push("");
+  }
+
+  // 任务汇总
+  var taskKeys = Object.keys(taskTotals).sort(function(a,b){ return taskTotals[b] - taskTotals[a]; });
+  if(taskKeys.length > 0){
+    lines.push("【任务汇总】");
+    var totalTaskMin = 0;
+    taskKeys.forEach(function(k){ totalTaskMin += taskTotals[k]; });
+    taskKeys.forEach(function(k){
+      var mins = taskTotals[k];
+      var workers = Object.keys(taskWorkerSets[k] || {}).length;
+      var pct = totalTaskMin > 0 ? Math.round(mins / totalTaskMin * 100) : 0;
+      var cost = mins * REPORT_COST_PER_MIN;
+      lines.push("  " + k + " | " + workers + "人 | " + fmtHM_(mins) + " | ₩" + cost.toLocaleString() + " | " + pct + "%");
+    });
+    lines.push("");
+  }
+
+  // 效率指标
+  if(effList.length > 0){
+    lines.push("【效率指标】");
+    effList.forEach(function(e){
+      var effStr = e.efficiency > 0 ? e.efficiency.toFixed(1) + " 件/人时" : "-";
+      lines.push("  " + e.biz + "/" + e.task + " | 扫码" + e.total_waves + " | " + e.person_hours.toFixed(1) + "h(" + e.unique_workers + "人) | " + effStr);
+    });
+    lines.push("");
+  }
+
+  // 人员明细
+  lines.push("【人员明细】");
+  people.forEach(function(p){
+    var tasks = (p.tasks||[]).slice().sort(function(a,b){ return b.minutes - a.minutes; });
+    var taskStr = tasks.map(function(t){
+      var pct = p.total_minutes > 0 ? Math.round(t.minutes / p.total_minutes * 100) : 0;
+      return t.biz + "/" + t.task + " " + fmtHM_(t.minutes) + "(" + pct + "%)";
+    }).join(", ");
+    lines.push("  " + badgeName_(p.badge) + " [" + badgeType_(p.badge) + "] " + fmtHM_(p.total_minutes) + " → " + taskStr);
+  });
+  lines.push("");
+  lines.push("========================");
+
+  var text = lines.join("\n");
+  var outputDiv = document.getElementById("reportDailyOutput");
+  if(outputDiv){
+    outputDiv.style.display = "block";
+    var ta = outputDiv.querySelector("textarea");
+    if(ta) ta.value = text;
+  }
+}
+
+function copyDailyReport(){
+  var outputDiv = document.getElementById("reportDailyOutput");
+  if(!outputDiv) return;
+  var ta = outputDiv.querySelector("textarea");
+  if(!ta || !ta.value){
+    alert("没有日报内容，请先生成");
+    return;
+  }
+  ta.select();
+  try{
+    document.execCommand("copy");
+    alert("已复制到剪贴板 ✓");
+  }catch(e){
+    // fallback for modern browsers
+    navigator.clipboard.writeText(ta.value).then(function(){
+      alert("已复制到剪贴板 ✓");
+    }).catch(function(){
+      alert("复制失败，请手动选择复制");
+    });
+  }
+}
+
+// ===== 补录修正 =====
+var CORR_TASK_MAP = {
+  "B2C": ["入库理货","拣货","打包","退件入库","质检","废弃处理","换标","盘点","批量出库"],
+  "B2B": ["B2B卸货","B2B理货","B2B出库单","B2B出库","盘点"],
+  "进口": ["卸货","扫板","装车","提货","问题处理"],
+  "仓库": ["仓库整理"]
+};
+var _corrHistory = []; // 本次session的补录记录
+
+function corrUpdateTasks(){
+  var biz = document.getElementById("corrBiz").value;
+  var sel = document.getElementById("corrTask");
+  sel.innerHTML = '<option value="">-- 选择任务 --</option>';
+  var tasks = CORR_TASK_MAP[biz] || [];
+  tasks.forEach(function(t){
+    sel.innerHTML += '<option value="' + esc(t) + '">' + esc(t) + '</option>';
+  });
+}
+
+function corrKstToMs_(datetimeLocal){
+  // datetime-local 是用户本地时间，但我们要求用户输入的是KST
+  // 解析为 "YYYY-MM-DDTHH:MM" 当作 KST(UTC+9) 转成 ms
+  if(!datetimeLocal) return 0;
+  var parts = datetimeLocal.split("T");
+  if(parts.length !== 2) return 0;
+  var iso = parts[0] + "T" + parts[1] + ":00.000+09:00";
+  var ms = new Date(iso).getTime();
+  return isNaN(ms) ? 0 : ms;
+}
+
+function corrFmtKst_(ms){
+  if(!ms) return "-";
+  var d = new Date(ms + 9*3600*1000);
+  return d.getUTCFullYear() + "-" + pad2_(d.getUTCMonth()+1) + "-" + pad2_(d.getUTCDate()) +
+    " " + pad2_(d.getUTCHours()) + ":" + pad2_(d.getUTCMinutes());
+}
+
+function corrPreview(){
+  if(!adminIsUnlocked_()){
+    alert("请先解锁管理员模式（标题连点7次）");
+    return;
+  }
+  var badge = document.getElementById("corrBadge").value.trim();
+  var biz = document.getElementById("corrBiz").value;
+  var task = document.getElementById("corrTask").value;
+  var joinTime = document.getElementById("corrJoinTime").value;
+  var leaveTime = document.getElementById("corrLeaveTime").value;
+  var session = document.getElementById("corrSession").value.trim();
+  var note = document.getElementById("corrNote").value.trim() || "manual_correction";
+
+  if(!badge){ alert("请输入工牌"); return; }
+  if(!biz){ alert("请选择业务线"); return; }
+  if(!task){ alert("请选择任务"); return; }
+  if(!joinTime){ alert("请选择加入时间"); return; }
+  if(!leaveTime){ alert("请选择退出时间"); return; }
+
+  var joinMs = corrKstToMs_(joinTime);
+  var leaveMs = corrKstToMs_(leaveTime);
+  if(!joinMs || !leaveMs){ alert("时间格式错误"); return; }
+  if(leaveMs <= joinMs){ alert("退出时间必须晚于加入时间"); return; }
+
+  var durMin = Math.round((leaveMs - joinMs) / 60000);
+  if(durMin > 720){ alert("工时超过12小时（" + durMin + "分钟），请确认时间是否正确"); return; }
+
+  if(!session){
+    // 自动生成 session
+    var kd = new Date(joinMs + 9*3600*1000);
+    session = "PS-" + kd.getUTCFullYear().toString().slice(2) + pad2_(kd.getUTCMonth()+1) + pad2_(kd.getUTCDate()) +
+      "-" + pad2_(kd.getUTCHours()) + pad2_(kd.getUTCMinutes()) + "00-CORR";
+  }
+
+  var previewEl = document.getElementById("corrPreviewArea");
+  var submitEl = document.getElementById("corrSubmitArea");
+  previewEl.style.display = "block";
+  submitEl.style.display = "block";
+  previewEl.innerHTML =
+    '<div style="font-weight:700;margin-bottom:6px;">预览补录内容：</div>' +
+    '<div>工牌: <b>' + esc(badge) + '</b></div>' +
+    '<div>业务/任务: <b>' + esc(biz) + ' / ' + esc(task) + '</b></div>' +
+    '<div>Session: <b>' + esc(session) + '</b></div>' +
+    '<div>加入时间(KST): <b>' + esc(corrFmtKst_(joinMs)) + '</b></div>' +
+    '<div>退出时间(KST): <b>' + esc(corrFmtKst_(leaveMs)) + '</b></div>' +
+    '<div>工时: <b>' + durMin + ' 分钟 (' + fmtHM_(durMin) + ')</b></div>' +
+    '<div>备注: ' + esc(note) + '</div>';
+
+  // 暂存数据供提交用
+  previewEl.dataset.badge = badge;
+  previewEl.dataset.biz = biz;
+  previewEl.dataset.task = task;
+  previewEl.dataset.session = session;
+  previewEl.dataset.joinMs = joinMs;
+  previewEl.dataset.leaveMs = leaveMs;
+  previewEl.dataset.note = note;
+}
+
+async function corrSubmit(){
+  if(!adminIsUnlocked_()){
+    alert("请先解锁管理员模式");
+    return;
+  }
+  var previewEl = document.getElementById("corrPreviewArea");
+  var resultEl = document.getElementById("corrResult");
+  var badge = previewEl.dataset.badge;
+  var biz = previewEl.dataset.biz;
+  var task = previewEl.dataset.task;
+  var session = previewEl.dataset.session;
+  var joinMs = Number(previewEl.dataset.joinMs);
+  var leaveMs = Number(previewEl.dataset.leaveMs);
+  var note = previewEl.dataset.note || "manual_correction";
+
+  if(!badge || !biz || !task || !joinMs || !leaveMs){
+    alert("数据异常，请重新预览");
+    return;
+  }
+
+  var ok = confirm(
+    "确认补录？\n\n" +
+    "工牌: " + badge + "\n" +
+    "任务: " + biz + " / " + task + "\n" +
+    "时间: " + corrFmtKst_(joinMs) + " ~ " + corrFmtKst_(leaveMs) + "\n\n" +
+    "提交后将写入两条事件（join + leave），报表中会体现此工时。"
+  );
+  if(!ok) return;
+
+  resultEl.textContent = "提交中... ";
+
+  try{
+    // 插入 join
+    var r1 = await fetchApi({
+      action: "admin_event_insert",
+      k: adminKey_(),
+      badge: badge, biz: biz, task: task, session: session,
+      event: "join", custom_ms: joinMs,
+      operator_id: getOperatorId() || "",
+      note: note
+    });
+    if(!r1 || r1.ok !== true){
+      resultEl.textContent = "join 插入失败: " + (r1 && r1.error ? r1.error : "unknown");
+      return;
+    }
+
+    // 插入 leave
+    var r2 = await fetchApi({
+      action: "admin_event_insert",
+      k: adminKey_(),
+      badge: badge, biz: biz, task: task, session: session,
+      event: "leave", custom_ms: leaveMs,
+      operator_id: getOperatorId() || "",
+      note: note
+    });
+    if(!r2 || r2.ok !== true){
+      resultEl.textContent = "leave 插入失败: " + (r2 && r2.error ? r2.error : "unknown");
+      return;
+    }
+
+    var durMin = Math.round((leaveMs - joinMs) / 60000);
+    resultEl.innerHTML = '<span style="color:#27ae60;font-weight:700;">补录成功!</span> ' +
+      esc(badge) + ' | ' + esc(biz+'/'+task) + ' | ' + fmtHM_(durMin);
+
+    // 记录到本地历史
+    _corrHistory.unshift({
+      badge: badge, biz: biz, task: task, session: session,
+      joinMs: joinMs, leaveMs: leaveMs, durMin: durMin, note: note,
+      at: Date.now()
+    });
+    corrRenderHistory_();
+
+    // 清空表单
+    document.getElementById("corrPreviewArea").style.display = "none";
+    document.getElementById("corrSubmitArea").style.display = "none";
+    document.getElementById("corrJoinTime").value = "";
+    document.getElementById("corrLeaveTime").value = "";
+    document.getElementById("corrNote").value = "";
+  }catch(e){
+    resultEl.textContent = "提交异常: " + e;
+  }
+}
+
+function corrRenderHistory_(){
+  var el = document.getElementById("corrHistory");
+  if(!el) return;
+  if(_corrHistory.length === 0){ el.textContent = "无"; return; }
+  var html = '';
+  _corrHistory.forEach(function(h){
+    html += '<div style="border:1px solid #e0e0e0;border-radius:8px;padding:8px;margin:6px 0;font-size:13px;">' +
+      '<b>' + esc(h.badge) + '</b> | ' + esc(h.biz + '/' + h.task) + ' | ' + fmtHM_(h.durMin) +
+      '<div class="muted" style="font-size:12px;">' + corrFmtKst_(h.joinMs) + ' ~ ' + corrFmtKst_(h.leaveMs) +
+      (h.note ? ' | ' + esc(h.note) : '') + '</div></div>';
+  });
+  el.innerHTML = html;
 }
 
 function adminLogout(){
