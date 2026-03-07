@@ -679,6 +679,44 @@ export default {
       return jsonpOrJson({ ok:true, inserted:true, event_id, event, badge, custom_ms }, callback);
     }
 
+    // ===== 修正：查询某 session 的全部事件 =====
+    if (action === "admin_session_events") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const session = String(p.session || "").trim();
+      if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
+      const rs = await env.DB.prepare(
+        `SELECT server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note
+         FROM events WHERE session=? ORDER BY server_ms ASC`
+      ).bind(session).all();
+      return jsonpOrJson({ ok:true, events: rs.results || [] }, callback);
+    }
+
+    // ===== 修正：修改事件时间 =====
+    if (action === "admin_event_update") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const event_id = String(p.event_id || "").trim();
+      const new_ms = Number(p.new_ms || 0);
+      if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
+      if (!new_ms || new_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid new_ms" }, callback);
+      const existing = await env.DB.prepare(`SELECT event_id FROM events WHERE event_id=?`).bind(event_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"event_id not found" }, callback);
+      await env.DB.prepare(
+        `UPDATE events SET server_ms=?, client_ms=?, note=note||' [time_corrected]' WHERE event_id=?`
+      ).bind(new_ms, new_ms, event_id).run();
+      return jsonpOrJson({ ok:true, updated:true, event_id, new_ms }, callback);
+    }
+
+    // ===== 修正：删除错误事件 =====
+    if (action === "admin_event_delete") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const event_id = String(p.event_id || "").trim();
+      if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
+      const existing = await env.DB.prepare(`SELECT event_id,event,badge,biz,task FROM events WHERE event_id=?`).bind(event_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"event_id not found" }, callback);
+      await env.DB.prepare(`DELETE FROM events WHERE event_id=?`).bind(event_id).run();
+      return jsonpOrJson({ ok:true, deleted:true, event_id, detail: existing }, callback);
+    }
+
     if (action === "admin_sessions_list") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const biz = String(p.biz || "").trim();

@@ -3906,6 +3906,143 @@ function corrRenderHistory_(){
   el.innerHTML = html;
 }
 
+// ===== 修正已有记录 =====
+var _corrFixEvents = []; // 当前查询的事件列表
+
+async function corrLoadSession(){
+  if(!adminIsUnlocked_()){
+    alert("请先解锁管理员模式（标题连点7次）");
+    return;
+  }
+  var session = document.getElementById("corrFixSession").value.trim();
+  if(!session){ alert("请输入 Session ID"); return; }
+
+  var metaEl = document.getElementById("corrFixMeta");
+  var eventsEl = document.getElementById("corrFixEvents");
+  metaEl.textContent = "查询中...";
+  eventsEl.innerHTML = "";
+
+  try{
+    var res = await fetchApi({ action:"admin_session_events", k:adminKey_(), session:session });
+    if(!res || res.ok !== true){
+      metaEl.textContent = "查询失败: " + (res && res.error ? res.error : "unknown");
+      return;
+    }
+    _corrFixEvents = res.events || [];
+    metaEl.textContent = "Session: " + session + " | 共 " + _corrFixEvents.length + " 条事件";
+    corrRenderFixEvents_(session);
+  }catch(e){
+    metaEl.textContent = "查询异常: " + e;
+  }
+}
+
+function corrRenderFixEvents_(session){
+  var el = document.getElementById("corrFixEvents");
+  if(!el) return;
+  if(_corrFixEvents.length === 0){
+    el.innerHTML = '<div class="muted">该 Session 无事件记录</div>';
+    return;
+  }
+  var html = '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;min-width:700px;">';
+  html += '<tr style="background:#fafafa;">' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">事件</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">工牌</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">任务</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">时间(KST)</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">备注</th>' +
+    '<th style="text-align:center;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">操作</th>' +
+  '</tr>';
+  _corrFixEvents.forEach(function(ev, idx){
+    var evColor = ev.event === "join" ? "#27ae60" : ev.event === "leave" ? "#e74c3c" : "#3498db";
+    var okStyle = Number(ev.ok) === 0 ? 'style="opacity:0.4;"' : '';
+    html += '<tr ' + okStyle + '>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' +
+        '<span style="color:' + evColor + ';font-weight:700;">' + esc(ev.event) + '</span>' +
+        (Number(ev.ok) === 0 ? ' <span style="color:#999;">(blocked)</span>' : '') +
+      '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc(badgeName_(ev.badge) || ev.badge || "-") + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc((ev.biz||"") + "/" + (ev.task||"")) + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;white-space:nowrap;">' + esc(corrFmtKst_(ev.server_ms)) + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:11px;color:#888;max-width:120px;overflow:hidden;text-overflow:ellipsis;">' + esc(ev.note||"") + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;text-align:center;white-space:nowrap;">';
+    if(Number(ev.ok) !== 0 && (ev.event === "join" || ev.event === "leave")){
+      html += '<button style="width:auto;min-width:50px;font-size:11px;padding:4px 8px;margin:2px;" onclick="corrFixTime('+idx+')">改时间</button>';
+    }
+    html += '<button style="width:auto;min-width:50px;font-size:11px;padding:4px 8px;margin:2px;background:#e74c3c;color:#fff;border-color:#e74c3c;" onclick="corrFixDelete('+idx+')">删除</button>';
+    html += '</td></tr>';
+  });
+  html += '</table></div>';
+  el.innerHTML = html;
+}
+
+async function corrFixTime(idx){
+  var ev = _corrFixEvents[idx];
+  if(!ev){ alert("事件不存在"); return; }
+
+  var currentKst = corrFmtKst_(ev.server_ms);
+  var input = prompt(
+    "修改事件时间\n\n" +
+    "事件: " + ev.event + " | 工牌: " + (badgeName_(ev.badge)||ev.badge) + "\n" +
+    "当前时间(KST): " + currentKst + "\n\n" +
+    "请输入新时间(KST)，格式: YYYY-MM-DD HH:MM\n例如: 2026-03-08 09:30",
+    currentKst
+  );
+  if(!input) return;
+
+  // 解析 "YYYY-MM-DD HH:MM" -> ms
+  var cleaned = input.trim().replace(/\s+/g, "T");
+  if(cleaned.length === 16) cleaned += ":00";
+  var newMs = corrKstToMs_(cleaned.substring(0,16));
+  if(!newMs){ alert("时间格式错误，请用 YYYY-MM-DD HH:MM 格式"); return; }
+
+  var ok = confirm(
+    "确认修改？\n\n" +
+    "事件ID: " + ev.event_id + "\n" +
+    "原时间: " + currentKst + "\n" +
+    "新时间: " + corrFmtKst_(newMs)
+  );
+  if(!ok) return;
+
+  try{
+    var res = await fetchApi({ action:"admin_event_update", k:adminKey_(), event_id:ev.event_id, new_ms:newMs });
+    if(!res || res.ok !== true){
+      alert("修改失败: " + (res && res.error ? res.error : "unknown"));
+      return;
+    }
+    alert("修改成功");
+    corrLoadSession(); // 重新加载
+  }catch(e){
+    alert("修改异常: " + e);
+  }
+}
+
+async function corrFixDelete(idx){
+  var ev = _corrFixEvents[idx];
+  if(!ev){ alert("事件不存在"); return; }
+
+  var ok = confirm(
+    "确认删除此事件？\n\n" +
+    "事件ID: " + ev.event_id + "\n" +
+    "类型: " + ev.event + "\n" +
+    "工牌: " + (badgeName_(ev.badge)||ev.badge||"-") + "\n" +
+    "时间: " + corrFmtKst_(ev.server_ms) + "\n\n" +
+    "删除后不可恢复！"
+  );
+  if(!ok) return;
+
+  try{
+    var res = await fetchApi({ action:"admin_event_delete", k:adminKey_(), event_id:ev.event_id });
+    if(!res || res.ok !== true){
+      alert("删除失败: " + (res && res.error ? res.error : "unknown"));
+      return;
+    }
+    alert("已删除");
+    corrLoadSession(); // 重新加载
+  }catch(e){
+    alert("删除异常: " + e);
+  }
+}
+
 function adminLogout(){
   adminClear_();
   alert("已退出管理员模式");

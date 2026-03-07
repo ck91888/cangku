@@ -322,6 +322,24 @@
         <div id="corrHistory" class="muted">无</div>
       </div>
     </div>
+
+    <div class="card">
+      <div class="cardTitle" style="font-size:16px;">修正已有记录 / Correct Existing</div>
+      <div class="muted" style="margin-bottom:10px;">输入 Session ID 查询事件，可修改时间或删除错误记录。</div>
+
+      <div class="row">
+        <div style="flex:1;">
+          <small>Session ID</small>
+          <input id="corrFixSession" type="text" placeholder="PS-260308-093000-OP" />
+        </div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="primary" style="width:auto;min-width:100px;" onclick="corrLoadSession()">查询</button>
+        </div>
+      </div>
+
+      <div id="corrFixMeta" class="muted" style="margin-top:8px;"></div>
+      <div id="corrFixEvents" style="margin-top:10px;"></div>
+    </div>
   </div>
 
   <!-- REPORT (Admin-only) -->
