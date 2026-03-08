@@ -152,8 +152,9 @@ function renderPages(){
   if(cur==="b2c_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="warehouse_cleanup"){ restoreState(); renderActiveLists(); refreshUI(); }
 
-  // active_now auto-refresh: start 30s interval when on page, clear when leaving
+  // 离开页面时清除定时器
   if(_activeNowTimer){ clearInterval(_activeNowTimer); _activeNowTimer = null; }
+  if(relabelTimerHandle){ clearInterval(relabelTimerHandle); relabelTimerHandle = null; }
   if(cur==="active_now"){
     refreshActiveNow();
     _activeNowTimer = setInterval(refreshActiveNow, 30000);
@@ -2067,6 +2068,7 @@ async function tempSwitchToUnload_(){
   setSess_(target.biz, target.task, unloadSid);
 
   var joinedUnload = [];
+  var joinFailed = [];
   for(var u = 0; u < leftBadges.length; u++){
     try{
       var evJoin = makeEventId({ event:"join", biz:target.biz, task:target.task, wave_id:"", badgeRaw: leftBadges[u] });
@@ -2075,8 +2077,11 @@ async function tempSwitchToUnload_(){
       applyActive(target.task, "join", leftBadges[u]);
       joinedUnload.push(leftBadges[u]);
     }catch(e){
-      alert("加入卸货失败（" + badgeDisplay(leftBadges[u]) + "）：" + e);
+      joinFailed.push(badgeDisplay(leftBadges[u]));
     }
+  }
+  if(joinFailed.length > 0){
+    alert("以下人员加入卸货失败，请手动加入：\n" + joinFailed.join("\n"));
   }
   persistState();
 

@@ -76,12 +76,16 @@ function jsonp(url, params){
 
 // ===== fetchApi (admin endpoints, POST body hides sensitive key) =====
 async function fetchApi(params){
-  var res = await fetch(LOCK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params)
-  });
-  return await res.json();
+  try{
+    var res = await fetch(LOCK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params)
+    });
+    return await res.json();
+  }catch(e){
+    return { ok:false, error:"network_error: " + e };
+  }
 }
 
 // ===== 登录/口令 =====
@@ -257,10 +261,15 @@ function buildSummary_(header, rows, serverNow){
   var iWaveId = header.indexOf("wave_id");
   var iOk     = header.indexOf("ok");
 
+  // 必须列校验
+  if(iServer < 0 || iEvent < 0 || iBadge < 0 || iBiz < 0 || iTask < 0){
+    return { anomalies:{open:0,leave_without_join:0,rejoin_without_leave:0}, summary:[], taskTotals:[], people:[], taskEfficiency:[] };
+  }
+
   var active = {}; // badge -> {t,biz,task}
   var acc = {};    // badge -> { total_ms, tasks: {k:ms} }
   var totalsByTask = {}; // "biz|task" -> ms
-  var anomalies = { open:0, leave_without_join:0, rejoin_without_leave:0 };
+  var anomalies = { open:0, leave_without_join:0, rejoin_without_leave:0, task_mismatch:0 };
 
   // session/wave tracking for efficiency
   var sessionInfo = {}; // session -> {biz, task, badges:{}, waves:{}}
@@ -324,7 +333,7 @@ function buildSummary_(header, rows, serverNow){
       }
       // 校验biz/task匹配：不匹配时仍用join时记录的biz/task计算工时
       if(active[badge].biz !== biz || active[badge].task !== task){
-        anomalies.rejoin_without_leave++;
+        anomalies.task_mismatch++;
       }
       var dur = Math.max(0, t - active[badge].t);
       addDur(badge, active[badge].biz, active[badge].task, dur);

@@ -561,7 +561,17 @@ export default {
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
         ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, note).run();
 
-        if (ins.meta && ins.meta.changes === 0) return jsonpOrJson({ ok:true, duplicate:true }, callback);
+        if (ins.meta && ins.meta.changes === 0) {
+          // duplicate event_id: release the lock we just acquired
+          try {
+            await stub.fetch("https://locks/do", {
+              method: "POST",
+              headers: { "content-type":"application/json" },
+              body: JSON.stringify({ action:"lock_force_release", badge })
+            });
+          } catch(e) { /* best effort */ }
+          return jsonpOrJson({ ok:true, duplicate:true }, callback);
+        }
         return jsonpOrJson({ ok:true, saved:true, locked:true }, callback);
       }
 
