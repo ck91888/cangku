@@ -236,9 +236,42 @@
     </div>
 
     <div class="card">
+      <div class="row">
+        <div style="flex:1;">
+          <small>日期(KST)</small>
+          <input id="gsDateFrom" type="date" />
+        </div>
+        <div style="flex:1;">
+          <small>至</small>
+          <input id="gsDateTo" type="date" />
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1;">
+          <small>业务线</small>
+          <select id="gsBiz" onchange="gsUpdateTasks()">
+            <option value="">全部</option>
+            <option value="B2C">B2C</option>
+            <option value="B2B">B2B</option>
+            <option value="进口">进口</option>
+            <option value="仓库">仓库</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <small>任务</small>
+          <select id="gsTask">
+            <option value="">全部</option>
+          </select>
+        </div>
+      </div>
+      <button class="primary" onclick="refreshGlobalSessions()">查询 / Search</button>
+    </div>
+
+    <div class="card">
       <div id="sessionListMeta" class="muted" style="margin-bottom:8px;"></div>
       <div id="globalSessionsIndex"></div>
       <div id="globalSessionsDetail" style="display:none;"></div>
+      <div id="globalSessionsEvents" style="display:none;"></div>
     </div>
   </div>
 
@@ -323,23 +356,6 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="cardTitle" style="font-size:16px;">修正已有记录 / Correct Existing</div>
-      <div class="muted" style="margin-bottom:10px;">输入 Session ID 查询事件，可修改时间或删除错误记录。</div>
-
-      <div class="row">
-        <div style="flex:1;">
-          <small>Session ID</small>
-          <input id="corrFixSession" type="text" placeholder="PS-260308-093000-OP" />
-        </div>
-        <div style="display:flex;align-items:flex-end;">
-          <button class="primary" style="width:auto;min-width:100px;" onclick="corrLoadSession()">查询</button>
-        </div>
-      </div>
-
-      <div id="corrFixMeta" class="muted" style="margin-top:8px;"></div>
-      <div id="corrFixEvents" style="margin-top:10px;"></div>
-    </div>
   </div>
 
   <!-- REPORT (Admin-only) -->

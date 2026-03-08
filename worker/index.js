@@ -720,12 +720,21 @@ export default {
     if (action === "admin_sessions_list") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const biz = String(p.biz || "").trim();
-      let sessionsSql = biz
-        ? `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator FROM sessions WHERE biz=? ORDER BY created_ms DESC LIMIT 50`
-        : `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator FROM sessions ORDER BY created_ms DESC LIMIT 50`;
-      const sessionRows = biz
-        ? (await env.DB.prepare(sessionsSql).bind(biz).all()).results || []
-        : (await env.DB.prepare(sessionsSql).all()).results || [];
+      const task = String(p.task || "").trim();
+      const since_ms = parseInt(p.since_ms || "0", 10) || 0;
+      const until_ms = parseInt(p.until_ms || "0", 10) || 0;
+      const limit = Math.min(Math.max(parseInt(p.limit || "200", 10) || 200, 1), 500);
+
+      let where = "WHERE 1=1";
+      const binds = [];
+      if (biz) { where += " AND biz=?"; binds.push(biz); }
+      if (task) { where += " AND task=?"; binds.push(task); }
+      if (since_ms) { where += " AND created_ms>=?"; binds.push(since_ms); }
+      if (until_ms) { where += " AND created_ms<=?"; binds.push(until_ms); }
+
+      const sessionsSql = `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator FROM sessions ${where} ORDER BY created_ms DESC LIMIT ?`;
+      binds.push(limit);
+      const sessionRows = (await env.DB.prepare(sessionsSql).bind(...binds).all()).results || [];
       const stub = locksStub(env);
       const allLocksR = await stub.fetch("https://locks/do", {
         method: "POST",

@@ -158,7 +158,18 @@ function renderPages(){
     refreshActiveNow();
     _activeNowTimer = setInterval(refreshActiveNow, 30000);
   }
-  if(cur==="global_sessions"){ refreshGlobalSessions(); }
+  if(cur==="global_sessions"){
+    // 设置默认日期为今天(KST)
+    var gsFrom = document.getElementById("gsDateFrom");
+    var gsTo = document.getElementById("gsDateTo");
+    if(gsFrom && !gsFrom.value){
+      var kstNow = new Date(Date.now() + 9*3600*1000);
+      var today = kstNow.getUTCFullYear() + "-" + pad2_(kstNow.getUTCMonth()+1) + "-" + pad2_(kstNow.getUTCDate());
+      gsFrom.value = today;
+      gsTo.value = today;
+    }
+    refreshGlobalSessions();
+  }
   if(cur==="b2c_menu"){ refreshUI(); }
   if(cur==="import_menu"){ refreshUI(); }
 
@@ -1453,12 +1464,52 @@ async function adminForceLeave(btn){
 
 var _globalSessionsData = [];
 var _globalSessionsFilter = null; // "OPEN" | "CLOSED" | null
+var _globalSessionsViewSession = null; // session ID being viewed for events
+
+var GS_TASK_MAP = {
+  "B2C": ["入库理货","拣货","打包","退件入库","质检","废弃处理","换标","盘点","批量出库"],
+  "B2B": ["B2B卸货","B2B理货","B2B出库单","B2B出库","盘点"],
+  "进口": ["卸货","扫板","装车","提货","问题处理"],
+  "仓库": ["仓库整理"]
+};
+
+function gsUpdateTasks(){
+  var biz = document.getElementById("gsBiz").value;
+  var sel = document.getElementById("gsTask");
+  sel.innerHTML = '<option value="">全部</option>';
+  var tasks = GS_TASK_MAP[biz] || [];
+  tasks.forEach(function(t){
+    sel.innerHTML += '<option value="' + esc(t) + '">' + esc(t) + '</option>';
+  });
+}
+
+function gsKstDayStartMs_(dayKey){
+  if(!dayKey) return 0;
+  return Date.parse(dayKey + "T00:00:00.000Z") - 9*3600*1000;
+}
+function gsKstDayEndMs_(dayKey){
+  if(!dayKey) return 0;
+  return gsKstDayStartMs_(dayKey) + 24*3600*1000 - 1;
+}
 
 async function refreshGlobalSessions(){
   var metaEl = document.getElementById("sessionListMeta");
   if(metaEl) metaEl.textContent = "加载中... ⏳";
+
+  var params = { action:"admin_sessions_list", k:adminKey_() };
+
+  var dateFrom = document.getElementById("gsDateFrom");
+  var dateTo = document.getElementById("gsDateTo");
+  var bizSel = document.getElementById("gsBiz");
+  var taskSel = document.getElementById("gsTask");
+
+  if(dateFrom && dateFrom.value) params.since_ms = gsKstDayStartMs_(dateFrom.value);
+  if(dateTo && dateTo.value) params.until_ms = gsKstDayEndMs_(dateTo.value);
+  if(bizSel && bizSel.value) params.biz = bizSel.value;
+  if(taskSel && taskSel.value) params.task = taskSel.value;
+
   try{
-    var res = await fetchApi({ action:"admin_sessions_list", k:adminKey_() });
+    var res = await fetchApi(params);
     if(!res || res.ok !== true){
       if(metaEl) metaEl.textContent = "加载失败 ❌ " + (res && res.error ? res.error : "");
       return;
@@ -1467,6 +1518,10 @@ async function refreshGlobalSessions(){
     var open = _globalSessionsData.filter(function(s){ return s.status==="OPEN"; }).length;
     var closed = _globalSessionsData.length - open;
     if(metaEl) metaEl.textContent = "共 " + _globalSessionsData.length + " 条 ｜ OPEN: " + open + " ｜ CLOSED: " + closed;
+
+    _globalSessionsViewSession = null;
+    var eventsEl = document.getElementById("globalSessionsEvents");
+    if(eventsEl) eventsEl.style.display = "none";
 
     if(_globalSessionsFilter){
       renderGlobalSessionsDetail_(_globalSessionsFilter);
@@ -1480,11 +1535,14 @@ async function refreshGlobalSessions(){
 
 function renderGlobalSessionsIndex_(){
   _globalSessionsFilter = null;
+  _globalSessionsViewSession = null;
   var titleEl = document.getElementById("globalSessionsTitle");
   if(titleEl) titleEl.textContent = "全局Session / Sessions";
   var indexEl = document.getElementById("globalSessionsIndex");
   var detailEl = document.getElementById("globalSessionsDetail");
+  var eventsEl = document.getElementById("globalSessionsEvents");
   if(detailEl) detailEl.style.display = "none";
+  if(eventsEl) eventsEl.style.display = "none";
   if(!indexEl) return;
   indexEl.style.display = "";
 
@@ -1505,6 +1563,7 @@ function renderGlobalSessionsIndex_(){
 
 function globalSessionsShowDetail(status){
   _globalSessionsFilter = status;
+  _globalSessionsViewSession = null;
   renderGlobalSessionsDetail_(status);
 }
 
@@ -1512,7 +1571,9 @@ function renderGlobalSessionsDetail_(status){
   var titleEl = document.getElementById("globalSessionsTitle");
   var indexEl = document.getElementById("globalSessionsIndex");
   var detailEl = document.getElementById("globalSessionsDetail");
+  var eventsEl = document.getElementById("globalSessionsEvents");
   if(indexEl) indexEl.style.display = "none";
+  if(eventsEl) eventsEl.style.display = "none";
   if(!detailEl) return;
   detailEl.style.display = "";
 
@@ -1529,25 +1590,140 @@ function renderGlobalSessionsDetail_(status){
   detailEl.innerHTML = list.map(function(s){
     var activeList = (s.active||[]).map(function(lk){ return esc(lk.badge||""); }).join(", ");
     var forceEndBtn = (s.status==="OPEN" && (!s.active || s.active.length===0))
-      ? '<button class="small bad" style="margin-top:6px;width:auto;" data-session="'+esc(s.session)+'" onclick="adminForceEndSession(this)">强制结束 / 강제 종료</button>'
+      ? '<button class="small bad" style="margin-top:6px;width:auto;" data-session="'+esc(s.session)+'" onclick="adminForceEndSession(this)">强制结束</button>'
       : "";
     var taskLabel = (s.biz && s.task) ? taskDisplayLabel(s.biz, s.task) : (s.biz||"-");
+    var viewEventsBtn = '<button class="small" style="margin-top:6px;width:auto;margin-left:6px;" data-session="'+esc(s.session)+'" onclick="gsViewEvents(this.dataset.session)">查看/修正事件</button>';
     return (
       '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
         '<div style="font-weight:700;font-size:13px;">'+esc(s.session)+'</div>' +
         '<div style="margin-top:4px;">'+esc(taskLabel)+'</div>' +
         '<div class="muted" style="margin-top:2px;font-size:12px;">创建: '+new Date(s.created_ms||0).toLocaleString()+' ｜ 操作员: '+esc(s.created_by_operator||"-")+'</div>' +
+        (s.closed_ms ? '<div class="muted" style="font-size:12px;">关闭: '+new Date(s.closed_ms).toLocaleString()+'</div>' : '') +
         (s.active && s.active.length>0
           ? '<div class="muted" style="margin-top:4px;">在岗('+s.active.length+'): '+activeList+'</div>'
           : '') +
-        forceEndBtn +
+        '<div>' + forceEndBtn + viewEventsBtn + '</div>' +
       '</div>'
     );
   }).join("");
 }
 
+// ===== 查看/修正 Session 事件 =====
+var _gsEventsData = [];
+
+async function gsViewEvents(session){
+  _globalSessionsViewSession = session;
+  var detailEl = document.getElementById("globalSessionsDetail");
+  var eventsEl = document.getElementById("globalSessionsEvents");
+  var titleEl = document.getElementById("globalSessionsTitle");
+  if(detailEl) detailEl.style.display = "none";
+  if(!eventsEl) return;
+  eventsEl.style.display = "";
+  eventsEl.innerHTML = '<div class="muted">加载事件中...</div>';
+  if(titleEl) titleEl.textContent = "事件详情";
+
+  try{
+    var res = await fetchApi({ action:"admin_session_events", k:adminKey_(), session:session });
+    if(!res || res.ok !== true){
+      eventsEl.innerHTML = '<div class="muted">加载失败: ' + esc(res && res.error ? res.error : "unknown") + '</div>';
+      return;
+    }
+    _gsEventsData = res.events || [];
+    gsRenderEvents_(session);
+  }catch(e){
+    eventsEl.innerHTML = '<div class="muted">加载异常: ' + esc(String(e)) + '</div>';
+  }
+}
+
+function gsRenderEvents_(session){
+  var el = document.getElementById("globalSessionsEvents");
+  if(!el) return;
+
+  var html = '<div style="font-weight:700;margin-bottom:8px;">Session: ' + esc(session) + ' (' + _gsEventsData.length + '条事件)</div>';
+
+  if(_gsEventsData.length === 0){
+    html += '<div class="muted">该 Session 无事件记录</div>';
+    el.innerHTML = html;
+    return;
+  }
+
+  html += '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;min-width:650px;">';
+  html += '<tr style="background:#fafafa;">' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">事件</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">工牌</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">任务</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">时间(KST)</th>' +
+    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">备注</th>' +
+    '<th style="text-align:center;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">操作</th>' +
+  '</tr>';
+
+  _gsEventsData.forEach(function(ev, idx){
+    var evColor = ev.event === "join" ? "#27ae60" : ev.event === "leave" ? "#e74c3c" : ev.event === "start" ? "#3498db" : ev.event === "end" ? "#8e44ad" : "#666";
+    var okStyle = Number(ev.ok) === 0 ? 'style="opacity:0.4;"' : '';
+    html += '<tr ' + okStyle + '>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' +
+        '<span style="color:' + evColor + ';font-weight:700;">' + esc(ev.event) + '</span>' +
+        (Number(ev.ok) === 0 ? ' <span style="color:#999;font-size:10px;">(blocked)</span>' : '') +
+      '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc(badgeName_(ev.badge) || ev.badge || "-") + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc((ev.biz||"") + "/" + (ev.task||"")) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;white-space:nowrap;">' + esc(corrFmtKst_(ev.server_ms)) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:11px;color:#888;max-width:100px;overflow:hidden;text-overflow:ellipsis;">' + esc(ev.note||"") + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;text-align:center;white-space:nowrap;">';
+    if(Number(ev.ok) !== 0 && (ev.event === "join" || ev.event === "leave")){
+      html += '<button style="width:auto;min-width:auto;font-size:11px;padding:3px 8px;margin:1px;" onclick="gsEditEventTime('+idx+')">改时间</button>';
+    }
+    html += '<button style="width:auto;min-width:auto;font-size:11px;padding:3px 8px;margin:1px;background:#e74c3c;color:#fff;border-color:#e74c3c;" onclick="gsDeleteEvent('+idx+')">删除</button>';
+    html += '</td></tr>';
+  });
+  html += '</table></div>';
+  el.innerHTML = html;
+}
+
+async function gsEditEventTime(idx){
+  var ev = _gsEventsData[idx];
+  if(!ev) return;
+  var currentKst = corrFmtKst_(ev.server_ms);
+  var input = prompt(
+    "修改事件时间\n\n" +
+    "事件: " + ev.event + " | 工牌: " + (badgeName_(ev.badge)||ev.badge) + "\n" +
+    "当前时间(KST): " + currentKst + "\n\n" +
+    "请输入新时间(KST)，格式: YYYY-MM-DD HH:MM",
+    currentKst
+  );
+  if(!input) return;
+  var cleaned = input.trim().replace(/\s+/g, "T");
+  var newMs = corrKstToMs_(cleaned.substring(0,16));
+  if(!newMs){ alert("时间格式错误"); return; }
+  if(!confirm("确认修改？\n原: " + currentKst + "\n新: " + corrFmtKst_(newMs))) return;
+  try{
+    var res = await fetchApi({ action:"admin_event_update", k:adminKey_(), event_id:ev.event_id, new_ms:newMs });
+    if(!res || res.ok !== true){ alert("修改失败: " + (res&&res.error||"unknown")); return; }
+    alert("修改成功");
+    gsViewEvents(ev.session);
+  }catch(e){ alert("异常: "+e); }
+}
+
+async function gsDeleteEvent(idx){
+  var ev = _gsEventsData[idx];
+  if(!ev) return;
+  if(!confirm("确认删除？\n\n事件: " + ev.event + " | " + (badgeName_(ev.badge)||ev.badge) + "\n时间: " + corrFmtKst_(ev.server_ms) + "\n\n删除后不可恢复！")) return;
+  try{
+    var res = await fetchApi({ action:"admin_event_delete", k:adminKey_(), event_id:ev.event_id });
+    if(!res || res.ok !== true){ alert("删除失败: " + (res&&res.error||"unknown")); return; }
+    alert("已删除");
+    gsViewEvents(ev.session);
+  }catch(e){ alert("异常: "+e); }
+}
+
 function globalSessionsBack(){
-  if(_globalSessionsFilter){
+  if(_globalSessionsViewSession){
+    _globalSessionsViewSession = null;
+    var eventsEl = document.getElementById("globalSessionsEvents");
+    if(eventsEl) eventsEl.style.display = "none";
+    renderGlobalSessionsDetail_(_globalSessionsFilter);
+  } else if(_globalSessionsFilter){
     renderGlobalSessionsIndex_();
   } else {
     back();
@@ -3904,143 +4080,6 @@ function corrRenderHistory_(){
       (h.note ? ' | ' + esc(h.note) : '') + '</div></div>';
   });
   el.innerHTML = html;
-}
-
-// ===== 修正已有记录 =====
-var _corrFixEvents = []; // 当前查询的事件列表
-
-async function corrLoadSession(){
-  if(!adminIsUnlocked_()){
-    alert("请先解锁管理员模式（标题连点7次）");
-    return;
-  }
-  var session = document.getElementById("corrFixSession").value.trim();
-  if(!session){ alert("请输入 Session ID"); return; }
-
-  var metaEl = document.getElementById("corrFixMeta");
-  var eventsEl = document.getElementById("corrFixEvents");
-  metaEl.textContent = "查询中...";
-  eventsEl.innerHTML = "";
-
-  try{
-    var res = await fetchApi({ action:"admin_session_events", k:adminKey_(), session:session });
-    if(!res || res.ok !== true){
-      metaEl.textContent = "查询失败: " + (res && res.error ? res.error : "unknown");
-      return;
-    }
-    _corrFixEvents = res.events || [];
-    metaEl.textContent = "Session: " + session + " | 共 " + _corrFixEvents.length + " 条事件";
-    corrRenderFixEvents_(session);
-  }catch(e){
-    metaEl.textContent = "查询异常: " + e;
-  }
-}
-
-function corrRenderFixEvents_(session){
-  var el = document.getElementById("corrFixEvents");
-  if(!el) return;
-  if(_corrFixEvents.length === 0){
-    el.innerHTML = '<div class="muted">该 Session 无事件记录</div>';
-    return;
-  }
-  var html = '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;min-width:700px;">';
-  html += '<tr style="background:#fafafa;">' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">事件</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">工牌</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">任务</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">时间(KST)</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">备注</th>' +
-    '<th style="text-align:center;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">操作</th>' +
-  '</tr>';
-  _corrFixEvents.forEach(function(ev, idx){
-    var evColor = ev.event === "join" ? "#27ae60" : ev.event === "leave" ? "#e74c3c" : "#3498db";
-    var okStyle = Number(ev.ok) === 0 ? 'style="opacity:0.4;"' : '';
-    html += '<tr ' + okStyle + '>' +
-      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' +
-        '<span style="color:' + evColor + ';font-weight:700;">' + esc(ev.event) + '</span>' +
-        (Number(ev.ok) === 0 ? ' <span style="color:#999;">(blocked)</span>' : '') +
-      '</td>' +
-      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc(badgeName_(ev.badge) || ev.badge || "-") + '</td>' +
-      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc((ev.biz||"") + "/" + (ev.task||"")) + '</td>' +
-      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;white-space:nowrap;">' + esc(corrFmtKst_(ev.server_ms)) + '</td>' +
-      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;font-size:11px;color:#888;max-width:120px;overflow:hidden;text-overflow:ellipsis;">' + esc(ev.note||"") + '</td>' +
-      '<td style="padding:6px 8px;border-bottom:1px solid #f2f2f2;text-align:center;white-space:nowrap;">';
-    if(Number(ev.ok) !== 0 && (ev.event === "join" || ev.event === "leave")){
-      html += '<button style="width:auto;min-width:50px;font-size:11px;padding:4px 8px;margin:2px;" onclick="corrFixTime('+idx+')">改时间</button>';
-    }
-    html += '<button style="width:auto;min-width:50px;font-size:11px;padding:4px 8px;margin:2px;background:#e74c3c;color:#fff;border-color:#e74c3c;" onclick="corrFixDelete('+idx+')">删除</button>';
-    html += '</td></tr>';
-  });
-  html += '</table></div>';
-  el.innerHTML = html;
-}
-
-async function corrFixTime(idx){
-  var ev = _corrFixEvents[idx];
-  if(!ev){ alert("事件不存在"); return; }
-
-  var currentKst = corrFmtKst_(ev.server_ms);
-  var input = prompt(
-    "修改事件时间\n\n" +
-    "事件: " + ev.event + " | 工牌: " + (badgeName_(ev.badge)||ev.badge) + "\n" +
-    "当前时间(KST): " + currentKst + "\n\n" +
-    "请输入新时间(KST)，格式: YYYY-MM-DD HH:MM\n例如: 2026-03-08 09:30",
-    currentKst
-  );
-  if(!input) return;
-
-  // 解析 "YYYY-MM-DD HH:MM" -> ms
-  var cleaned = input.trim().replace(/\s+/g, "T");
-  if(cleaned.length === 16) cleaned += ":00";
-  var newMs = corrKstToMs_(cleaned.substring(0,16));
-  if(!newMs){ alert("时间格式错误，请用 YYYY-MM-DD HH:MM 格式"); return; }
-
-  var ok = confirm(
-    "确认修改？\n\n" +
-    "事件ID: " + ev.event_id + "\n" +
-    "原时间: " + currentKst + "\n" +
-    "新时间: " + corrFmtKst_(newMs)
-  );
-  if(!ok) return;
-
-  try{
-    var res = await fetchApi({ action:"admin_event_update", k:adminKey_(), event_id:ev.event_id, new_ms:newMs });
-    if(!res || res.ok !== true){
-      alert("修改失败: " + (res && res.error ? res.error : "unknown"));
-      return;
-    }
-    alert("修改成功");
-    corrLoadSession(); // 重新加载
-  }catch(e){
-    alert("修改异常: " + e);
-  }
-}
-
-async function corrFixDelete(idx){
-  var ev = _corrFixEvents[idx];
-  if(!ev){ alert("事件不存在"); return; }
-
-  var ok = confirm(
-    "确认删除此事件？\n\n" +
-    "事件ID: " + ev.event_id + "\n" +
-    "类型: " + ev.event + "\n" +
-    "工牌: " + (badgeName_(ev.badge)||ev.badge||"-") + "\n" +
-    "时间: " + corrFmtKst_(ev.server_ms) + "\n\n" +
-    "删除后不可恢复！"
-  );
-  if(!ok) return;
-
-  try{
-    var res = await fetchApi({ action:"admin_event_delete", k:adminKey_(), event_id:ev.event_id });
-    if(!res || res.ok !== true){
-      alert("删除失败: " + (res && res.error ? res.error : "unknown"));
-      return;
-    }
-    alert("已删除");
-    corrLoadSession(); // 重新加载
-  }catch(e){
-    alert("删除异常: " + e);
-  }
 }
 
 function adminLogout(){
