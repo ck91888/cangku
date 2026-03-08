@@ -691,19 +691,33 @@ export default {
       return jsonpOrJson({ ok:true, events: rs.results || [] }, callback);
     }
 
-    // ===== 修正：修改事件时间 =====
+    // ===== 修正：修改事件字段(时间/单号/备注/业务/任务/工牌) =====
     if (action === "admin_event_update") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const event_id = String(p.event_id || "").trim();
-      const new_ms = Number(p.new_ms || 0);
       if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
-      if (!new_ms || new_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid new_ms" }, callback);
-      const existing = await env.DB.prepare(`SELECT event_id FROM events WHERE event_id=?`).bind(event_id).first();
+      const existing = await env.DB.prepare(`SELECT * FROM events WHERE event_id=?`).bind(event_id).first();
       if (!existing) return jsonpOrJson({ ok:false, error:"event_id not found" }, callback);
-      await env.DB.prepare(
-        `UPDATE events SET server_ms=?, client_ms=?, note=note||' [time_corrected]' WHERE event_id=?`
-      ).bind(new_ms, new_ms, event_id).run();
-      return jsonpOrJson({ ok:true, updated:true, event_id, new_ms }, callback);
+
+      const sets = [];
+      const binds = [];
+      // 可修改的字段
+      if (p.new_ms !== undefined && p.new_ms !== null && p.new_ms !== "") {
+        const ms = Number(p.new_ms);
+        if (ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid new_ms" }, callback);
+        sets.push("server_ms=?", "client_ms=?"); binds.push(ms, ms);
+      }
+      if (p.new_wave_id !== undefined) { sets.push("wave_id=?"); binds.push(String(p.new_wave_id).trim()); }
+      if (p.new_note !== undefined) { sets.push("note=?"); binds.push(String(p.new_note).trim()); }
+      if (p.new_badge !== undefined) { sets.push("badge=?"); binds.push(String(p.new_badge).trim()); }
+      if (p.new_biz !== undefined) { sets.push("biz=?"); binds.push(String(p.new_biz).trim()); }
+      if (p.new_task !== undefined) { sets.push("task=?"); binds.push(String(p.new_task).trim()); }
+
+      if (sets.length === 0) return jsonpOrJson({ ok:false, error:"no fields to update" }, callback);
+
+      binds.push(event_id);
+      await env.DB.prepare(`UPDATE events SET ${sets.join(",")} WHERE event_id=?`).bind(...binds).run();
+      return jsonpOrJson({ ok:true, updated:true, event_id, fields: sets.length }, callback);
     }
 
     // ===== 修正：删除错误事件 =====

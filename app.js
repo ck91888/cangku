@@ -1648,57 +1648,86 @@ function gsRenderEvents_(session){
     return;
   }
 
-  html += '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;min-width:650px;">';
-  html += '<tr style="background:#fafafa;">' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">事件</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">工牌</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">任务</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">时间(KST)</th>' +
-    '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">备注</th>' +
-    '<th style="text-align:center;padding:6px 8px;border-bottom:2px solid #eee;font-size:12px;">操作</th>' +
-  '</tr>';
-
+  // 用卡片式展示每条事件，更清晰也方便编辑
   _gsEventsData.forEach(function(ev, idx){
     var evColor = ev.event === "join" ? "#27ae60" : ev.event === "leave" ? "#e74c3c" : ev.event === "start" ? "#3498db" : ev.event === "end" ? "#8e44ad" : "#666";
-    var okStyle = Number(ev.ok) === 0 ? 'style="opacity:0.4;"' : '';
-    html += '<tr ' + okStyle + '>' +
-      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' +
-        '<span style="color:' + evColor + ';font-weight:700;">' + esc(ev.event) + '</span>' +
-        (Number(ev.ok) === 0 ? ' <span style="color:#999;font-size:10px;">(blocked)</span>' : '') +
-      '</td>' +
-      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc(badgeName_(ev.badge) || ev.badge || "-") + '</td>' +
-      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;">' + esc((ev.biz||"") + "/" + (ev.task||"")) + '</td>' +
-      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:12px;white-space:nowrap;">' + esc(corrFmtKst_(ev.server_ms)) + '</td>' +
-      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;font-size:11px;color:#888;max-width:100px;overflow:hidden;text-overflow:ellipsis;">' + esc(ev.note||"") + '</td>' +
-      '<td style="padding:5px 8px;border-bottom:1px solid #f2f2f2;text-align:center;white-space:nowrap;">';
-    if(Number(ev.ok) !== 0 && (ev.event === "join" || ev.event === "leave")){
-      html += '<button style="width:auto;min-width:auto;font-size:11px;padding:3px 8px;margin:1px;" onclick="gsEditEventTime('+idx+')">改时间</button>';
+    var dimStyle = Number(ev.ok) === 0 ? 'opacity:0.5;' : '';
+    html += '<div style="border:1px solid #eee;border-radius:10px;padding:10px;margin:6px 0;font-size:13px;' + dimStyle + '">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+    html += '<span style="color:' + evColor + ';font-weight:700;font-size:14px;">' + esc(ev.event) + '</span>';
+    html += '<span class="muted" style="font-size:11px;">' + esc(corrFmtKst_(ev.server_ms)) + '</span>';
+    html += '</div>';
+    html += '<div style="margin-top:4px;">';
+    html += '<b>工牌:</b> ' + esc(badgeName_(ev.badge) || ev.badge || "-");
+    html += ' &nbsp; <b>任务:</b> ' + esc((ev.biz||"") + "/" + (ev.task||""));
+    html += '</div>';
+    if(ev.wave_id){
+      html += '<div style="margin-top:2px;"><b>单号:</b> ' + esc(ev.wave_id) + '</div>';
     }
-    html += '<button style="width:auto;min-width:auto;font-size:11px;padding:3px 8px;margin:1px;background:#e74c3c;color:#fff;border-color:#e74c3c;" onclick="gsDeleteEvent('+idx+')">删除</button>';
-    html += '</td></tr>';
+    if(ev.note){
+      html += '<div style="margin-top:2px;color:#888;"><b>备注:</b> ' + esc(ev.note) + '</div>';
+    }
+    if(Number(ev.ok) === 0){
+      html += '<div style="margin-top:2px;color:#999;font-size:11px;">(blocked)</div>';
+    }
+    html += '<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">';
+    if(Number(ev.ok) !== 0){
+      html += '<button style="width:auto;font-size:11px;padding:3px 10px;" onclick="gsEditField('+idx+',\'time\')">改时间</button>';
+      html += '<button style="width:auto;font-size:11px;padding:3px 10px;" onclick="gsEditField('+idx+',\'wave_id\')">改单号</button>';
+      html += '<button style="width:auto;font-size:11px;padding:3px 10px;" onclick="gsEditField('+idx+',\'note\')">改备注</button>';
+      html += '<button style="width:auto;font-size:11px;padding:3px 10px;" onclick="gsEditField('+idx+',\'badge\')">改工牌</button>';
+    }
+    html += '<button style="width:auto;font-size:11px;padding:3px 10px;background:#e74c3c;color:#fff;border-color:#e74c3c;" onclick="gsDeleteEvent('+idx+')">删除</button>';
+    html += '</div></div>';
   });
-  html += '</table></div>';
   el.innerHTML = html;
 }
 
-async function gsEditEventTime(idx){
+async function gsEditField(idx, field){
   var ev = _gsEventsData[idx];
   if(!ev) return;
-  var currentKst = corrFmtKst_(ev.server_ms);
-  var input = prompt(
-    "修改事件时间\n\n" +
-    "事件: " + ev.event + " | 工牌: " + (badgeName_(ev.badge)||ev.badge) + "\n" +
-    "当前时间(KST): " + currentKst + "\n\n" +
-    "请输入新时间(KST)，格式: YYYY-MM-DD HH:MM",
-    currentKst
-  );
-  if(!input) return;
-  var cleaned = input.trim().replace(/\s+/g, "T");
-  var newMs = corrKstToMs_(cleaned.substring(0,16));
-  if(!newMs){ alert("时间格式错误"); return; }
-  if(!confirm("确认修改？\n原: " + currentKst + "\n新: " + corrFmtKst_(newMs))) return;
+
+  var params = { action:"admin_event_update", k:adminKey_(), event_id:ev.event_id };
+  var label, current, input;
+
+  if(field === "time"){
+    label = "时间(KST)";
+    current = corrFmtKst_(ev.server_ms);
+    input = prompt("修改" + label + "\n事件: " + ev.event + " | " + (badgeName_(ev.badge)||ev.badge) + "\n\n格式: YYYY-MM-DD HH:MM", current);
+    if(!input) return;
+    var cleaned = input.trim().replace(/\s+/g, "T");
+    var newMs = corrKstToMs_(cleaned.substring(0,16));
+    if(!newMs){ alert("时间格式错误"); return; }
+    params.new_ms = newMs;
+    if(!confirm("确认修改时间？\n原: " + current + "\n新: " + corrFmtKst_(newMs))) return;
+  } else if(field === "wave_id"){
+    label = "单号";
+    current = ev.wave_id || "";
+    input = prompt("修改" + label + "\n事件: " + ev.event + " | " + (badgeName_(ev.badge)||ev.badge) + "\n\n当前: " + (current||"(空)"), current);
+    if(input === null) return;
+    params.new_wave_id = input.trim();
+    if(!confirm("确认修改单号？\n原: " + (current||"(空)") + "\n新: " + (params.new_wave_id||"(空)"))) return;
+  } else if(field === "note"){
+    label = "备注";
+    current = ev.note || "";
+    input = prompt("修改" + label + "\n事件: " + ev.event + " | " + (badgeName_(ev.badge)||ev.badge) + "\n\n当前: " + (current||"(空)"), current);
+    if(input === null) return;
+    params.new_note = input.trim();
+    if(!confirm("确认修改备注？\n原: " + (current||"(空)") + "\n新: " + (params.new_note||"(空)"))) return;
+  } else if(field === "badge"){
+    label = "工牌";
+    current = ev.badge || "";
+    input = prompt("修改" + label + "\n事件: " + ev.event + " | 时间: " + corrFmtKst_(ev.server_ms) + "\n\n当前: " + current, current);
+    if(!input) return;
+    params.new_badge = input.trim();
+    if(!params.new_badge){ alert("工牌不能为空"); return; }
+    if(!confirm("确认修改工牌？\n原: " + current + "\n新: " + params.new_badge)) return;
+  } else {
+    return;
+  }
+
   try{
-    var res = await fetchApi({ action:"admin_event_update", k:adminKey_(), event_id:ev.event_id, new_ms:newMs });
+    var res = await fetchApi(params);
     if(!res || res.ok !== true){ alert("修改失败: " + (res&&res.error||"unknown")); return; }
     alert("修改成功");
     gsViewEvents(ev.session);
