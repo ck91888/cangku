@@ -2724,7 +2724,10 @@ async function openScannerCommon(){
     Html5QrcodeSupportedFormats.ITF,
     Html5QrcodeSupportedFormats.CODABAR
   ];
-  scanner = new Html5Qrcode("reader", { formatsToSupport: supportedFormats });
+  scanner = new Html5Qrcode("reader", {
+    formatsToSupport: supportedFormats,
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+  });
 
   var onScan = async (decodedText) => {
     var code = decodedText.trim();
@@ -3028,12 +3031,22 @@ async function openScannerCommon(){
 
   };
 
+  // ✅ 自适应扫描区域：宽度占视频85%（条形码需要横向全入），高度30%
+  var qrboxFn = function(viewfinderWidth, viewfinderHeight){
+    var w = Math.floor(viewfinderWidth * 0.85);
+    var h = Math.floor(viewfinderHeight * 0.30);
+    // 最低保底尺寸
+    if(w < 250) w = Math.min(250, viewfinderWidth - 10);
+    if(h < 80) h = Math.min(80, viewfinderHeight - 10);
+    return { width: w, height: h };
+  };
+
   try{
-    await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 280, height: 160 } }, onScan);
+    await scanner.start({ facingMode: "environment" }, { fps: 15, qrbox: qrboxFn }, onScan);
   }catch(e){
     var cams = await Html5Qrcode.getCameras();
     var camId = cams && cams[0] ? cams[0].id : null;
-    await scanner.start(camId, { fps:10, qrbox:{width:240,height:240}}, onScan);
+    await scanner.start(camId, { fps: 15, qrbox: qrboxFn }, onScan);
   }
 }
 
