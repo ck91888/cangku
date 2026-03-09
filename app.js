@@ -111,7 +111,7 @@ function getHashPage(){
   if(!m) return "home";
   var p = m[1];
   // admin-only pages
-  if((p==="report" || p==="global_sessions") && !adminIsUnlocked_()){
+  if((p==="report" || p==="global_sessions" || p==="correction") && !adminIsUnlocked_()){
     if(!ADMIN_DENY_ONCE[p]){ ADMIN_DENY_ONCE[p]=1; alert("管理员功能：请在标题处连续点击 7 次解锁"); }
     return "home";
   }
@@ -402,7 +402,6 @@ var relabelStartTs = null;
 
 var leaderPickBadge = localStorage.getItem("leader_pick_badge") || null;
 var leaderPickOk = localStorage.getItem("leader_pick_ok") === "1";
-var pendingLeaderEnd = null;
 
 /** ===== Session state (server) ===== */
 var SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
@@ -1005,9 +1004,9 @@ async function submitEventSync_(o, silent){
     throw new Error("该趟次已被关闭（可能是管理员强制结束）。\n本地已自动清除，请重新开始新的趟次。");
   }
     if(er === "operator_has_open_session"){
-  const ob = (res && res.open_biz) ? res.open_biz : "";
-  const ot = (res && res.open_task) ? res.open_task : "";
-  const os = (res && res.open_session) ? res.open_session : "";
+  var ob = (res && res.open_biz) ? res.open_biz : "";
+  var ot = (res && res.open_task) ? res.open_task : "";
+  var os = (res && res.open_session) ? res.open_session : "";
   throw new Error(
     "本机还有未结束趟次：\n" +
     (ob && ot ? (ob + " / " + ot) : "") +
@@ -1468,9 +1467,9 @@ var _globalSessionsFilter = null; // "OPEN" | "CLOSED" | null
 var _globalSessionsViewSession = null; // session ID being viewed for events
 
 var GS_TASK_MAP = {
-  "B2C": ["入库理货","拣货","打包","退件入库","质检","废弃处理","换标","盘点","批量出库"],
-  "B2B": ["B2B卸货","B2B理货","B2B出库单","B2B出库","盘点"],
-  "进口": ["卸货","扫板","装车","提货","问题处理"],
+  "B2C": ["理货","拣货","打包","退件入库","质检","废弃处理","换单","B2C盘点","批量出库"],
+  "B2B": ["B2B卸货","B2B入库理货","B2B工单操作","B2B出库","B2B盘点"],
+  "进口": ["卸货","过机扫描码托","装柜/出货","取/送货","问题处理"],
   "仓库": ["仓库整理"]
 };
 
@@ -3027,23 +3026,6 @@ async function openScannerCommon(){
       return;
     }
 
-    if(scanMode === "leaderEndPick"){
-      if(!isOperatorBadge(code)){ setStatus("无效工牌（请扫 EMP-xxx|名字）", false); return; }
-      var p4 = parseBadge(code);
-      if(!p4.id.startsWith("EMP-")){ setStatus("请扫组长员工工牌（EMP-xxx|名字）", false); return; }
-
-      scanBusy = true;
-      await pauseScanner();
-      try{
-        leaderPickBadge = p4.raw; localStorage.setItem("leader_pick_badge", leaderPickBadge);
-        await endSessionGlobal_();
-        pendingLeaderEnd = null;
-        leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0");
-        refreshUI(); syncLeaderPickUI();
-        await closeScanner();
-      } finally { scanBusy = false; }
-      return;
-    }
   };
 
   try{

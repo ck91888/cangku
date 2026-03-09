@@ -680,6 +680,11 @@ export default {
       if (event !== "join" && event !== "leave") return jsonpOrJson({ ok:false, error:"event must be join or leave" }, callback);
       if (!custom_ms || custom_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid custom_ms (need ms timestamp)" }, callback);
 
+      // 确保 session 记录存在（补录时自动生成的 session 可能不在 sessions 表中）
+      if (session) {
+        await ensureSessionOpen(env, session, operator_id, biz, task);
+      }
+
       const event_id = "manual-" + event + "-" + badge + "-" + custom_ms + "-" + now;
       await env.DB.prepare(
         `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
