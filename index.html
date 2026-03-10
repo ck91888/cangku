@@ -919,6 +919,10 @@
         <div class="grow">
           <div class="overlayTitle" id="scanTitle">扫码 / 스캔</div>
           <div class="overlayHint">请对准二维码 / 바코드를 화면 중앙에 맞추세요</div>
+          <div style="font-size:12px;color:#999;margin-top:2px;">
+            <span id="camCurrentLabel"></span>
+            <button id="btnSwitchCam" class="small" style="display:none;font-size:11px;padding:2px 8px;margin-left:6px;min-width:auto;" onclick="switchCamera()">切换镜头</button>
+          </div>
         </div>
         <button class="small" style="width:auto;min-width:90px" onclick="closeScannerWithFallback()">关闭 / 닫기</button>
       </div>

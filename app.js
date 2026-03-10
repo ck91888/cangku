@@ -195,6 +195,11 @@ if(!location.hash) setHash("home");
 /** ===== Globals ===== */
 var scanner = null;
 var scanMode = null;
+var _scanCameras = [];
+var _scanCurrentCamId = null;
+var _scanCurrentLabel = "";
+var _scanOnScan = null;
+var _scanQrboxFn = null;
 
 var currentSessionId = null; // ✅ 每任务独立趟次：进入页面时按任务切换
 
@@ -3092,39 +3097,104 @@ async function openScannerCommon(){
     return { width: w, height: h };
   };
 
-  // ✅ Html5Qrcode.start() 第一个参数只接受 { facingMode } 或 cameraId 字符串
-  // width/height/zoom/focusMode 等不能放这里，否则 iOS Safari 直接拒绝
-  try{
-    await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: qrboxFn }, onScan);
-  }catch(e){
-    // facingMode 失败（部分安卓），fallback 用摄像头 ID
+  // 缓存 onScan 和 qrboxFn 供 switchCamera 复用
+  _scanOnScan = onScan;
+  _scanQrboxFn = qrboxFn;
+
+  var isIOS = /iPad|iPhone|iPod/i.test(navigator.userAgent) && !window.MSStream;
+
+  if(isIOS){
+    // ✅ iOS：只用 facingMode，getCameras label 通常为空
     try{
-      var cams = await Html5Qrcode.getCameras();
-      // 优先选广角主摄，排除长焦/微距
-      var camId = null;
-      if(cams && cams.length > 1){
-        var dominated = /tele|长焦|macro|微距/i;
-        var preferred = /wide|广角|main|主|rear\s*0|back\s*0|camera\s*0|facing back/i;
-        var candidates = cams.filter(function(c){ return !dominated.test(c.label); });
-        if(candidates.length === 0) candidates = cams;
-        for(var ci=0;ci<candidates.length;ci++){
-          if(preferred.test(candidates[ci].label)){ camId = candidates[ci].id; break; }
+      await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: qrboxFn }, onScan);
+      _scanCurrentCamId = null;
+      _scanCurrentLabel = "iOS 后置";
+    }catch(e){
+      var iosCams = await Html5Qrcode.getCameras();
+      var iosId = iosCams && iosCams[0] ? iosCams[0].id : null;
+      await scanner.start(iosId, { fps: 10, qrbox: qrboxFn }, onScan);
+      _scanCurrentCamId = iosId;
+      _scanCurrentLabel = (iosCams && iosCams[0] && iosCams[0].label) || "camera";
+    }
+    _scanCameras = [];
+  }else{
+    // ✅ Android：优先 getCameras + 黑白名单选主摄
+    var cams = [];
+    try{ cams = await Html5Qrcode.getCameras(); }catch(e){}
+    _scanCameras = cams || [];
+
+    var chosen = null;
+    if(_scanCameras.length > 0){
+      // 检查 localStorage 缓存
+      var cached = localStorage.getItem("ck_preferred_cam");
+      if(cached){
+        for(var ci=0;ci<_scanCameras.length;ci++){
+          if(_scanCameras[ci].id === cached){ chosen = _scanCameras[ci]; break; }
         }
-        if(!camId) camId = candidates[0].id;
-      } else if(cams && cams[0]){
-        camId = cams[0].id;
       }
-      await scanner.start(camId, { fps: 10, qrbox: qrboxFn }, onScan);
-    }catch(e2){
-      // 最终 fallback：取第一个可用摄像头
-      var cams2 = await Html5Qrcode.getCameras();
-      var camId2 = cams2 && cams2[0] ? cams2[0].id : null;
-      await scanner.start(camId2, { fps: 10, qrbox: qrboxFn }, onScan);
+      if(!chosen) chosen = pickBestCamera_(_scanCameras);
+    }
+
+    var started = false;
+    if(chosen){
+      try{
+        await scanner.start(chosen.id, { fps: 10, qrbox: qrboxFn }, onScan);
+        _scanCurrentCamId = chosen.id;
+        _scanCurrentLabel = chosen.label || "camera";
+        localStorage.setItem("ck_preferred_cam", chosen.id);
+        localStorage.setItem("ck_preferred_cam_label", chosen.label || "");
+        started = true;
+      }catch(e){}
+    }
+    if(!started){
+      // fallback: facingMode
+      try{
+        await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: qrboxFn }, onScan);
+        _scanCurrentCamId = null;
+        _scanCurrentLabel = "environment";
+      }catch(e2){
+        var fb = _scanCameras[0];
+        await scanner.start(fb ? fb.id : null, { fps: 10, qrbox: qrboxFn }, onScan);
+        _scanCurrentCamId = fb ? fb.id : null;
+        _scanCurrentLabel = fb ? (fb.label || "camera") : "camera";
+      }
     }
   }
 
-  // ✅ 启动成功后：尝试设置 zoom=最小值 + 连续对焦（OPPO 防长焦锁定）
-  // 用 try/catch 包裹，iOS 不支持会静默跳过
+  // ✅ 更新切换镜头 UI
+  updateCamSwitchUI_(isIOS);
+
+  // ✅ 启动成功后：zoom=最小值 + 连续对焦
+  await applyCamOptimizations_();
+}
+
+// ===== 摄像头黑白名单筛选 =====
+function pickBestCamera_(cams){
+  var blacklist = /tele|telephoto|长焦|macro|微距|periscope|潜望|portrait|人像|zoom|3x|5x|10x/i;
+  var tier1 = /main|wide|1x|广角|主|rear\s*0|back\s*0|camera\s*0/i;
+  var tier2 = /rear|back|facing back/i;
+  var tier3 = /ultra|超广/i;
+
+  var candidates = cams.filter(function(c){ return !blacklist.test(c.label); });
+  if(candidates.length === 0) candidates = cams;
+
+  // 第一优先
+  for(var i=0;i<candidates.length;i++){
+    if(tier1.test(candidates[i].label)) return candidates[i];
+  }
+  // 第二优先
+  for(var i=0;i<candidates.length;i++){
+    if(tier2.test(candidates[i].label)) return candidates[i];
+  }
+  // 次优：ultra/超广
+  for(var i=0;i<candidates.length;i++){
+    if(tier3.test(candidates[i].label)) return candidates[i];
+  }
+  return candidates[0];
+}
+
+// ===== zoom=min + continuous autofocus =====
+async function applyCamOptimizations_(){
   try{
     var videoElem = document.querySelector("#reader video");
     if(videoElem && videoElem.srcObject){
@@ -3141,7 +3211,50 @@ async function openScannerCommon(){
         }
       }
     }
-  }catch(e){ /* iOS Safari 等不支持 getCapabilities/applyConstraints，静默跳过 */ }
+  }catch(e){ /* iOS Safari 等不支持，静默跳过 */ }
+}
+
+// ===== 更新切换镜头 UI =====
+function updateCamSwitchUI_(isIOS){
+  var labelEl = document.getElementById("camCurrentLabel");
+  var btnEl = document.getElementById("btnSwitchCam");
+  if(!labelEl || !btnEl) return;
+  if(isIOS || _scanCameras.length < 2){
+    labelEl.textContent = "";
+    btnEl.style.display = "none";
+  }else{
+    labelEl.textContent = _scanCurrentLabel || "camera";
+    btnEl.style.display = "inline-block";
+  }
+}
+
+// ===== 切换镜头 =====
+async function switchCamera(){
+  if(!scanner || _scanCameras.length < 2) return;
+  var lines = [];
+  for(var i=0;i<_scanCameras.length;i++){
+    var mark = (_scanCameras[i].id === _scanCurrentCamId) ? " ← 当前" : "";
+    lines.push((i+1) + ". " + (_scanCameras[i].label || "camera " + (i+1)) + mark);
+  }
+  var input = prompt("选择镜头编号：\n\n" + lines.join("\n"));
+  if(!input) return;
+  var idx = parseInt(input, 10) - 1;
+  if(isNaN(idx) || idx < 0 || idx >= _scanCameras.length) return;
+  var cam = _scanCameras[idx];
+  if(cam.id === _scanCurrentCamId) return;
+
+  try{
+    await scanner.stop();
+    await scanner.start(cam.id, { fps: 10, qrbox: _scanQrboxFn }, _scanOnScan);
+    _scanCurrentCamId = cam.id;
+    _scanCurrentLabel = cam.label || "camera";
+    localStorage.setItem("ck_preferred_cam", cam.id);
+    localStorage.setItem("ck_preferred_cam_label", cam.label || "");
+    updateCamSwitchUI_(false);
+    await applyCamOptimizations_();
+  }catch(e){
+    alert("切换镜头失败: " + e);
+  }
 }
 
 async function closeScanner(){
