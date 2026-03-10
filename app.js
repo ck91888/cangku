@@ -924,12 +924,16 @@ function jsonp(url, params, opts){
 
 /** ===== fetchApi (admin endpoints, POST body hides sensitive key) ===== */
 async function fetchApi(params){
-  var res = await fetch(LOCK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params)
-  });
-  return await res.json();
+  try{
+    var res = await fetch(LOCK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params)
+    });
+    return await res.json();
+  }catch(e){
+    return { ok:false, error:"network_error" };
+  }
 }
 
 /** ===== Async event queue (non-locking events) ===== */
@@ -958,16 +962,21 @@ async function flushQueue_(){
   FLUSHING = true;
   try{
     var keep = [];
+    var dropped = 0;
     for(var i=0;i<q.length;i++){
       var item = q[i];
       try{
         item.tries = (item.tries||0) + 1;
         await submitEventSync_(item.payload, true);
       }catch(e){
-        if(item.tries < 8) keep.push(item);
+        if(item.tries < 8){ keep.push(item); }
+        else { dropped++; }
       }
     }
     saveQueue_(keep);
+    if(dropped > 0){
+      setStatus("⚠️ " + dropped + " 条数据上传失败已丢弃，请检查网络", false);
+    }
   } finally {
     FLUSHING = false;
   }
@@ -1787,6 +1796,9 @@ async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
   if(currentSessionId){
     var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
     if(!ok){ releaseBusy_(); return; }
+    // 尝试关闭旧 session，避免孤儿 session
+    try{ await sessionCloseServer_(); }catch(e2){ /* 关闭失败不阻断新建 */ }
+    cleanupLocalSession_();
   }
   var btn = e && e.target ? e.target : null;
   var origText = btn ? btn.textContent : "";
@@ -2227,7 +2239,8 @@ async function returnFromTempUnload_(){
     clearTempSwitchCtx_();
   }
 
-  // 5. 导航
+  // 5. 导航 + 同步服务器最新在岗状态
+  syncActiveFromServer_();
   if(remaining.length > 0){
     refreshUI();
     renderActiveLists();
@@ -2598,7 +2611,13 @@ function generateDailyBadgesByName(){
       box.style.borderRadius = "12px";
       box.style.padding = "10px";
       var safeId = "qrn_" + dateStr + "_" + idx;
-      box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">' + da + '</div><div id="' + safeId + '"></div>';
+      var labelDiv = document.createElement("div");
+      labelDiv.style.cssText = "font-weight:700;margin-bottom:6px;";
+      labelDiv.textContent = da;
+      var qrDiv = document.createElement("div");
+      qrDiv.id = safeId;
+      box.appendChild(labelDiv);
+      box.appendChild(qrDiv);
       listEl.appendChild(box);
       new QRCode(document.getElementById(safeId), { text: "DA-" + dateStr + "-" + name, width: 160, height: 160 });
 
@@ -2640,7 +2659,13 @@ function generatePermanentDaBadges(){
     box.style.border = "1px solid #ddd";
     box.style.borderRadius = "12px";
     box.style.padding = "10px";
-    box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
+    var labelDiv2 = document.createElement("div");
+    labelDiv2.style.cssText = "font-weight:700;margin-bottom:6px;";
+    labelDiv2.textContent = payload;
+    var qrDiv2 = document.createElement("div");
+    qrDiv2.id = safeKey;
+    box.appendChild(labelDiv2);
+    box.appendChild(qrDiv2);
     listEl.appendChild(box);
     new QRCode(document.getElementById(safeKey), { text: "DAF-" + name, width: 160, height: 160 });
   });
@@ -2679,7 +2704,13 @@ function generateEmployeeBadges(){
     box.style.border = "1px solid #ddd";
     box.style.borderRadius = "12px";
     box.style.padding = "10px";
-    box.innerHTML = '<div style="font-weight:700;margin-bottom:6px;">'+payload+'</div><div id="'+safeKey+'"></div>';
+    var labelDiv3 = document.createElement("div");
+    labelDiv3.style.cssText = "font-weight:700;margin-bottom:6px;";
+    labelDiv3.textContent = payload;
+    var qrDiv3 = document.createElement("div");
+    qrDiv3.id = safeKey;
+    box.appendChild(labelDiv3);
+    box.appendChild(qrDiv3);
     listEl.appendChild(box);
     new QRCode(document.getElementById(safeKey), { text: "EMP-" + name, width: 160, height: 160 });
   });
@@ -2729,6 +2760,15 @@ async function openScannerCommon(){
     experimentalFeatures: { useBarCodeDetectorIfSupported: true }
   });
 
+  // ✅ 条形码乱码过滤：检测可疑字符比例，拦截明显误读
+  function looksGarbled_(text){
+    if(!text || text.length < 2) return false;
+    // 正常工单号/工牌由字母、数字、横杠、斜杠、下划线、点组成
+    var normal = text.replace(/[A-Za-z0-9\u4e00-\u9fff\uAC00-\uD7AF\-_\/\.\|,\s]/g, "");
+    // 如果超过30%是特殊字符，很可能是乱码
+    return (normal.length / text.length) > 0.3;
+  }
+
   var onScan = async (decodedText) => {
     var code = decodedText.trim();
     try { code = decodeURIComponent(code); } catch(e) {}
@@ -2737,6 +2777,14 @@ async function openScannerCommon(){
     var now = Date.now();
     if(now - lastScanAt < 900) return;
     lastScanAt = now;
+
+    // ✅ 乱码检测：对非 QR 码场景（工单/单号扫码）自动拦截可疑结果
+    if(scanMode !== "operator_setup" && scanMode !== "session_join" && scanMode !== "labor" && scanMode !== "badgeBind" && scanMode !== "leaderLoginPick"){
+      if(looksGarbled_(code)){
+        setStatus("⚠️ 扫码结果异常（疑似乱码）：" + code + " — 请重新扫码或手动输入", false);
+        return;
+      }
+    }
 
     if(scanMode === "operator_setup"){
       if(!isOperatorBadge(code)){ setStatus("无效工牌 / 잘못된 명찰 ❌", false); return; }
@@ -3041,13 +3089,77 @@ async function openScannerCommon(){
     return { width: w, height: h };
   };
 
-  try{
-    await scanner.start({ facingMode: "environment" }, { fps: 15, qrbox: qrboxFn }, onScan);
-  }catch(e){
-    var cams = await Html5Qrcode.getCameras();
-    var camId = cams && cams[0] ? cams[0].id : null;
-    await scanner.start(camId, { fps: 15, qrbox: qrboxFn }, onScan);
+  // ✅ 强制使用广角主摄（避免 OPPO 等手机自动选择长焦镜头）
+  // ideal 低分辨率 + focusMode continuous 提升近距离条形码识别
+  var videoConstraints = {
+    facingMode: "environment",
+    width: { ideal: 1280, max: 1920 },
+    height: { ideal: 720, max: 1080 },
+    zoom: 1.0,
+    focusMode: "continuous"
+  };
+
+  // 尝试找到广角主摄（排除长焦/超广角）
+  async function pickWideCameraId_(){
+    try{
+      var cams = await Html5Qrcode.getCameras();
+      if(!cams || cams.length <= 1) return null;
+      // 优先选 label 包含 "wide" 或 "广角" 或 "main" 或 "0"（通常是主摄 camera index 0）
+      // 排除 label 包含 "tele" / "长焦" / "macro" / "微距" / "ultra" / "超广"
+      var dominated = /tele|长焦|macro|微距/i;
+      var preferred = /wide|广角|main|主|rear\s*0|back\s*0|camera\s*0|facing back/i;
+      var candidates = cams.filter(function(c){ return !dominated.test(c.label); });
+      if(candidates.length === 0) candidates = cams;
+      for(var i=0;i<candidates.length;i++){
+        if(preferred.test(candidates[i].label)) return candidates[i].id;
+      }
+      // fallback: 取第一个非长焦
+      return candidates[0].id;
+    }catch(e){ return null; }
   }
+
+  try{
+    await scanner.start(videoConstraints, { fps: 10, qrbox: qrboxFn }, onScan);
+  }catch(e){
+    // facingMode 约束失败，尝试用摄像头 ID 选择广角主摄
+    try{
+      var wideId = await pickWideCameraId_();
+      if(wideId){
+        await scanner.start(wideId, { fps: 10, qrbox: qrboxFn }, onScan);
+      }else{
+        var cams = await Html5Qrcode.getCameras();
+        var camId = cams && cams[0] ? cams[0].id : null;
+        await scanner.start(camId, { fps: 10, qrbox: qrboxFn }, onScan);
+      }
+    }catch(e2){
+      // 最终 fallback
+      var cams2 = await Html5Qrcode.getCameras();
+      var camId2 = cams2 && cams2[0] ? cams2[0].id : null;
+      await scanner.start(camId2, { fps: 10, qrbox: qrboxFn }, onScan);
+    }
+  }
+
+  // ✅ 启动后尝试应用 zoom=1 和 continuous autofocus（防止长焦锁定）
+  try{
+    var track = scanner.getRunningTrackSettings && scanner.getRunningTrackSettings();
+    if(!track){
+      var videoElem = document.querySelector("#reader video");
+      if(videoElem && videoElem.srcObject){
+        var tracks = videoElem.srcObject.getVideoTracks();
+        if(tracks && tracks[0]){
+          var capabilities = tracks[0].getCapabilities ? tracks[0].getCapabilities() : {};
+          var applyConstraints = {};
+          if(capabilities.zoom){ applyConstraints.zoom = capabilities.zoom.min || 1.0; }
+          if(capabilities.focusMode && capabilities.focusMode.indexOf("continuous") >= 0){
+            applyConstraints.focusMode = "continuous";
+          }
+          if(Object.keys(applyConstraints).length > 0){
+            await tracks[0].applyConstraints({ advanced: [applyConstraints] });
+          }
+        }
+      }
+    }
+  }catch(e){ /* 部分浏览器不支持 */ }
 }
 
 async function closeScanner(){

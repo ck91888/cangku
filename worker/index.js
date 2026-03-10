@@ -202,8 +202,11 @@ async function ensureSessionOpen(env, session, operator_id, biz, task) {
 
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO sessions(session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task)
-     VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?)`
+    `INSERT INTO sessions(session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task)
+     VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?)
+     ON CONFLICT(session) DO UPDATE SET
+       biz=CASE WHEN excluded.biz!='' THEN excluded.biz ELSE sessions.biz END,
+       task=CASE WHEN excluded.task!='' THEN excluded.task ELSE sessions.task END`
   ).bind(sid, now, String(operator_id||""), String(biz||""), String(task||"")).run();
 }
 
@@ -562,12 +565,12 @@ export default {
         ).bind(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, 1, note).run();
 
         if (ins.meta && ins.meta.changes === 0) {
-          // duplicate event_id: release the lock we just acquired
+          // duplicate event_id: release the lock we just acquired (带条件释放，防止误杀其他session的锁)
           try {
             await stub.fetch("https://locks/do", {
               method: "POST",
               headers: { "content-type":"application/json" },
-              body: JSON.stringify({ action:"lock_force_release", badge })
+              body: JSON.stringify({ action:"lock_release", badge, task, session, operator_id })
             });
           } catch(e) { /* best effort */ }
           return jsonpOrJson({ ok:true, duplicate:true }, callback);
@@ -603,12 +606,12 @@ export default {
             lockReleased = true; // 锁已经不存在，视为成功
           }
         } catch(e) {
-          // 网络异常时 fallback：尝试强制释放
+          // 网络异常时 fallback：仍用带条件释放，避免误杀其他session的锁
           try {
             await stub.fetch("https://locks/do", {
               method: "POST",
               headers: { "content-type":"application/json" },
-              body: JSON.stringify({ action:"lock_force_release", badge })
+              body: JSON.stringify({ action:"lock_release", badge, task, session, operator_id })
             });
             lockReleased = true;
           } catch(e2) { /* 彻底失败 */ }
