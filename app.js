@@ -365,9 +365,12 @@ var globalBusy = false; // 防止快速连点导致并发请求
 
 // ===== B2B 工单专用扫码常量 =====
 var B2B_CONFIRM_WINDOW_MS = 800;
+var B2B_SUCCESS_COOLDOWN_MS = 800;
 var B2B_DENY_PREFIX = []; // 可扩展：已知误扫前缀
 var _b2bPendingCode = null;
 var _b2bPendingTime = 0;
+var _b2bCooldownUntil = 0;
+var _scanFeedbackTimer = null;
 
 function acquireBusy_(){
   if(globalBusy){ setStatus("处理中，请稍候 / 잠시만요...", false); return false; }
@@ -2369,6 +2372,7 @@ async function openScannerB2bWorkorder(){
   scanMode = "b2b_workorder";
   document.getElementById("scanTitle").textContent = "扫码工单号（B2B）— 连续扫码模式：扫完请手动点关闭";
   await openScannerCommon();
+  updateScanRecentList_();
 }
 
 function manualAddB2bWorkorder(){
@@ -2926,42 +2930,50 @@ async function openScannerCommon(){
       var codeW = decodedText.trim().toUpperCase();
       if(!codeW){ return; }
 
+      // 冷却期内忽略
+      var nowW = Date.now();
+      if(nowW < _b2bCooldownUntil) return;
+
       // 合法性判断
       if(!isValidB2bWorkorderCode_(codeW)){
+        showScanFeedback_("不是有效工单号: " + codeW, "#fff0f0", "#c00", 1500);
         setStatus("⚠️ 不是有效工单号: " + codeW, false);
         return;
       }
 
       // 已记录去重（不关闭扫码器，继续扫）
       if(scannedB2bWorkorders.has(codeW)){
+        showScanFeedback_("已记录（去重）" + codeW, "#fffbe6", "#b8860b", 1200);
         setStatus("已记录（去重）✅ " + codeW, true);
         return;
       }
 
       // 二次确认机制
-      var nowW = Date.now();
       if(_b2bPendingCode !== codeW){
         _b2bPendingCode = codeW;
         _b2bPendingTime = nowW;
-        setStatus("已识别 " + codeW + "，等待确认... 🔄", true);
+        setStatus("已识别 " + codeW + "，等待确认...", true);
         return;
       }
       if(nowW - _b2bPendingTime > B2B_CONFIRM_WINDOW_MS){
-        // 超时，重新开始确认
         _b2bPendingTime = nowW;
-        setStatus("已识别 " + codeW + "，等待确认... 🔄", true);
+        setStatus("已识别 " + codeW + "，等待确认...", true);
         return;
       }
 
       // 二次确认通过，记录
       _b2bPendingCode = null; _b2bPendingTime = 0;
+      _b2bCooldownUntil = nowW + B2B_SUCCESS_COOLDOWN_MS;
       scannedB2bWorkorders.add(codeW); persistState(); renderB2bWorkorderUI();
       var evIdW = makeEventId({ event:"wave", biz:"B2B", task:"B2B工单操作", wave_id: codeW, badgeRaw:"" });
       if(!hasRecent(evIdW)){
         submitEvent({ event:"wave", event_id: evIdW, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: codeW });
         addRecent(evIdW);
       }
+      showScanFeedback_("✅ 已记录 " + codeW + " | 累计: " + scannedB2bWorkorders.size, "#e6ffe6", "#006400", 1500);
       setStatus("已记录工单 ✅ " + codeW + " | 累计：" + scannedB2bWorkorders.size, true);
+      updateScanRecentList_();
+      try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
       // 连续扫码：不关闭扫码器
       return;
     }
@@ -3273,6 +3285,42 @@ function updateCamSwitchUI_(isIOS){
   }
 }
 
+// ===== 扫码浮层内反馈 =====
+function showScanFeedback_(text, bgColor, textColor, durationMs){
+  var el = document.getElementById("scanFeedback");
+  if(!el) return;
+  if(_scanFeedbackTimer){ clearTimeout(_scanFeedbackTimer); _scanFeedbackTimer = null; }
+  el.textContent = text;
+  el.style.background = bgColor;
+  el.style.color = textColor;
+  el.style.opacity = "1";
+  el.style.display = "block";
+  _scanFeedbackTimer = setTimeout(function(){
+    el.style.opacity = "0";
+    setTimeout(function(){ el.style.display = "none"; }, 400);
+    _scanFeedbackTimer = null;
+  }, durationMs || 1200);
+}
+
+function updateScanRecentList_(){
+  var el = document.getElementById("scanRecentList");
+  if(!el) return;
+  if(scanMode !== "b2b_workorder"){ el.style.display = "none"; return; }
+  var arr = Array.from(scannedB2bWorkorders);
+  var recent = arr.slice(Math.max(0, arr.length - 3));
+  if(recent.length === 0){ el.style.display = "none"; return; }
+  el.style.display = "block";
+  el.innerHTML = "最近已扫: " + recent.map(function(x){ return "<b>" + esc(x) + "</b>"; }).join(" | ");
+}
+
+function clearScanFeedback_(){
+  var fb = document.getElementById("scanFeedback");
+  if(fb){ fb.style.display = "none"; fb.style.opacity = "0"; fb.textContent = ""; }
+  var rl = document.getElementById("scanRecentList");
+  if(rl){ rl.style.display = "none"; rl.innerHTML = ""; }
+  if(_scanFeedbackTimer){ clearTimeout(_scanFeedbackTimer); _scanFeedbackTimer = null; }
+}
+
 // ===== 切换镜头 =====
 async function switchCamera(){
   if(!scanner || _scanCameras.length < 2) return;
@@ -3306,6 +3354,7 @@ async function closeScanner(){
   try{
     if(scanner){ await scanner.stop(); await scanner.clear(); scanner = null; }
   }catch(e){}
+  clearScanFeedback_();
   hideOverlay();
 }
 function closeScannerWithFallback(){
