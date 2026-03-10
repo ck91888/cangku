@@ -19,7 +19,8 @@ var pages = [
   "active_now",
   "report",
   "global_sessions",
-  "correction"
+  "correction",
+  "wms_import"
 ];
 
 
@@ -82,6 +83,8 @@ function adminApplyUI_(){
   if(btnS) btnS.style.display = show;
   var btnC = document.getElementById("btnCorrection");
   if(btnC) btnC.style.display = show;
+  var btnW = document.getElementById("btnWmsImport");
+  if(btnW) btnW.style.display = show;
 }
 function bindAdminEasterEgg_(){
   var el = document.querySelector(".title");
@@ -111,7 +114,7 @@ function getHashPage(){
   if(!m) return "home";
   var p = m[1];
   // admin-only pages
-  if((p==="report" || p==="global_sessions" || p==="correction") && !adminIsUnlocked_()){
+  if((p==="report" || p==="global_sessions" || p==="correction" || p==="wms_import") && !adminIsUnlocked_()){
     if(!ADMIN_DENY_ONCE[p]){ ADMIN_DENY_ONCE[p]=1; alert("管理员功能：请在标题处连续点击 7 次解锁"); }
     return "home";
   }
@@ -4208,6 +4211,270 @@ function adminLogout(){
   setHash("home");
 }
 
+
+/** ===== WMS Data Import Module ===== */
+var _wmsWorkbook = null;
+var _wmsFileName = "";
+var _wmsPreviewRows = [];  // [{header:[], rows:[[]]}]
+var _wmsCurrentSheet = "";
+
+function wmsSetStatus_(msg, ok){
+  var el = document.getElementById("wmsStatus");
+  if(el){
+    el.textContent = msg;
+    el.style.color = ok === false ? "#e74c3c" : ok === true ? "#27ae60" : "#666";
+  }
+}
+
+function wmsFileSelected(input){
+  var file = input && input.files && input.files[0];
+  wmsClearPreview();
+  if(!file) return;
+
+  if(typeof XLSX === "undefined" || !window.XLSX){
+    wmsSetStatus_("❌ SheetJS 库未加载（XLSX is not defined）。请检查网络后刷新页面重试。", false);
+    return;
+  }
+
+  _wmsFileName = file.name;
+  wmsSetStatus_("已选择：" + file.name + "（" + (file.size/1024).toFixed(1) + " KB）正在解析... ⏳");
+
+  var reader = new FileReader();
+  reader.onerror = function(){
+    wmsSetStatus_("❌ 文件读取失败：" + (reader.error || "unknown"), false);
+  };
+  reader.onload = function(e){
+    try{
+      var data = new Uint8Array(e.target.result);
+      _wmsWorkbook = XLSX.read(data, { type:"array", cellDates:true, dateNF:'yyyy-mm-dd hh:mm:ss' });
+      var names = _wmsWorkbook.SheetNames || [];
+      if(names.length === 0){
+        wmsSetStatus_("❌ 文件中没有任何 Sheet", false);
+        return;
+      }
+      wmsSetStatus_("✅ 解析成功：" + _wmsFileName + " — " + names.length + " 个 Sheet", true);
+      // 显示 sheet 选择器
+      var sel = document.getElementById("wmsSheetSelect");
+      sel.innerHTML = "";
+      names.forEach(function(n){
+        var opt = document.createElement("option");
+        opt.value = n; opt.textContent = n;
+        sel.appendChild(opt);
+      });
+      document.getElementById("wmsSheetSelector").style.display = "block";
+      // 自动预览第一个 sheet
+      wmsSheetChanged();
+    }catch(ex){
+      wmsSetStatus_("❌ 解析失败：" + String(ex), false);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function wmsSheetChanged(){
+  var sel = document.getElementById("wmsSheetSelect");
+  _wmsCurrentSheet = sel.value;
+  if(!_wmsWorkbook || !_wmsCurrentSheet) return;
+  var ws = _wmsWorkbook.Sheets[_wmsCurrentSheet];
+  if(!ws){ alert("Sheet 不存在"); return; }
+
+  // 转为 JSON（第一行作为表头）
+  var rawRows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, dateNF:'yyyy-mm-dd hh:mm:ss' });
+  // 过滤全空行
+  rawRows = rawRows.filter(function(r){
+    return r.some(function(c){ return c !== null && c !== undefined && String(c).trim() !== ""; });
+  });
+  if(rawRows.length === 0){ alert("Sheet 为空"); return; }
+
+  var header = rawRows[0].map(function(h){ return String(h||"").trim(); });
+  var dataRows = rawRows.slice(1);
+
+  _wmsPreviewRows = { header: header, rows: dataRows, totalRows: dataRows.length };
+
+  // 显示预览
+  var meta = document.getElementById("wmsPreviewMeta");
+  meta.textContent = "📄 " + _wmsFileName + " → Sheet: " + _wmsCurrentSheet + " | 字段: " + header.length + " | 数据行: " + dataRows.length;
+
+  var table = document.getElementById("wmsPreviewTable");
+  var html = "<thead><tr>";
+  header.forEach(function(h){ html += "<th style='border:1px solid #ddd;padding:4px 8px;background:#f5f5f5;white-space:nowrap;'>" + esc(h) + "</th>"; });
+  html += "</tr></thead><tbody>";
+  var previewCount = Math.min(20, dataRows.length);
+  for(var i=0;i<previewCount;i++){
+    html += "<tr>";
+    for(var j=0;j<header.length;j++){
+      var val = (dataRows[i] && dataRows[i][j] !== undefined && dataRows[i][j] !== null) ? String(dataRows[i][j]) : "";
+      html += "<td style='border:1px solid #eee;padding:3px 6px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>" + esc(val) + "</td>";
+    }
+    html += "</tr>";
+  }
+  if(dataRows.length > 20){
+    html += "<tr><td colspan='" + header.length + "' style='text-align:center;color:#999;padding:6px;'>... 还有 " + (dataRows.length - 20) + " 行 ...</td></tr>";
+  }
+  html += "</tbody>";
+  table.innerHTML = html;
+
+  document.getElementById("wmsPreviewArea").style.display = "block";
+  document.getElementById("wmsImportResult").textContent = "";
+}
+
+function wmsContentFingerprint_(header, rows){
+  function norm(v){ return (v == null ? "" : String(v)).trim().replace(/\r\n/g,"\n").replace(/\r/g,"\n"); }
+  var parts = [];
+  parts.push("H:" + header.map(norm).join("\t"));
+  parts.push("N:" + rows.length);
+  for(var i=0;i<rows.length;i++){
+    var r = rows[i];
+    if(Array.isArray(r)) parts.push(r.map(norm).join("\t"));
+    else{
+      var vals = [];
+      for(var j=0;j<header.length;j++) vals.push(norm(r[header[j]]));
+      parts.push(vals.join("\t"));
+    }
+  }
+  var s = parts.join("\n");
+  // djb2 hash
+  var h = 5381;
+  for(var k=0;k<s.length;k++) h = ((h << 5) + h + s.charCodeAt(k)) & 0xFFFFFFFF;
+  return (h >>> 0).toString(16);
+}
+
+function wmsClearPreview(){
+  _wmsWorkbook = null;
+  _wmsFileName = "";
+  _wmsPreviewRows = [];
+  _wmsCurrentSheet = "";
+  document.getElementById("wmsSheetSelector").style.display = "none";
+  document.getElementById("wmsPreviewArea").style.display = "none";
+  document.getElementById("wmsImportResult").textContent = "";
+  var input = document.getElementById("wmsFileInput");
+  if(input) input.value = "";
+}
+
+async function wmsConfirmImport(){
+  if(!_wmsPreviewRows || !_wmsPreviewRows.header || !_wmsPreviewRows.rows){
+    alert("没有可导入的数据"); return;
+  }
+  if(!adminIsUnlocked_()){ alert("请先解锁管理员模式"); return; }
+
+  var header = _wmsPreviewRows.header;
+  var rows = _wmsPreviewRows.rows;
+  if(rows.length === 0){ alert("数据为空"); return; }
+
+  // 重复导入检测：文件名规则 + 内容指纹
+  var fingerprint = wmsContentFingerprint_(header, rows);
+  try{
+    var dupRes = await fetchApi({
+      action: "wms_check_duplicate",
+      k: adminKey_(),
+      source_file: _wmsFileName,
+      sheet_name: _wmsCurrentSheet,
+      row_count: rows.length,
+      content_fingerprint: fingerprint
+    });
+    if(dupRes && dupRes.ok && (dupRes.has_name_duplicate || dupRes.has_fingerprint_duplicate)){
+      var msgs = [];
+      if(dupRes.has_name_duplicate){
+        var ni = (dupRes.name_matches||[]).map(function(m){ return fmtKST_(m.created_ms); }).join(", ");
+        msgs.push("同文件名/Sheet/行数的记录：" + ni);
+      }
+      if(dupRes.has_fingerprint_duplicate){
+        var fi = (dupRes.fingerprint_matches||[]).map(function(m){ return fmtKST_(m.created_ms) + " (" + (m.source_file||"?") + ")"; }).join(", ");
+        msgs.push("内容高度一致（可能是同一批数据换文件名再次导入）：" + fi);
+      }
+      if(!confirm("⚠️ 可能重复导入！\n\n" + msgs.join("\n\n") + "\n\n确定仍要继续导入吗？")){
+        return;
+      }
+    }
+  }catch(e){ wmsSetStatus_("⚠️ 重复检测失败（导入可继续）: " + e, false); }
+
+  if(!confirm("确认导入 " + rows.length + " 行数据到后端？\n\n文件：" + _wmsFileName + "\nSheet：" + _wmsCurrentSheet)) return;
+
+  // 生成本次导入批次ID
+  var batchId = "WMS-" + Date.now() + "-" + Math.random().toString(36).slice(2,8);
+
+  // 构建导入数据：每行转为 {header[i]: value} 的对象
+  var records = [];
+  for(var i=0;i<rows.length;i++){
+    var obj = {};
+    for(var j=0;j<header.length;j++){
+      var val = (rows[i] && rows[i][j] !== undefined && rows[i][j] !== null) ? String(rows[i][j]) : "";
+      obj[header[j]] = val;
+    }
+    records.push(obj);
+  }
+
+  var resultEl = document.getElementById("wmsImportResult");
+  resultEl.textContent = "正在提交 " + records.length + " 行... ⏳";
+
+  // 分批提交（每批200行，避免请求体过大），共用同一个 batchId
+  var BATCH = 200;
+  var totalInserted = 0;
+  var totalSkipped = 0;
+  var errors = [];
+
+  for(var b=0; b<records.length; b+=BATCH){
+    var batch = records.slice(b, b+BATCH);
+    try{
+      var res = await fetchApi({
+        action: "wms_import",
+        k: adminKey_(),
+        import_batch_id: batchId,
+        row_offset: b,
+        content_fingerprint: fingerprint,
+        source_file: _wmsFileName,
+        sheet_name: _wmsCurrentSheet,
+        header: header,
+        rows: batch
+      });
+      if(res && res.ok){
+        totalInserted += (res.inserted || 0);
+        totalSkipped += (res.skipped || 0);
+      }else{
+        errors.push("批次" + (Math.floor(b/BATCH)+1) + "失败: " + (res && res.error ? res.error : "unknown"));
+      }
+    }catch(e){
+      errors.push("批次" + (Math.floor(b/BATCH)+1) + "异常: " + e);
+    }
+    resultEl.textContent = "已提交 " + Math.min(b+BATCH, records.length) + "/" + records.length + " 行... ⏳";
+  }
+
+  var msg = "导入完成 ✅ 插入: " + totalInserted + " 行";
+  if(totalSkipped) msg += " | 跳过(重复): " + totalSkipped;
+  if(errors.length) msg += " | 错误: " + errors.join("; ");
+
+  // 导入成功后清空界面，回到初始状态
+  wmsClearPreview();
+  wmsSetStatus_(msg, errors.length === 0);
+  alert(msg);
+  wmsLoadRecent();
+}
+
+async function wmsLoadRecent(){
+  var el = document.getElementById("wmsRecentImports");
+  if(!el) return;
+  if(!adminIsUnlocked_()){ el.textContent = "需要管理员权限"; return; }
+  el.textContent = "加载中...";
+  try{
+    var res = await fetchApi({ action:"wms_list", k:adminKey_(), limit:30 });
+    if(!res || !res.ok){ el.textContent = "加载失败: " + (res&&res.error?res.error:"unknown"); return; }
+    var batches = res.batches || [];
+    if(batches.length === 0){ el.textContent = "暂无导入记录"; return; }
+    var html = "<div style='font-size:13px;'>";
+    batches.forEach(function(b){
+      var bid = b.import_batch_id || "";
+      var label = bid.indexOf("LEGACY-") === 0 ? "历史导入" : (bid || "未知批次");
+      html += "<div style='padding:6px 0;border-bottom:1px solid #f0f0f0;'>" +
+        "<div><b>" + esc(b.source_file||"?") + "</b> → " + esc(b.sheet_name||"?") + "</div>" +
+        "<div style='color:#666;font-size:12px;'>" + (b.row_count||0) + " 行 | " + fmtKST_(b.created_ms) + " | " + esc(label) + "</div>" +
+        "</div>";
+    });
+    html += "</div>";
+    el.innerHTML = html;
+  }catch(e){
+    el.textContent = "加载异常: " + e;
+  }
+}
 
 /** ===== init ===== */
 refreshNet();

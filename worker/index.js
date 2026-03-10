@@ -840,6 +840,119 @@ export default {
       return jsonpOrJson({ ok:true, released, session }, callback);
     }
 
+    // ===== WMS 数据导入 =====
+    if (action === "wms_import") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const source_file = String(p.source_file || "").trim();
+      const sheet_name = String(p.sheet_name || "").trim();
+      const import_batch_id = String(p.import_batch_id || "").trim();
+      const content_fingerprint = String(p.content_fingerprint || "").trim();
+      const row_offset = parseInt(p.row_offset || "0", 10) || 0;
+      const header = p.header || [];
+      const rows = p.rows || [];
+      if (!source_file) return jsonpOrJson({ ok:false, error:"missing source_file" }, callback);
+      if (!Array.isArray(rows) || rows.length === 0) return jsonpOrJson({ ok:false, error:"empty rows" }, callback);
+
+      let inserted = 0;
+      let skipped = 0;
+      const batchStmt = env.DB.prepare(
+        `INSERT OR IGNORE INTO wms_outputs(import_id,import_batch_id,content_fingerprint,source_file,sheet_name,row_index,biz,task,order_no,wave_no,sku,qty,box_count,pallet_count,signed_at,completed_at,raw_json,created_ms)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      );
+
+      const stmts = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || {};
+        const import_id = import_batch_id + "|" + (row_offset + i);
+        const raw_json = JSON.stringify(r);
+
+        // 尝试自动映射常见字段名（大小写模糊匹配）
+        function pick(keys) {
+          for (const k of keys) {
+            for (const rk of Object.keys(r)) {
+              if (rk.toLowerCase().replace(/[\s_-]/g, "") === k.toLowerCase().replace(/[\s_-]/g, "")) return String(r[rk] || "").trim();
+            }
+          }
+          return "";
+        }
+
+        const biz = pick(["biz","业务线","业务","business"]);
+        const task = pick(["task","任务","작업","环节"]);
+        const order_no = pick(["order_no","orderno","订单号","주문번호","单号","orderid","order"]);
+        const wave_no = pick(["wave_no","waveno","波次号","wave","웨이브"]);
+        const sku = pick(["sku","SKU","品名","商品","item","상품"]);
+        const qty = parseInt(pick(["qty","数量","수량","quantity","件数","pcs"]), 10) || 0;
+        const box_count = parseInt(pick(["box_count","boxcount","箱数","박스수","boxes","cartons"]), 10) || 0;
+        const pallet_count = parseInt(pick(["pallet_count","palletcount","托数","팔레트수","pallets"]), 10) || 0;
+        const signed_at = pick(["signed_at","signedat","签收时间","서명시간","sign_time"]);
+        const completed_at = pick(["completed_at","completedat","完成时间","완료시간","complete_time","完成"]);
+
+        stmts.push(batchStmt.bind(import_id, import_batch_id, content_fingerprint, source_file, sheet_name, i, biz, task, order_no, wave_no, sku, qty, box_count, pallet_count, signed_at, completed_at, raw_json, now));
+      }
+
+      // D1 batch (最多同时执行)
+      const results = await env.DB.batch(stmts);
+      for (const r of results) {
+        if (r.meta && r.meta.changes > 0) inserted++;
+        else skipped++;
+      }
+
+      return jsonpOrJson({ ok:true, inserted, skipped, total: rows.length, import_batch_id }, callback);
+    }
+
+    // ===== WMS 导入记录查询（按批次聚合） =====
+    if (action === "wms_list") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const limit = Math.min(Math.max(parseInt(p.limit || "30", 10) || 30, 1), 200);
+      const rs = await env.DB.prepare(
+        `SELECT import_batch_id, source_file, sheet_name, COUNT(*) as row_count, MAX(created_ms) as created_ms
+         FROM wms_outputs GROUP BY import_batch_id ORDER BY created_ms DESC LIMIT ?`
+      ).bind(limit).all();
+      return jsonpOrJson({ ok:true, batches: rs.results || [] }, callback);
+    }
+
+    // ===== WMS 重复检测（文件名规则 + 内容指纹） =====
+    if (action === "wms_check_duplicate") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const source_file = String(p.source_file || "").trim();
+      const sheet_name = String(p.sheet_name || "").trim();
+      const row_count = parseInt(p.row_count || "0", 10) || 0;
+      const content_fingerprint = String(p.content_fingerprint || "").trim();
+      const since_ms = now - 30 * 60 * 1000;
+
+      // 1) 文件名规则：同 source_file + sheet_name + row_count
+      const rs1 = await env.DB.prepare(
+        `SELECT import_batch_id, source_file, COUNT(*) as row_count, MAX(created_ms) as created_ms
+         FROM wms_outputs
+         WHERE source_file=? AND sheet_name=? AND created_ms>=?
+         GROUP BY import_batch_id
+         HAVING COUNT(*)=?
+         LIMIT 5`
+      ).bind(source_file, sheet_name, since_ms, row_count).all();
+      const name_matches = rs1.results || [];
+
+      // 2) 内容指纹：同 content_fingerprint（排除空）
+      let fingerprint_matches = [];
+      if (content_fingerprint) {
+        const rs2 = await env.DB.prepare(
+          `SELECT import_batch_id, source_file, COUNT(*) as row_count, MAX(created_ms) as created_ms
+           FROM wms_outputs
+           WHERE content_fingerprint=? AND content_fingerprint!='' AND created_ms>=?
+           GROUP BY import_batch_id
+           LIMIT 5`
+        ).bind(content_fingerprint, since_ms).all();
+        fingerprint_matches = rs2.results || [];
+      }
+
+      return jsonpOrJson({
+        ok: true,
+        has_name_duplicate: name_matches.length > 0,
+        name_matches,
+        has_fingerprint_duplicate: fingerprint_matches.length > 0,
+        fingerprint_matches
+      }, callback);
+    }
+
     return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);
   }
 };

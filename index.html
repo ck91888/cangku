@@ -8,6 +8,8 @@
   <!-- 扫码/二维码库 -->
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- SheetJS: 前端解析 xlsx/xls/csv -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 
   <!-- 四件套：样式 -->
   <link rel="stylesheet" href="./style.css">
@@ -84,6 +86,7 @@
       <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 / Report</button>
       <button class="primary" id="btnSessions" style="display:none;" onclick="go('global_sessions')">全局Session / Sessions</button>
       <button class="primary" id="btnCorrection" style="display:none;" onclick="go('correction')">补录修正 / Correction</button>
+      <button class="primary" id="btnWmsImport" style="display:none;" onclick="go('wms_import')">WMS数据导入 / WMS Import</button>
     </div>
   </div>
 
@@ -857,6 +860,54 @@
       <button onclick="operatorSetupConfirm()" style="width:100%;margin-bottom:8px;">手动确认 / 직접 확인</button>
       <div id="operatorSetupCancelRow" style="display:none;">
         <button class="bad" onclick="operatorSetupClose()" style="width:100%;">取消 / 취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- WMS DATA IMPORT (Admin-only) -->
+  <div id="page-wms_import" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
+      <div class="grow pill">WMS 数据导入 / WMS Import</div>
+    </div>
+
+    <div class="card">
+      <div class="muted" style="margin-bottom:10px;">
+        上传 WMS 导出的 .xlsx / .xls / .csv 文件。前端解析后预览，确认后提交到后端入库。
+      </div>
+
+      <div class="row">
+        <div style="flex:1;">
+          <small>选择文件</small>
+          <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv" onchange="wmsFileSelected(this)" />
+        </div>
+      </div>
+
+      <div id="wmsStatus" class="muted" style="margin-top:8px;"></div>
+
+      <div id="wmsSheetSelector" style="display:none;margin-top:10px;">
+        <small>选择 Sheet</small>
+        <select id="wmsSheetSelect" onchange="wmsSheetChanged()"></select>
+      </div>
+
+      <div id="wmsPreviewArea" style="display:none;margin-top:14px;">
+        <div class="pill" style="margin-bottom:8px;" id="wmsPreviewMeta"></div>
+        <div style="overflow-x:auto;">
+          <table id="wmsPreviewTable" style="width:100%;border-collapse:collapse;font-size:13px;"></table>
+        </div>
+        <div style="margin-top:12px;">
+          <button class="primary" style="background:#e74c3c;border-color:#e74c3c;" onclick="wmsConfirmImport()">确认导入到后端</button>
+          <button style="margin-top:6px;" onclick="wmsClearPreview()">取消 / 清除</button>
+        </div>
+      </div>
+
+      <div id="wmsImportResult" class="muted" style="margin-top:10px;"></div>
+
+      <hr style="margin-top:20px;border:none;border-top:1px solid #eee;" />
+      <div style="margin-top:10px;">
+        <div class="cardTitle" style="font-size:15px;">最近导入记录</div>
+        <div id="wmsRecentImports" class="muted">无</div>
+        <button style="margin-top:6px;width:auto;min-width:140px;" onclick="wmsLoadRecent()">刷新导入记录</button>
       </div>
     </div>
   </div>
