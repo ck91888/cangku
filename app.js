@@ -3090,13 +3090,12 @@ async function openScannerCommon(){
   };
 
   // ✅ 强制使用广角主摄（避免 OPPO 等手机自动选择长焦镜头）
-  // ideal 低分辨率 + focusMode continuous 提升近距离条形码识别
+  // 注意：zoom/focusMode 不是标准 MediaTrackConstraints，不能放这里（Safari 会拒绝）
+  // 这些属性在摄像头启动后通过 applyConstraints({ advanced: [...] }) 设置
   var videoConstraints = {
     facingMode: "environment",
     width: { ideal: 1280, max: 1920 },
-    height: { ideal: 720, max: 1080 },
-    zoom: 1.0,
-    focusMode: "continuous"
+    height: { ideal: 720, max: 1080 }
   };
 
   // 尝试找到广角主摄（排除长焦/超广角）
