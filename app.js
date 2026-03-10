@@ -3089,76 +3089,56 @@ async function openScannerCommon(){
     return { width: w, height: h };
   };
 
-  // ✅ 强制使用广角主摄（避免 OPPO 等手机自动选择长焦镜头）
-  // 注意：zoom/focusMode 不是标准 MediaTrackConstraints，不能放这里（Safari 会拒绝）
-  // 这些属性在摄像头启动后通过 applyConstraints({ advanced: [...] }) 设置
-  var videoConstraints = {
-    facingMode: "environment",
-    width: { ideal: 1280, max: 1920 },
-    height: { ideal: 720, max: 1080 }
-  };
-
-  // 尝试找到广角主摄（排除长焦/超广角）
-  async function pickWideCameraId_(){
+  // ✅ Html5Qrcode.start() 第一个参数只接受 { facingMode } 或 cameraId 字符串
+  // width/height/zoom/focusMode 等不能放这里，否则 iOS Safari 直接拒绝
+  try{
+    await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: qrboxFn }, onScan);
+  }catch(e){
+    // facingMode 失败（部分安卓），fallback 用摄像头 ID
     try{
       var cams = await Html5Qrcode.getCameras();
-      if(!cams || cams.length <= 1) return null;
-      // 优先选 label 包含 "wide" 或 "广角" 或 "main" 或 "0"（通常是主摄 camera index 0）
-      // 排除 label 包含 "tele" / "长焦" / "macro" / "微距" / "ultra" / "超广"
-      var dominated = /tele|长焦|macro|微距/i;
-      var preferred = /wide|广角|main|主|rear\s*0|back\s*0|camera\s*0|facing back/i;
-      var candidates = cams.filter(function(c){ return !dominated.test(c.label); });
-      if(candidates.length === 0) candidates = cams;
-      for(var i=0;i<candidates.length;i++){
-        if(preferred.test(candidates[i].label)) return candidates[i].id;
+      // 优先选广角主摄，排除长焦/微距
+      var camId = null;
+      if(cams && cams.length > 1){
+        var dominated = /tele|长焦|macro|微距/i;
+        var preferred = /wide|广角|main|主|rear\s*0|back\s*0|camera\s*0|facing back/i;
+        var candidates = cams.filter(function(c){ return !dominated.test(c.label); });
+        if(candidates.length === 0) candidates = cams;
+        for(var ci=0;ci<candidates.length;ci++){
+          if(preferred.test(candidates[ci].label)){ camId = candidates[ci].id; break; }
+        }
+        if(!camId) camId = candidates[0].id;
+      } else if(cams && cams[0]){
+        camId = cams[0].id;
       }
-      // fallback: 取第一个非长焦
-      return candidates[0].id;
-    }catch(e){ return null; }
-  }
-
-  try{
-    await scanner.start(videoConstraints, { fps: 10, qrbox: qrboxFn }, onScan);
-  }catch(e){
-    // facingMode 约束失败，尝试用摄像头 ID 选择广角主摄
-    try{
-      var wideId = await pickWideCameraId_();
-      if(wideId){
-        await scanner.start(wideId, { fps: 10, qrbox: qrboxFn }, onScan);
-      }else{
-        var cams = await Html5Qrcode.getCameras();
-        var camId = cams && cams[0] ? cams[0].id : null;
-        await scanner.start(camId, { fps: 10, qrbox: qrboxFn }, onScan);
-      }
+      await scanner.start(camId, { fps: 10, qrbox: qrboxFn }, onScan);
     }catch(e2){
-      // 最终 fallback
+      // 最终 fallback：取第一个可用摄像头
       var cams2 = await Html5Qrcode.getCameras();
       var camId2 = cams2 && cams2[0] ? cams2[0].id : null;
       await scanner.start(camId2, { fps: 10, qrbox: qrboxFn }, onScan);
     }
   }
 
-  // ✅ 启动后尝试应用 zoom=1 和 continuous autofocus（防止长焦锁定）
+  // ✅ 启动成功后：尝试设置 zoom=最小值 + 连续对焦（OPPO 防长焦锁定）
+  // 用 try/catch 包裹，iOS 不支持会静默跳过
   try{
-    var track = scanner.getRunningTrackSettings && scanner.getRunningTrackSettings();
-    if(!track){
-      var videoElem = document.querySelector("#reader video");
-      if(videoElem && videoElem.srcObject){
-        var tracks = videoElem.srcObject.getVideoTracks();
-        if(tracks && tracks[0]){
-          var capabilities = tracks[0].getCapabilities ? tracks[0].getCapabilities() : {};
-          var applyConstraints = {};
-          if(capabilities.zoom){ applyConstraints.zoom = capabilities.zoom.min || 1.0; }
-          if(capabilities.focusMode && capabilities.focusMode.indexOf("continuous") >= 0){
-            applyConstraints.focusMode = "continuous";
-          }
-          if(Object.keys(applyConstraints).length > 0){
-            await tracks[0].applyConstraints({ advanced: [applyConstraints] });
-          }
+    var videoElem = document.querySelector("#reader video");
+    if(videoElem && videoElem.srcObject){
+      var tracks = videoElem.srcObject.getVideoTracks();
+      if(tracks && tracks[0]){
+        var capabilities = typeof tracks[0].getCapabilities === "function" ? tracks[0].getCapabilities() : {};
+        var advancedConstraints = {};
+        if(capabilities.zoom){ advancedConstraints.zoom = capabilities.zoom.min || 1.0; }
+        if(capabilities.focusMode && capabilities.focusMode.indexOf("continuous") >= 0){
+          advancedConstraints.focusMode = "continuous";
+        }
+        if(Object.keys(advancedConstraints).length > 0){
+          await tracks[0].applyConstraints({ advanced: [advancedConstraints] });
         }
       }
     }
-  }catch(e){ /* 部分浏览器不支持 */ }
+  }catch(e){ /* iOS Safari 等不支持 getCapabilities/applyConstraints，静默跳过 */ }
 }
 
 async function closeScanner(){
