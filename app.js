@@ -363,6 +363,12 @@ var lastScanAt = 0;
 var scanBusy = false;
 var globalBusy = false; // 防止快速连点导致并发请求
 
+// ===== B2B 工单专用扫码常量 =====
+var B2B_CONFIRM_WINDOW_MS = 800;
+var B2B_DENY_PREFIX = []; // 可扩展：已知误扫前缀
+var _b2bPendingCode = null;
+var _b2bPendingTime = 0;
+
 function acquireBusy_(){
   if(globalBusy){ setStatus("处理中，请稍候 / 잠시만요...", false); return false; }
   globalBusy = true;
@@ -2347,11 +2353,21 @@ function detectRemoteTempSwitch_(){
   }).catch(function(){});
 }
 
+// ===== B2B 工单号合法性判断（仅约束扫码结果） =====
+function isValidB2bWorkorderCode_(code){
+  if(!/^[A-Z0-9\-]{8,40}$/.test(code)) return false;
+  for(var i=0;i<B2B_DENY_PREFIX.length;i++){
+    if(code.indexOf(B2B_DENY_PREFIX[i]) === 0) return false;
+  }
+  return true;
+}
+
 async function openScannerB2bWorkorder(){
   if(!currentSessionId){ setStatus("请先开始操作", false); return; }
   if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再扫码，请重新开始。"))) return;
+  _b2bPendingCode = null; _b2bPendingTime = 0;
   scanMode = "b2b_workorder";
-  document.getElementById("scanTitle").textContent = "扫码工单号（B2B）";
+  document.getElementById("scanTitle").textContent = "扫码工单号（B2B）— 连续扫码模式：扫完请手动点关闭";
   await openScannerCommon();
 }
 
@@ -2783,7 +2799,8 @@ async function openScannerCommon(){
     if(scanBusy) return;
 
     var now = Date.now();
-    if(now - lastScanAt < 900) return;
+    var throttle = (scanMode === "b2b_workorder") ? 300 : 900;
+    if(now - lastScanAt < throttle) return;
     lastScanAt = now;
 
     // ✅ 乱码检测：对非 QR 码场景（工单/单号扫码）自动拦截可疑结果
@@ -2906,26 +2923,46 @@ async function openScannerCommon(){
     }
 
     if(scanMode === "b2b_workorder"){
-      var codeW = decodedText.trim();
-      if(!codeW){ setStatus("工单号为空", false); return; }
-      scanBusy = true;
-      await pauseScanner();
-      try{
-        if(scannedB2bWorkorders.has(codeW)){
-          setStatus("已记录（去重）✅ " + codeW, true);
-          alert("已记录（去重）✅\n" + codeW);
-          renderB2bWorkorderUI(); await closeScanner(); return;
-        }
-        scannedB2bWorkorders.add(codeW); persistState(); renderB2bWorkorderUI();
-        var evIdW = makeEventId({ event:"wave", biz:"B2B", task:"B2B工单操作", wave_id: codeW, badgeRaw:"" });
-        if(!hasRecent(evIdW)){
-          submitEvent({ event:"wave", event_id: evIdW, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: codeW });
-          addRecent(evIdW);
-        }
-        setStatus("已记录工单（待上传）✅ " + codeW, true);
-        alert("已记录工单 ✅\n" + codeW + "\n当前累计：" + scannedB2bWorkorders.size);
-        await closeScanner();
-      } finally { scanBusy = false; }
+      var codeW = decodedText.trim().toUpperCase();
+      if(!codeW){ return; }
+
+      // 合法性判断
+      if(!isValidB2bWorkorderCode_(codeW)){
+        setStatus("⚠️ 不是有效工单号: " + codeW, false);
+        return;
+      }
+
+      // 已记录去重（不关闭扫码器，继续扫）
+      if(scannedB2bWorkorders.has(codeW)){
+        setStatus("已记录（去重）✅ " + codeW, true);
+        return;
+      }
+
+      // 二次确认机制
+      var nowW = Date.now();
+      if(_b2bPendingCode !== codeW){
+        _b2bPendingCode = codeW;
+        _b2bPendingTime = nowW;
+        setStatus("已识别 " + codeW + "，等待确认... 🔄", true);
+        return;
+      }
+      if(nowW - _b2bPendingTime > B2B_CONFIRM_WINDOW_MS){
+        // 超时，重新开始确认
+        _b2bPendingTime = nowW;
+        setStatus("已识别 " + codeW + "，等待确认... 🔄", true);
+        return;
+      }
+
+      // 二次确认通过，记录
+      _b2bPendingCode = null; _b2bPendingTime = 0;
+      scannedB2bWorkorders.add(codeW); persistState(); renderB2bWorkorderUI();
+      var evIdW = makeEventId({ event:"wave", biz:"B2B", task:"B2B工单操作", wave_id: codeW, badgeRaw:"" });
+      if(!hasRecent(evIdW)){
+        submitEvent({ event:"wave", event_id: evIdW, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: codeW });
+        addRecent(evIdW);
+      }
+      setStatus("已记录工单 ✅ " + codeW + " | 累计：" + scannedB2bWorkorders.size, true);
+      // 连续扫码：不关闭扫码器
       return;
     }
 
@@ -3087,11 +3124,19 @@ async function openScannerCommon(){
 
   };
 
-  // ✅ 自适应扫描区域：宽度占视频85%（条形码需要横向全入），高度30%
+  // ✅ 自适应扫描区域
   var qrboxFn = function(viewfinderWidth, viewfinderHeight){
+    if(scanMode === "b2b_workorder"){
+      // B2B 工单专用：宽 90% × 高 15%，适配横向一维码
+      var w = Math.floor(viewfinderWidth * 0.90);
+      var h = Math.floor(viewfinderHeight * 0.15);
+      if(w < 280) w = Math.min(280, viewfinderWidth - 10);
+      if(h < 50) h = Math.min(50, viewfinderHeight - 10);
+      return { width: w, height: h };
+    }
+    // 通用：宽 85% × 高 30%
     var w = Math.floor(viewfinderWidth * 0.85);
     var h = Math.floor(viewfinderHeight * 0.30);
-    // 最低保底尺寸
     if(w < 250) w = Math.min(250, viewfinderWidth - 10);
     if(h < 80) h = Math.min(80, viewfinderHeight - 10);
     return { width: w, height: h };
