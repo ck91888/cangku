@@ -847,17 +847,77 @@ export default {
       const sheet_name = String(p.sheet_name || "").trim();
       const import_batch_id = String(p.import_batch_id || "").trim();
       const content_fingerprint = String(p.content_fingerprint || "").trim();
+      const source_type = String(p.source_type || "").trim();
       const row_offset = parseInt(p.row_offset || "0", 10) || 0;
+      const param_business_day = String(p.business_day_kst || "").trim();
       const header = p.header || [];
       const rows = p.rows || [];
       if (!source_file) return jsonpOrJson({ ok:false, error:"missing source_file" }, callback);
+      if (!source_type || !["b2c_order_export","b2c_pack_import","import_express"].includes(source_type))
+        return jsonpOrJson({ ok:false, error:"invalid source_type" }, callback);
       if (!Array.isArray(rows) || rows.length === 0) return jsonpOrJson({ ok:false, error:"empty rows" }, callback);
+      if (source_type === "b2c_pack_import") {
+        if (!param_business_day || !/^\d{4}-\d{2}-\d{2}$/.test(param_business_day))
+          return jsonpOrJson({ ok:false, error:"b2c_pack_import 必须提供合法的 business_day_kst (YYYY-MM-DD)" }, callback);
+      }
+      if (param_business_day && !/^\d{4}-\d{2}-\d{2}$/.test(param_business_day))
+        return jsonpOrJson({ ok:false, error:"business_day_kst 格式不合法，需要 YYYY-MM-DD" }, callback);
+
+      // 通用 pick：大小写模糊匹配列名
+      function pickField(r, keys) {
+        for (const k of keys) {
+          for (const rk of Object.keys(r)) {
+            if (rk.toLowerCase().replace(/[\s_-]/g, "") === k.toLowerCase().replace(/[\s_-]/g, "")) return String(r[rk] || "").trim();
+          }
+        }
+        return "";
+      }
+
+      // completed_at → YYYY-MM-DD (KST)
+      function toDayKst(raw) {
+        if (!raw) return "";
+        const s = String(raw).trim();
+        const m1 = s.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+        if (m1) return m1[1] + "-" + m1[2].padStart(2,"0") + "-" + m1[3].padStart(2,"0");
+        // Excel 序列号
+        if (/^\d{5}(\.\d+)?$/.test(s)) {
+          const serial = parseFloat(s);
+          if (serial > 40000 && serial < 60000) {
+            const d = new Date((serial - 25569) * 86400000);
+            if (!isNaN(d.getTime())) return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+          }
+        }
+        return "";
+      }
+
+      // b2c_order_export 需要查 location_types 表
+      let locLookup = {};
+      if (source_type === "b2c_order_export") {
+        const locCodes = new Set();
+        for (const r of rows) {
+          const lc = String(pickField(r, ["储位号","location_code","location","储位"]) || "").trim().replace(/;+$/,"");
+          if (lc) locCodes.add(lc);
+        }
+        if (locCodes.size > 0) {
+          const arr = Array.from(locCodes);
+          for (let li = 0; li < arr.length; li += 50) {
+            const chunk = arr.slice(li, li + 50);
+            const ph = chunk.map(() => "?").join(",");
+            const rs = await env.DB.prepare(
+              `SELECT location_code, location_type FROM location_types WHERE location_code IN (${ph})`
+            ).bind(...chunk).all();
+            for (const row of (rs.results || [])) locLookup[row.location_code] = row.location_type;
+          }
+        }
+      }
 
       let inserted = 0;
       let skipped = 0;
       const batchStmt = env.DB.prepare(
-        `INSERT OR IGNORE INTO wms_outputs(import_id,import_batch_id,content_fingerprint,source_file,sheet_name,row_index,biz,task,order_no,wave_no,sku,qty,box_count,pallet_count,signed_at,completed_at,raw_json,created_ms)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        `INSERT OR IGNORE INTO wms_outputs(import_id,import_batch_id,content_fingerprint,source_file,sheet_name,row_index,
+          biz,task,order_no,wave_no,sku,qty,box_count,pallet_count,signed_at,completed_at,raw_json,created_ms,
+          source_type,task_scope,pick_wave_no,location_code,location_type,box_code,weight,owner_name,completed_day_kst,business_day_kst)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
 
       const stmts = [];
@@ -866,29 +926,51 @@ export default {
         const import_id = import_batch_id + "|" + (row_offset + i);
         const raw_json = JSON.stringify(r);
 
-        // 尝试自动映射常见字段名（大小写模糊匹配）
-        function pick(keys) {
-          for (const k of keys) {
-            for (const rk of Object.keys(r)) {
-              if (rk.toLowerCase().replace(/[\s_-]/g, "") === k.toLowerCase().replace(/[\s_-]/g, "")) return String(r[rk] || "").trim();
-            }
-          }
-          return "";
+        let biz="", task="", task_scope="", order_no="", wave_no="", sku="", qty=0;
+        let box_count=0, pallet_count=0, signed_at="", completed_at="";
+        let pick_wave_no="", location_code="", location_type="", box_code="";
+        let weight=0, owner_name="";
+
+        if (source_type === "b2c_order_export") {
+          biz = "B2C"; task_scope = "B2C拣货,B2C打包";
+          pick_wave_no = pickField(r, ["波次号","wave_no","pick_wave_no"]);
+          order_no = pickField(r, ["物流单号","运单号","order_no","单号"]);
+          qty = parseInt(pickField(r, ["商品数量","qty","数量","件数"]), 10) || 0;
+          completed_at = pickField(r, ["发货时间","completed_at","完成时间"]);
+          location_code = String(pickField(r, ["储位号","location_code","location","储位"]) || "").trim().replace(/;+$/,"");
+          box_code = pickField(r, ["箱型编码","box_code","箱型"]);
+          sku = pickField(r, ["sku","SKU","品名","商品"]);
+          location_type = location_code ? (locLookup[location_code] || "未知") : "";
+        } else if (source_type === "b2c_pack_import") {
+          biz = "B2C"; task_scope = "B2C拣货,B2C打包";
+          pick_wave_no = pickField(r, ["分拣单号","sort_no","pick_wave_no"]);
+          order_no = pickField(r, ["物流单号","运单号","order_no","单号"]);
+          qty = parseInt(pickField(r, ["货品总数量","qty","数量","件数"]), 10) || 0;
+          sku = pickField(r, ["sku","SKU","品名","商品"]);
+          owner_name = pickField(r, ["货主","owner","货主名称"]);
+          location_type = "小货位";
+          // 跳过汇总/脏行
+          if (!order_no || order_no === "NA" || owner_name.indexOf("合计") === 0) { skipped++; continue; }
+        } else if (source_type === "import_express") {
+          biz = "进口"; task_scope = "过机扫描码托,B2C打包:StarFans";
+          order_no = pickField(r, ["运单号","order_no","物流单号","单号"]);
+          qty = 1;
+          weight = parseFloat(pickField(r, ["称重重量","weight","重量"])) || 0;
+          owner_name = pickField(r, ["发货单位","owner","shipper","发货人"]);
+          completed_at = pickField(r, ["入库时间","completed_at","签收时间","完成时间"]);
         }
 
-        const biz = pick(["biz","业务线","业务","business"]);
-        const task = pick(["task","任务","작업","环节"]);
-        const order_no = pick(["order_no","orderno","订单号","주문번호","单号","orderid","order"]);
-        const wave_no = pick(["wave_no","waveno","波次号","wave","웨이브"]);
-        const sku = pick(["sku","SKU","品名","商品","item","상품"]);
-        const qty = parseInt(pick(["qty","数量","수량","quantity","件数","pcs"]), 10) || 0;
-        const box_count = parseInt(pick(["box_count","boxcount","箱数","박스수","boxes","cartons"]), 10) || 0;
-        const pallet_count = parseInt(pick(["pallet_count","palletcount","托数","팔레트수","pallets"]), 10) || 0;
-        const signed_at = pick(["signed_at","signedat","签收时间","서명시간","sign_time"]);
-        const completed_at = pick(["completed_at","completedat","完成时间","완료시간","complete_time","完成"]);
+        wave_no = pick_wave_no || pickField(r, ["wave_no","waveno","波次号"]);
+        const completed_day_kst = toDayKst(completed_at);
+        const business_day_kst = param_business_day || completed_day_kst;
 
-        stmts.push(batchStmt.bind(import_id, import_batch_id, content_fingerprint, source_file, sheet_name, i, biz, task, order_no, wave_no, sku, qty, box_count, pallet_count, signed_at, completed_at, raw_json, now));
+        stmts.push(batchStmt.bind(
+          import_id, import_batch_id, content_fingerprint, source_file, sheet_name, i,
+          biz, task, order_no, wave_no, sku, qty, box_count, pallet_count, signed_at, completed_at, raw_json, now,
+          source_type, task_scope, pick_wave_no, location_code, location_type, box_code, weight, owner_name, completed_day_kst, business_day_kst
+        ));
       }
+
 
       // D1 batch (最多同时执行)
       const results = await env.DB.batch(stmts);
@@ -897,7 +979,7 @@ export default {
         else skipped++;
       }
 
-      return jsonpOrJson({ ok:true, inserted, skipped, total: rows.length, import_batch_id }, callback);
+      return jsonpOrJson({ ok:true, inserted, skipped, total: rows.length, import_batch_id, source_type }, callback);
     }
 
     // ===== WMS 导入记录查询（按批次聚合） =====
@@ -951,6 +1033,284 @@ export default {
         has_fingerprint_duplicate: fingerprint_matches.length > 0,
         fingerprint_matches
       }, callback);
+    }
+
+    // ===== 日特征汇总：查询 =====
+    if (action === "admin_daily_productivity") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_date = String(p.start_date || "").trim();
+      const end_date = String(p.end_date || "").trim();
+      if (!start_date || !end_date) return jsonpOrJson({ ok:false, error:"missing start_date or end_date" }, callback);
+      const rs = await env.DB.prepare(
+        `SELECT * FROM daily_productivity_features WHERE day_kst >= ? AND day_kst <= ? ORDER BY day_kst, biz, task`
+      ).bind(start_date, end_date).all();
+      return jsonpOrJson({ ok:true, features: rs.results || [] }, callback);
+    }
+
+    // ===== 日特征汇总：刷新/重建指定日期区间 =====
+    if (action === "admin_refresh_daily") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      try {
+      const start_date = String(p.start_date || "").trim();
+      const end_date = String(p.end_date || "").trim();
+      if (!start_date || !end_date) return jsonpOrJson({ ok:false, error:"missing start_date or end_date" }, callback);
+
+      // KST 日期 → UTC 毫秒范围（KST = UTC+9）
+      const startMs = new Date(start_date + "T00:00:00+09:00").getTime();
+      const endMs = new Date(end_date + "T23:59:59.999+09:00").getTime();
+      if (isNaN(startMs) || isNaN(endMs)) return jsonpOrJson({ ok:false, error:"invalid date" }, callback);
+
+      const TASKS = ["B2C拣货", "B2C打包", "过机扫描码托"];
+
+      // Step1: 劳动数据 — join/leave 事件
+      const evRs = await env.DB.prepare(
+        `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
+                biz, task, badge, session, event, server_ms
+         FROM events
+         WHERE event IN ('join','leave') AND ok=1 AND server_ms >= ? AND server_ms <= ?
+         ORDER BY badge, session, server_ms`
+      ).bind(startMs, endMs).all();
+      const evRows = evRs.results || [];
+
+      // Step2: session_count, event_wave_count, anomaly_count
+      const sessRs = await env.DB.prepare(
+        `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
+                biz, task, COUNT(DISTINCT session) as session_count
+         FROM events WHERE event='start' AND ok=1 AND server_ms >= ? AND server_ms <= ?
+         GROUP BY day_kst, biz, task`
+      ).bind(startMs, endMs).all();
+
+      const waveRs = await env.DB.prepare(
+        `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
+                biz, task, COUNT(*) as wave_count
+         FROM events WHERE event='wave' AND ok=1 AND server_ms >= ? AND server_ms <= ?
+         GROUP BY day_kst, biz, task`
+      ).bind(startMs, endMs).all();
+
+      const anomRs = await env.DB.prepare(
+        `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
+                biz, task, COUNT(*) as anomaly_count
+         FROM events WHERE event='join_fail' AND server_ms >= ? AND server_ms <= ?
+         GROUP BY day_kst, biz, task`
+      ).bind(startMs, endMs).all();
+
+      // Step3: WMS 产出 — B2C拣货 (direct: b2c_order_export, allocated: b2c_pack_import)
+      const wmsPickDirectRs = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst,
+                COUNT(DISTINCT order_no) as order_count, SUM(qty) as qty_sum,
+                COUNT(DISTINCT pick_wave_no) as wave_count,
+                SUM(box_count) as box_sum, SUM(pallet_count) as pallet_sum
+         FROM wms_outputs
+         WHERE source_type = 'b2c_order_export'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+      const wmsPickAllocRs = await env.DB.prepare(
+        `SELECT business_day_kst as day_kst,
+                COUNT(DISTINCT order_no) as order_count, SUM(qty) as qty_sum,
+                COUNT(DISTINCT pick_wave_no) as wave_count,
+                SUM(box_count) as box_sum, SUM(pallet_count) as pallet_sum
+         FROM wms_outputs
+         WHERE source_type = 'b2c_pack_import'
+           AND business_day_kst >= ? AND business_day_kst <= ? AND business_day_kst != ''
+         GROUP BY business_day_kst`
+      ).bind(start_date, end_date).all();
+
+      // Step4: WMS 产出 — B2C打包 (direct: b2c_order_export + import_express StarFans, allocated: b2c_pack_import)
+      const wmsPackDirectRs = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst,
+                COUNT(DISTINCT order_no) as order_count, SUM(qty) as qty_sum,
+                SUM(box_count) as box_sum
+         FROM wms_outputs
+         WHERE ((source_type = 'b2c_order_export')
+                OR (source_type='import_express' AND LOWER(TRIM(owner_name))='starfans'))
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+      const wmsPackAllocRs = await env.DB.prepare(
+        `SELECT business_day_kst as day_kst,
+                COUNT(DISTINCT order_no) as order_count, SUM(qty) as qty_sum,
+                SUM(box_count) as box_sum
+         FROM wms_outputs
+         WHERE source_type = 'b2c_pack_import'
+           AND business_day_kst >= ? AND business_day_kst <= ? AND business_day_kst != ''
+         GROUP BY business_day_kst`
+      ).bind(start_date, end_date).all();
+
+      // Step5: WMS 产出 — 过机扫描码托 (import_express 全量)
+      const wmsScanRs = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst,
+                COUNT(DISTINCT order_no) as wms_order_count,
+                SUM(qty) as wms_qty,
+                SUM(weight) as wms_weight
+         FROM wms_outputs
+         WHERE source_type='import_express'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+
+      // 合并计算
+      // key = day_kst|biz|task
+      const featureMap = {};
+      function getOrCreate(day, biz, task) {
+        const k = day + "|" + biz + "|" + task;
+        if (!featureMap[k]) {
+          featureMap[k] = {
+            day_kst: day, biz, task,
+            total_person_minutes: 0, unique_workers: 0, session_count: 0,
+            event_wave_count: 0, wms_wave_count: 0, wms_order_count: 0,
+            wms_qty: 0, wms_box_count: 0, wms_pallet_count: 0, wms_weight: 0,
+            wms_order_count_direct: 0, wms_order_count_allocated: 0,
+            wms_qty_direct: 0, wms_qty_allocated: 0,
+            anomaly_count: 0, correction_count: 0, efficiency_per_person_hour: 0,
+            source_summary: "", updated_ms: now
+          };
+        }
+        return featureMap[k];
+      }
+
+      // join/leave 配对计算工时
+      // 按 badge+session 分组，配对 join→leave
+      const laborMap = {}; // badge|session → [{event, server_ms, day_kst, biz, task}]
+      for (const e of evRows) {
+        const key = e.badge + "|" + e.session;
+        if (!laborMap[key]) laborMap[key] = [];
+        laborMap[key].push(e);
+      }
+
+      // 每个 badge+session 的事件已按 server_ms 排序
+      const workersByDayBizTask = {}; // day|biz|task → Set of badges
+      for (const [, events] of Object.entries(laborMap)) {
+        let pendingJoin = null;
+        for (const e of events) {
+          if (e.event === "join") {
+            pendingJoin = e;
+          } else if (e.event === "leave" && pendingJoin) {
+            // 配对成功: 归到 join 所在日
+            const minutes = (e.server_ms - pendingJoin.server_ms) / 60000;
+            if (minutes > 0 && minutes < 1440) { // 最多 24 小时
+              const f = getOrCreate(pendingJoin.day_kst, pendingJoin.biz, pendingJoin.task);
+              f.total_person_minutes += minutes;
+              const wk = pendingJoin.day_kst + "|" + pendingJoin.biz + "|" + pendingJoin.task;
+              if (!workersByDayBizTask[wk]) workersByDayBizTask[wk] = new Set();
+              workersByDayBizTask[wk].add(pendingJoin.badge);
+            }
+            pendingJoin = null;
+          }
+        }
+      }
+
+      // unique_workers
+      for (const [k, badges] of Object.entries(workersByDayBizTask)) {
+        const [day, biz, task] = k.split("|");
+        const f = getOrCreate(day, biz, task);
+        f.unique_workers = badges.size;
+      }
+
+      // session_count
+      for (const r of (sessRs.results || [])) {
+        const f = getOrCreate(r.day_kst, r.biz, r.task);
+        f.session_count = r.session_count;
+      }
+
+      // event_wave_count
+      for (const r of (waveRs.results || [])) {
+        const f = getOrCreate(r.day_kst, r.biz, r.task);
+        f.event_wave_count = r.wave_count;
+      }
+
+      // anomaly_count
+      for (const r of (anomRs.results || [])) {
+        const f = getOrCreate(r.day_kst, r.biz, r.task);
+        f.anomaly_count = r.anomaly_count;
+      }
+
+      // WMS: B2C拣货 — direct
+      for (const r of (wmsPickDirectRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "B2C", "B2C拣货");
+        f.wms_order_count_direct += (r.order_count || 0);
+        f.wms_qty_direct += (r.qty_sum || 0);
+        f.wms_wave_count += (r.wave_count || 0);
+        f.wms_box_count += (r.box_sum || 0);
+        f.wms_pallet_count += (r.pallet_sum || 0);
+        f.source_summary = "b2c_order_export,b2c_pack_import";
+      }
+      // WMS: B2C拣货 — allocated
+      for (const r of (wmsPickAllocRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "B2C", "B2C拣货");
+        f.wms_order_count_allocated += (r.order_count || 0);
+        f.wms_qty_allocated += (r.qty_sum || 0);
+        f.wms_wave_count += (r.wave_count || 0);
+        f.wms_box_count += (r.box_sum || 0);
+        f.wms_pallet_count += (r.pallet_sum || 0);
+        if (!f.source_summary) f.source_summary = "b2c_order_export,b2c_pack_import";
+      }
+
+      // WMS: B2C打包 — direct
+      for (const r of (wmsPackDirectRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "B2C", "B2C打包");
+        f.wms_order_count_direct += (r.order_count || 0);
+        f.wms_qty_direct += (r.qty_sum || 0);
+        f.wms_box_count += (r.box_sum || 0);
+        f.source_summary = "b2c_order_export,b2c_pack_import,import_express:StarFans";
+      }
+      // WMS: B2C打包 — allocated
+      for (const r of (wmsPackAllocRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "B2C", "B2C打包");
+        f.wms_order_count_allocated += (r.order_count || 0);
+        f.wms_qty_allocated += (r.qty_sum || 0);
+        f.wms_box_count += (r.box_sum || 0);
+        if (!f.source_summary) f.source_summary = "b2c_order_export,b2c_pack_import,import_express:StarFans";
+      }
+
+      // WMS: 过机扫描码托 (全部为 direct，无 allocated)
+      for (const r of (wmsScanRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "进口", "过机扫描码托");
+        f.wms_order_count_direct += (r.wms_order_count || 0);
+        f.wms_qty_direct += (r.wms_qty || 0);
+        f.wms_weight += (r.wms_weight || 0);
+        f.source_summary = "import_express";
+      }
+
+      // 汇总 direct + allocated → total，然后计算效率
+      for (const f of Object.values(featureMap)) {
+        f.wms_order_count = f.wms_order_count_direct + f.wms_order_count_allocated;
+        f.wms_qty = f.wms_qty_direct + f.wms_qty_allocated;
+        if (f.total_person_minutes > 0 && f.wms_order_count > 0) {
+          f.efficiency_per_person_hour = Math.round((f.wms_order_count / (f.total_person_minutes / 60)) * 100) / 100;
+        }
+      }
+
+      // 落表: 先删旧数据（日期区间内全部 task），再写入
+      await env.DB.prepare(
+        `DELETE FROM daily_productivity_features WHERE day_kst >= ? AND day_kst <= ?`
+      ).bind(start_date, end_date).run();
+
+      // 写入
+      const insStmt = env.DB.prepare(
+        `INSERT INTO daily_productivity_features(day_kst,biz,task,total_person_minutes,unique_workers,session_count,
+          event_wave_count,wms_wave_count,wms_order_count,wms_qty,wms_box_count,wms_pallet_count,wms_weight,
+          wms_order_count_direct,wms_order_count_allocated,wms_qty_direct,wms_qty_allocated,
+          anomaly_count,correction_count,efficiency_per_person_hour,source_summary,updated_ms)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      );
+      const insStmts = [];
+      const features = Object.values(featureMap);
+      for (const f of features) {
+        insStmts.push(insStmt.bind(
+          f.day_kst, f.biz, f.task, Math.round(f.total_person_minutes * 100)/100, f.unique_workers, f.session_count,
+          f.event_wave_count, f.wms_wave_count, f.wms_order_count, f.wms_qty, f.wms_box_count, f.wms_pallet_count,
+          Math.round(f.wms_weight * 100)/100,
+          f.wms_order_count_direct, f.wms_order_count_allocated, f.wms_qty_direct, f.wms_qty_allocated,
+          f.anomaly_count, f.correction_count, f.efficiency_per_person_hour, f.source_summary, now
+        ));
+      }
+      if (insStmts.length > 0) await env.DB.batch(insStmts);
+
+      return jsonpOrJson({ ok:true, refreshed: features.length, features }, callback);
+      } catch (e) {
+        return jsonpOrJson({ ok:false, error:"admin_refresh_daily failed: " + String(e && e.message || e) }, callback);
+      }
     }
 
     return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);

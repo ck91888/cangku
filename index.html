@@ -87,6 +87,7 @@
       <button class="primary" id="btnSessions" style="display:none;" onclick="go('global_sessions')">全局Session / Sessions</button>
       <button class="primary" id="btnCorrection" style="display:none;" onclick="go('correction')">补录修正 / Correction</button>
       <button class="primary" id="btnWmsImport" style="display:none;" onclick="go('wms_import')">WMS数据导入 / WMS Import</button>
+      <button class="primary" id="btnDailyFeatures" style="display:none;" onclick="go('daily_features')">日特征汇总 / Daily Features</button>
     </div>
   </div>
 
@@ -885,6 +886,23 @@
 
       <div id="wmsStatus" class="muted" style="margin-top:8px;"></div>
 
+      <div style="margin-top:10px;">
+        <small>数据类型 (必选)</small>
+        <select id="wmsSourceType">
+          <option value="">-- 请选择 --</option>
+          <option value="b2c_order_export">B2C订单表</option>
+          <option value="b2c_pack_import">进口打包表</option>
+          <option value="import_express">进口快件表</option>
+        </select>
+        <div id="wmsSourceTypeDesc" style="font-size:12px;color:#666;margin-top:4px;"></div>
+      </div>
+
+      <div id="wmsBusinessDayWrap" style="display:none;margin-top:10px;">
+        <small>业务日期 KST (必填)</small>
+        <input type="date" id="wmsBusinessDay" style="width:100%;padding:8px;font-size:15px;">
+        <div id="wmsBusinessDayHint" style="font-size:12px;color:#e67e22;margin-top:4px;"></div>
+      </div>
+
       <div id="wmsSheetSelector" style="display:none;margin-top:10px;">
         <small>选择 Sheet</small>
         <select id="wmsSheetSelect" onchange="wmsSheetChanged()"></select>
@@ -909,6 +927,25 @@
         <div id="wmsRecentImports" class="muted">无</div>
         <button style="margin-top:6px;width:auto;min-width:140px;" onclick="wmsLoadRecent()">刷新导入记录</button>
       </div>
+    </div>
+  </div>
+
+  <!-- DAILY FEATURES (Admin-only) -->
+  <div id="page-daily_features" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
+      <div class="grow pill">日特征汇总 / Daily Features</div>
+    </div>
+    <div class="card">
+      <div class="muted" style="margin-bottom:10px;">基于工时数据+WMS产出，按日/业务/任务汇总特征，供本地模型分析。</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <div><small>开始日期</small><input id="dfStartDate" type="date" /></div>
+        <div><small>结束日期</small><input id="dfEndDate" type="date" /></div>
+        <button class="primary" style="align-self:flex-end;" onclick="dfRefresh()">刷新/重建</button>
+        <button style="align-self:flex-end;" onclick="dfQuery()">查询已有</button>
+      </div>
+      <div id="dfStatus" class="muted" style="margin-top:8px;"></div>
+      <div id="dfResult" style="margin-top:12px;overflow-x:auto;"></div>
     </div>
   </div>
 

@@ -20,7 +20,8 @@ var pages = [
   "report",
   "global_sessions",
   "correction",
-  "wms_import"
+  "wms_import",
+  "daily_features"
 ];
 
 
@@ -85,6 +86,8 @@ function adminApplyUI_(){
   if(btnC) btnC.style.display = show;
   var btnW = document.getElementById("btnWmsImport");
   if(btnW) btnW.style.display = show;
+  var btnDF = document.getElementById("btnDailyFeatures");
+  if(btnDF) btnDF.style.display = show;
 }
 function bindAdminEasterEgg_(){
   var el = document.querySelector(".title");
@@ -114,7 +117,7 @@ function getHashPage(){
   if(!m) return "home";
   var p = m[1];
   // admin-only pages
-  if((p==="report" || p==="global_sessions" || p==="correction" || p==="wms_import") && !adminIsUnlocked_()){
+  if((p==="report" || p==="global_sessions" || p==="correction" || p==="wms_import" || p==="daily_features") && !adminIsUnlocked_()){
     if(!ADMIN_DENY_ONCE[p]){ ADMIN_DENY_ONCE[p]=1; alert("管理员功能：请在标题处连续点击 7 次解锁"); }
     return "home";
   }
@@ -4556,6 +4559,8 @@ function wmsClearPreview(){
   document.getElementById("wmsImportResult").textContent = "";
   var input = document.getElementById("wmsFileInput");
   if(input) input.value = "";
+  var descEl = document.getElementById("wmsSourceTypeDesc");
+  if(descEl) descEl.textContent = "";
 }
 
 async function wmsConfirmImport(){
@@ -4563,6 +4568,19 @@ async function wmsConfirmImport(){
     alert("没有可导入的数据"); return;
   }
   if(!adminIsUnlocked_()){ alert("请先解锁管理员模式"); return; }
+
+  var sourceType = document.getElementById("wmsSourceType").value;
+  if(!sourceType){ alert("请先选择数据类型"); return; }
+
+  var businessDay = (document.getElementById("wmsBusinessDay") || {}).value || "";
+  if(sourceType === "b2c_pack_import"){
+    if(!businessDay || !/^\d{4}-\d{2}-\d{2}$/.test(businessDay)){
+      alert("进口打包表必须填写业务日期（YYYY-MM-DD）"); return;
+    }
+  }
+  if(businessDay && !/^\d{4}-\d{2}-\d{2}$/.test(businessDay)){
+    alert("业务日期格式不合法，需要 YYYY-MM-DD"); return;
+  }
 
   var header = _wmsPreviewRows.header;
   var rows = _wmsPreviewRows.rows;
@@ -4629,6 +4647,8 @@ async function wmsConfirmImport(){
         import_batch_id: batchId,
         row_offset: b,
         content_fingerprint: fingerprint,
+        source_type: sourceType,
+        business_day_kst: businessDay,
         source_file: _wmsFileName,
         sheet_name: _wmsCurrentSheet,
         header: header,
@@ -4681,6 +4701,95 @@ async function wmsLoadRecent(){
   }catch(e){
     el.textContent = "加载异常: " + e;
   }
+}
+
+// ===== WMS source_type 映射描述 =====
+var WMS_SOURCE_DESC = {
+  "b2c_order_export": "B2C订单表\n波次号→拣货波次 | 物流单号→订单号 | 商品数量→件数 | 发货时间→完成日期 | 储位号→储位(查表映射大/小货位) | 箱型编码→箱型",
+  "b2c_pack_import": "进口打包表\n分拣单号→拣货波次 | 物流单号→订单号 | 货品总数量→件数 | 货主→owner | 储位类型固定=小货位\n⚠️ 发货时间不可信，需手动指定业务日期",
+  "import_express": "进口快件表\n运单号→订单号 | 称重重量→重量 | 发货单位→owner | 入库时间→完成日期 | 件数固定=1"
+};
+(function(){
+  var sel = document.getElementById("wmsSourceType");
+  var desc = document.getElementById("wmsSourceTypeDesc");
+  var bdWrap = document.getElementById("wmsBusinessDayWrap");
+  var bdHint = document.getElementById("wmsBusinessDayHint");
+  if(sel && desc){
+    sel.addEventListener("change", function(){
+      desc.textContent = WMS_SOURCE_DESC[sel.value] || "";
+      if(bdWrap){
+        if(sel.value === "b2c_pack_import"){
+          bdWrap.style.display = "";
+          if(bdHint) bdHint.textContent = "⚠️ 进口打包表的发货时间不可信，请手动指定这批数据所属的业务日期";
+        }else{
+          bdWrap.style.display = "none";
+          if(bdHint) bdHint.textContent = "";
+        }
+      }
+    });
+  }
+})();
+
+// ===== Daily Features =====
+async function dfRefresh(){
+  var s = document.getElementById("dfStartDate").value;
+  var e = document.getElementById("dfEndDate").value;
+  if(!s || !e){ alert("请选择日期区间"); return; }
+  if(!adminIsUnlocked_()){ alert("请先解锁管理员模式"); return; }
+  var el = document.getElementById("dfStatus");
+  el.textContent = "正在刷新/重建...";
+  try{
+    var res = await fetchApi({ action:"admin_refresh_daily", k:adminKey_(), start_date:s, end_date:e });
+    if(res && res.ok){
+      el.textContent = "刷新完成，共 " + (res.refreshed||0) + " 条特征";
+      dfRenderTable_(res.features || []);
+    }else{
+      el.textContent = "刷新失败: " + (res&&res.error?res.error:"unknown");
+    }
+  }catch(ex){ el.textContent = "刷新异常: " + ex; }
+}
+
+async function dfQuery(){
+  var s = document.getElementById("dfStartDate").value;
+  var e = document.getElementById("dfEndDate").value;
+  if(!s || !e){ alert("请选择日期区间"); return; }
+  if(!adminIsUnlocked_()){ alert("请先解锁管理员模式"); return; }
+  var el = document.getElementById("dfStatus");
+  el.textContent = "查询中...";
+  try{
+    var res = await fetchApi({ action:"admin_daily_productivity", k:adminKey_(), start_date:s, end_date:e });
+    if(res && res.ok){
+      var f = res.features || [];
+      el.textContent = "查询完成，共 " + f.length + " 条";
+      dfRenderTable_(f);
+    }else{
+      el.textContent = "查询失败: " + (res&&res.error?res.error:"unknown");
+    }
+  }catch(ex){ el.textContent = "查询异常: " + ex; }
+}
+
+function dfRenderTable_(features){
+  var el = document.getElementById("dfResult");
+  if(!el) return;
+  if(!features || features.length === 0){ el.innerHTML = "<div class='muted'>无数据</div>"; return; }
+  var cols = ["day_kst","biz","task","total_person_minutes","unique_workers","session_count",
+    "event_wave_count","wms_wave_count","wms_order_count","wms_order_count_direct","wms_order_count_allocated",
+    "wms_qty","wms_qty_direct","wms_qty_allocated","wms_box_count","wms_pallet_count",
+    "wms_weight","anomaly_count","efficiency_per_person_hour","source_summary"];
+  var html = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr>";
+  cols.forEach(function(c){ html += "<th style='border:1px solid #ddd;padding:3px 6px;background:#f5f5f5;white-space:nowrap;'>" + esc(c) + "</th>"; });
+  html += "</tr></thead><tbody>";
+  features.forEach(function(f){
+    html += "<tr>";
+    cols.forEach(function(c){
+      var v = f[c];
+      if(typeof v === "number") v = Math.round(v*100)/100;
+      html += "<td style='border:1px solid #eee;padding:2px 5px;white-space:nowrap;'>" + esc(String(v!=null?v:"")) + "</td>";
+    });
+    html += "</tr>";
+  });
+  html += "</tbody></table>";
+  el.innerHTML = html;
 }
 
 /** ===== init ===== */
