@@ -913,6 +913,7 @@ export default {
 
       let inserted = 0;
       let skipped = 0;
+      let s_empty_order = 0, s_zero_qty = 0, s_empty_bizday = 0, s_loc_unknown = 0;
       const batchStmt = env.DB.prepare(
         `INSERT OR IGNORE INTO wms_outputs(import_id,import_batch_id,content_fingerprint,source_file,sheet_name,row_index,
           biz,task,order_no,wave_no,sku,qty,box_count,pallet_count,signed_at,completed_at,raw_json,created_ms,
@@ -964,6 +965,12 @@ export default {
         const completed_day_kst = toDayKst(completed_at);
         const business_day_kst = param_business_day || completed_day_kst;
 
+        // 校验计数
+        if (!order_no) s_empty_order++;
+        if (qty === 0) s_zero_qty++;
+        if (!business_day_kst) s_empty_bizday++;
+        if (location_type === "未知") s_loc_unknown++;
+
         stmts.push(batchStmt.bind(
           import_id, import_batch_id, content_fingerprint, source_file, sheet_name, i,
           biz, task, order_no, wave_no, sku, qty, box_count, pallet_count, signed_at, completed_at, raw_json, now,
@@ -979,7 +986,8 @@ export default {
         else skipped++;
       }
 
-      return jsonpOrJson({ ok:true, inserted, skipped, total: rows.length, import_batch_id, source_type }, callback);
+      const summary = { s_empty_order, s_zero_qty, s_empty_bizday, s_loc_unknown };
+      return jsonpOrJson({ ok:true, inserted, skipped, total: rows.length, import_batch_id, source_type, summary }, callback);
     }
 
     // ===== WMS 导入记录查询（按批次聚合） =====
@@ -1000,38 +1008,43 @@ export default {
       const sheet_name = String(p.sheet_name || "").trim();
       const row_count = parseInt(p.row_count || "0", 10) || 0;
       const content_fingerprint = String(p.content_fingerprint || "").trim();
-      const since_ms = now - 30 * 60 * 1000;
+      const source_type = String(p.source_type || "").trim();
 
-      // 1) 文件名规则：同 source_file + sheet_name + row_count
-      const rs1 = await env.DB.prepare(
-        `SELECT import_batch_id, source_file, COUNT(*) as row_count, MAX(created_ms) as created_ms
-         FROM wms_outputs
-         WHERE source_file=? AND sheet_name=? AND created_ms>=?
-         GROUP BY import_batch_id
-         HAVING COUNT(*)=?
-         LIMIT 5`
-      ).bind(source_file, sheet_name, since_ms, row_count).all();
-      const name_matches = rs1.results || [];
-
-      // 2) 内容指纹：同 content_fingerprint（排除空）
-      let fingerprint_matches = [];
-      if (content_fingerprint) {
+      // 1) 内容指纹硬拦截：同 source_type + content_fingerprint → block
+      let block = false;
+      let block_matches = [];
+      if (content_fingerprint && source_type) {
         const rs2 = await env.DB.prepare(
-          `SELECT import_batch_id, source_file, COUNT(*) as row_count, MAX(created_ms) as created_ms
+          `SELECT import_batch_id, source_type, source_file, sheet_name, COUNT(*) as row_count, MAX(created_ms) as created_ms
            FROM wms_outputs
-           WHERE content_fingerprint=? AND content_fingerprint!='' AND created_ms>=?
+           WHERE content_fingerprint=? AND source_type=? AND content_fingerprint!=''
            GROUP BY import_batch_id
+           LIMIT 3`
+        ).bind(content_fingerprint, source_type).all();
+        block_matches = rs2.results || [];
+        block = block_matches.length > 0;
+      }
+
+      // 2) 文件名软提醒：同 source_file + sheet_name + row_count（全量历史）
+      let name_matches = [];
+      if (!block) {
+        const rs1 = await env.DB.prepare(
+          `SELECT import_batch_id, source_type, source_file, sheet_name, COUNT(*) as row_count, MAX(created_ms) as created_ms
+           FROM wms_outputs
+           WHERE source_file=? AND sheet_name=?
+           GROUP BY import_batch_id
+           HAVING COUNT(*)=?
            LIMIT 5`
-        ).bind(content_fingerprint, since_ms).all();
-        fingerprint_matches = rs2.results || [];
+        ).bind(source_file, sheet_name, row_count).all();
+        name_matches = rs1.results || [];
       }
 
       return jsonpOrJson({
         ok: true,
+        block,
+        block_matches,
         has_name_duplicate: name_matches.length > 0,
-        name_matches,
-        has_fingerprint_duplicate: fingerprint_matches.length > 0,
-        fingerprint_matches
+        name_matches
       }, callback);
     }
 
@@ -1045,6 +1058,61 @@ export default {
         `SELECT * FROM daily_productivity_features WHERE day_kst >= ? AND day_kst <= ? ORDER BY day_kst, biz, task`
       ).bind(start_date, end_date).all();
       return jsonpOrJson({ ok:true, features: rs.results || [] }, callback);
+    }
+
+    // ===== 刷新前依赖检查 =====
+    if (action === "admin_refresh_precheck") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_date = String(p.start_date || "").trim();
+      const end_date = String(p.end_date || "").trim();
+      if (!start_date || !end_date) return jsonpOrJson({ ok:false, error:"missing start_date or end_date" }, callback);
+
+      // 与 admin_refresh_daily 完全一致的口径查 3 个数据源
+      // 1) b2c_order_export: completed_day_kst
+      const rs1 = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst, COUNT(*) as cnt
+         FROM wms_outputs WHERE source_type='b2c_order_export'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+      // 2) b2c_pack_import: business_day_kst
+      const rs2 = await env.DB.prepare(
+        `SELECT business_day_kst as day_kst, COUNT(*) as cnt
+         FROM wms_outputs WHERE source_type='b2c_pack_import'
+           AND business_day_kst >= ? AND business_day_kst <= ? AND business_day_kst != ''
+         GROUP BY business_day_kst`
+      ).bind(start_date, end_date).all();
+      // 3) import_express: completed_day_kst
+      const rs3 = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst, COUNT(*) as cnt
+         FROM wms_outputs WHERE source_type='import_express'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+
+      // 按天汇总
+      const dayMap = {}; // day → { b2c_order_export, b2c_pack_import, import_express }
+      // 生成日期列表
+      const d = new Date(start_date + "T00:00:00+09:00");
+      const dEnd = new Date(end_date + "T00:00:00+09:00");
+      while (d <= dEnd) {
+        const ds = d.toISOString().slice(0, 10);
+        dayMap[ds] = { b2c_order_export: 0, b2c_pack_import: 0, import_express: 0 };
+        d.setDate(d.getDate() + 1);
+      }
+      for (const r of (rs1.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].b2c_order_export = r.cnt; }
+      for (const r of (rs2.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].b2c_pack_import = r.cnt; }
+      for (const r of (rs3.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].import_express = r.cnt; }
+
+      // 生成 gaps
+      const gaps = [];
+      for (const [day, counts] of Object.entries(dayMap)) {
+        if (counts.b2c_order_export === 0) gaps.push({ day, source_type: "b2c_order_export", label: "B2C订单表" });
+        if (counts.b2c_pack_import === 0) gaps.push({ day, source_type: "b2c_pack_import", label: "进口打包表" });
+        if (counts.import_express === 0) gaps.push({ day, source_type: "import_express", label: "进口快件表" });
+      }
+
+      return jsonpOrJson({ ok: true, day_counts: dayMap, gaps }, callback);
     }
 
     // ===== 日特征汇总：刷新/重建指定日期区间 =====
@@ -1149,6 +1217,13 @@ export default {
          GROUP BY completed_day_kst`
       ).bind(start_date, end_date).all();
 
+      // 工时侧任务名 → WMS 侧任务名映射（仅 B2C 业务）
+      function mapTask(biz, task) {
+        if (biz === "B2C" && task === "拣货") return "B2C拣货";
+        if (biz === "B2C" && task === "打包") return "B2C打包";
+        return task;
+      }
+
       // 合并计算
       // key = day_kst|biz|task
       const featureMap = {};
@@ -1189,9 +1264,10 @@ export default {
             // 配对成功: 归到 join 所在日
             const minutes = (e.server_ms - pendingJoin.server_ms) / 60000;
             if (minutes > 0 && minutes < 1440) { // 最多 24 小时
-              const f = getOrCreate(pendingJoin.day_kst, pendingJoin.biz, pendingJoin.task);
+              const mappedTask = mapTask(pendingJoin.biz, pendingJoin.task);
+              const f = getOrCreate(pendingJoin.day_kst, pendingJoin.biz, mappedTask);
               f.total_person_minutes += minutes;
-              const wk = pendingJoin.day_kst + "|" + pendingJoin.biz + "|" + pendingJoin.task;
+              const wk = pendingJoin.day_kst + "|" + pendingJoin.biz + "|" + mappedTask;
               if (!workersByDayBizTask[wk]) workersByDayBizTask[wk] = new Set();
               workersByDayBizTask[wk].add(pendingJoin.badge);
             }
@@ -1209,19 +1285,19 @@ export default {
 
       // session_count
       for (const r of (sessRs.results || [])) {
-        const f = getOrCreate(r.day_kst, r.biz, r.task);
+        const f = getOrCreate(r.day_kst, r.biz, mapTask(r.biz, r.task));
         f.session_count = r.session_count;
       }
 
       // event_wave_count
       for (const r of (waveRs.results || [])) {
-        const f = getOrCreate(r.day_kst, r.biz, r.task);
+        const f = getOrCreate(r.day_kst, r.biz, mapTask(r.biz, r.task));
         f.event_wave_count = r.wave_count;
       }
 
       // anomaly_count
       for (const r of (anomRs.results || [])) {
-        const f = getOrCreate(r.day_kst, r.biz, r.task);
+        const f = getOrCreate(r.day_kst, r.biz, mapTask(r.biz, r.task));
         f.anomaly_count = r.anomaly_count;
       }
 
@@ -1307,7 +1383,54 @@ export default {
       }
       if (insStmts.length > 0) await env.DB.batch(insStmts);
 
-      return jsonpOrJson({ ok:true, refreshed: features.length, features }, callback);
+      // post_warnings: 只检查 3 个关键任务
+      const post_warnings = [];
+      const KEY_TASKS = [
+        { biz: "B2C", task: "B2C拣货" },
+        { biz: "B2C", task: "B2C打包" },
+        { biz: "进口", task: "过机扫描码托" }
+      ];
+      // 收集该日期范围内 b2c_pack_import 缺失的天
+      const packMissingDays = new Set();
+      {
+        const daysInRange = new Set();
+        const dd = new Date(start_date + "T00:00:00+09:00");
+        const ddEnd = new Date(end_date + "T00:00:00+09:00");
+        while (dd <= ddEnd) { daysInRange.add(dd.toISOString().slice(0, 10)); dd.setDate(dd.getDate() + 1); }
+        const packRs = await env.DB.prepare(
+          `SELECT DISTINCT business_day_kst FROM wms_outputs
+           WHERE source_type='b2c_pack_import' AND business_day_kst >= ? AND business_day_kst <= ? AND business_day_kst != ''`
+        ).bind(start_date, end_date).all();
+        const packDays = new Set((packRs.results || []).map(r => r.business_day_kst));
+        for (const d of daysInRange) { if (!packDays.has(d)) packMissingDays.add(d); }
+      }
+
+      for (const f of features) {
+        const isKey = KEY_TASKS.some(t => t.biz === f.biz && t.task === f.task);
+        if (!isKey) continue;
+
+        // 关键任务产出为 0
+        if (f.wms_order_count === 0) {
+          post_warnings.push({ day: f.day_kst, task: f.task, level: "warning", msg: f.task + " 产出为 0" });
+        }
+        // B2C拣货/B2C打包: allocated=0 的谨慎检查（产出已为0时不重复报）
+        if ((f.task === "B2C拣货" || f.task === "B2C打包") && f.wms_order_count > 0) {
+          if (f.wms_order_count_allocated === 0) {
+            // 仅当 direct > 0 或 b2c_pack_import 该天缺失 时报 warning
+            if (f.wms_order_count_direct > 0) {
+              post_warnings.push({ day: f.day_kst, task: f.task, level: "warning", msg: f.task + " direct=" + f.wms_order_count_direct + " 但 allocated=0" });
+            } else if (packMissingDays.has(f.day_kst)) {
+              post_warnings.push({ day: f.day_kst, task: f.task, level: "warning", msg: f.task + " allocated=0（该日缺少 b2c_pack_import 数据）" });
+            }
+          }
+        }
+        // 无人员出勤
+        if (f.unique_workers === 0) {
+          post_warnings.push({ day: f.day_kst, task: f.task, level: "info", msg: f.task + " 无人员出勤" });
+        }
+      }
+
+      return jsonpOrJson({ ok:true, refreshed: features.length, features, post_warnings }, callback);
       } catch (e) {
         return jsonpOrJson({ ok:false, error:"admin_refresh_daily failed: " + String(e && e.message || e) }, callback);
       }

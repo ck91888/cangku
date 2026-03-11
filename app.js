@@ -4586,7 +4586,7 @@ async function wmsConfirmImport(){
   var rows = _wmsPreviewRows.rows;
   if(rows.length === 0){ alert("数据为空"); return; }
 
-  // 重复导入检测：文件名规则 + 内容指纹
+  // 重复导入检测：内容指纹硬拦截 + 文件名软提醒
   var fingerprint = wmsContentFingerprint_(header, rows);
   try{
     var dupRes = await fetchApi({
@@ -4595,19 +4595,21 @@ async function wmsConfirmImport(){
       source_file: _wmsFileName,
       sheet_name: _wmsCurrentSheet,
       row_count: rows.length,
-      content_fingerprint: fingerprint
+      content_fingerprint: fingerprint,
+      source_type: sourceType
     });
-    if(dupRes && dupRes.ok && (dupRes.has_name_duplicate || dupRes.has_fingerprint_duplicate)){
-      var msgs = [];
-      if(dupRes.has_name_duplicate){
-        var ni = (dupRes.name_matches||[]).map(function(m){ return fmtKST_(m.created_ms); }).join(", ");
-        msgs.push("同文件名/Sheet/行数的记录：" + ni);
-      }
-      if(dupRes.has_fingerprint_duplicate){
-        var fi = (dupRes.fingerprint_matches||[]).map(function(m){ return fmtKST_(m.created_ms) + " (" + (m.source_file||"?") + ")"; }).join(", ");
-        msgs.push("内容高度一致（可能是同一批数据换文件名再次导入）：" + fi);
-      }
-      if(!confirm("⚠️ 可能重复导入！\n\n" + msgs.join("\n\n") + "\n\n确定仍要继续导入吗？")){
+    if(dupRes && dupRes.ok && dupRes.block){
+      // 硬拦截：内容完全相同，禁止导入
+      var bm = (dupRes.block_matches||[]).map(function(m){
+        return "文件: " + (m.source_file||"?") + " | Sheet: " + (m.sheet_name||"?") + " | " + (m.row_count||0) + "行 | 导入时间: " + fmtKST_(m.created_ms) + " | 批次: " + (m.import_batch_id||"?");
+      }).join("\n");
+      alert("❌ 禁止重复导入！\n\n该文件内容与已导入数据完全相同（source_type + 内容指纹匹配）。\n\n已有记录：\n" + bm);
+      return;
+    }
+    if(dupRes && dupRes.ok && dupRes.has_name_duplicate){
+      // 软提醒：文件名/Sheet/行数相同，但内容不同
+      var ni = (dupRes.name_matches||[]).map(function(m){ return fmtKST_(m.created_ms) + " (" + (m.source_file||"?") + ")"; }).join(", ");
+      if(!confirm("⚠️ 发现同文件名/Sheet/行数的历史导入记录：\n" + ni + "\n\n内容指纹不同，可能是更新版数据。\n确定继续导入吗？")){
         return;
       }
     }
@@ -4637,6 +4639,7 @@ async function wmsConfirmImport(){
   var totalInserted = 0;
   var totalSkipped = 0;
   var errors = [];
+  var totalSummary = { s_empty_order:0, s_zero_qty:0, s_empty_bizday:0, s_loc_unknown:0 };
 
   for(var b=0; b<records.length; b+=BATCH){
     var batch = records.slice(b, b+BATCH);
@@ -4657,6 +4660,12 @@ async function wmsConfirmImport(){
       if(res && res.ok){
         totalInserted += (res.inserted || 0);
         totalSkipped += (res.skipped || 0);
+        if(res.summary){
+          totalSummary.s_empty_order += (res.summary.s_empty_order||0);
+          totalSummary.s_zero_qty += (res.summary.s_zero_qty||0);
+          totalSummary.s_empty_bizday += (res.summary.s_empty_bizday||0);
+          totalSummary.s_loc_unknown += (res.summary.s_loc_unknown||0);
+        }
       }else{
         errors.push("批次" + (Math.floor(b/BATCH)+1) + "失败: " + (res && res.error ? res.error : "unknown"));
       }
@@ -4666,13 +4675,34 @@ async function wmsConfirmImport(){
     resultEl.textContent = "已提交 " + Math.min(b+BATCH, records.length) + "/" + records.length + " 行... ⏳";
   }
 
-  var msg = "导入完成 ✅ 插入: " + totalInserted + " 行";
-  if(totalSkipped) msg += " | 跳过(重复): " + totalSkipped;
-  if(errors.length) msg += " | 错误: " + errors.join("; ");
+  // 构建校验摘要
+  var sourceLabel = {"b2c_order_export":"B2C订单表","b2c_pack_import":"进口打包表","import_express":"进口快件表"}[sourceType] || sourceType;
+  var lines = [sourceLabel + ": ✅ 插入 " + totalInserted + " 行"];
+  if(totalSkipped) lines.push("⏭️ 跳过(重复/汇总) " + totalSkipped + " 行");
+
+  // 校验项：根据 source_type 决定 severity
+  var warnings = [];
+  var criticals = [];
+  if(totalSummary.s_empty_order > 0) warnings.push(totalSummary.s_empty_order + " 行订单号为空");
+  if(totalSummary.s_zero_qty > 0) warnings.push(totalSummary.s_zero_qty + " 行数量为0");
+  if(totalSummary.s_loc_unknown > 0) warnings.push(totalSummary.s_loc_unknown + " 行储位类型未知");
+  if(totalSummary.s_empty_bizday > 0){
+    if(sourceType === "b2c_pack_import"){
+      criticals.push(totalSummary.s_empty_bizday + " 行业务日期为空");
+    }else{
+      warnings.push(totalSummary.s_empty_bizday + " 行业务日期为空");
+    }
+  }
+  if(criticals.length) lines.push("❌ " + criticals.join(", "));
+  if(warnings.length) lines.push("⚠️ " + warnings.join(", "));
+  if(!criticals.length && !warnings.length) lines.push("🟢 数据质量无异常");
+  if(errors.length) lines.push("❗ 错误: " + errors.join("; "));
+
+  var msg = lines.join("\n");
 
   // 导入成功后清空界面，回到初始状态
   wmsClearPreview();
-  wmsSetStatus_(msg, errors.length === 0);
+  wmsSetStatus_(msg, errors.length === 0 && criticals.length === 0);
   alert(msg);
   wmsLoadRecent();
 }
@@ -4737,12 +4767,54 @@ async function dfRefresh(){
   if(!s || !e){ alert("请选择日期区间"); return; }
   if(!adminIsUnlocked_()){ alert("请先解锁管理员模式"); return; }
   var el = document.getElementById("dfStatus");
+
+  // Step 1: precheck
+  el.textContent = "正在检查数据依赖...";
+  try{
+    var pc = await fetchApi({ action:"admin_refresh_precheck", k:adminKey_(), start_date:s, end_date:e });
+    if(!pc || !pc.ok){ el.textContent = "预检查失败: " + (pc&&pc.error?pc.error:"unknown"); return; }
+
+    // 构建 confirm 文案
+    var gaps = pc.gaps || [];
+    var confirmMsg = "刷新日期范围: " + s + " ~ " + e;
+    if(gaps.length === 0){
+      confirmMsg += "\n\n✅ 所有日期的 3 个数据源均有数据，确认刷新？";
+    }else{
+      confirmMsg += "\n\n⚠️ 以下日期/数据源缺少数据：\n";
+      for(var gi=0; gi<gaps.length; gi++){
+        confirmMsg += "• " + gaps[gi].day + ": 缺少 " + gaps[gi].label + "\n";
+      }
+      confirmMsg += "\n缺少数据的任务产出将为 0。确认继续刷新？";
+    }
+    if(!confirm(confirmMsg)) { el.textContent = "已取消刷新"; return; }
+  }catch(ex){
+    // precheck 失败不阻断，降级为简单 confirm
+    if(!confirm("⚠️ 数据依赖检查失败（" + ex + "）\n\n是否仍然继续刷新 " + s + " ~ " + e + "？")){
+      el.textContent = "已取消刷新"; return;
+    }
+  }
+
+  // Step 2: 执行刷新
   el.textContent = "正在刷新/重建...";
   try{
     var res = await fetchApi({ action:"admin_refresh_daily", k:adminKey_(), start_date:s, end_date:e });
     if(res && res.ok){
       el.textContent = "刷新完成，共 " + (res.refreshed||0) + " 条特征";
+      dfRenderDashboard_(res.features || []);
       dfRenderTable_(res.features || []);
+
+      // Step 3: 展示 post_warnings
+      var pw = res.post_warnings || [];
+      if(pw.length === 0){
+        alert("✅ 刷新完成，" + (res.refreshed||0) + " 条特征，数据无异常");
+      }else{
+        var warnLines = ["⚠️ 刷新完成，但发现以下问题："];
+        for(var wi=0; wi<pw.length; wi++){
+          var icon = pw[wi].level === "warning" ? "⚠️" : "ℹ️";
+          warnLines.push(icon + " " + pw[wi].day + " " + pw[wi].msg);
+        }
+        alert(warnLines.join("\n"));
+      }
     }else{
       el.textContent = "刷新失败: " + (res&&res.error?res.error:"unknown");
     }
@@ -4761,11 +4833,93 @@ async function dfQuery(){
     if(res && res.ok){
       var f = res.features || [];
       el.textContent = "查询完成，共 " + f.length + " 条";
+      dfRenderDashboard_(f);
       dfRenderTable_(f);
     }else{
       el.textContent = "查询失败: " + (res&&res.error?res.error:"unknown");
     }
   }catch(ex){ el.textContent = "查询异常: " + ex; }
+}
+
+function dfRenderDashboard_(features){
+  var el = document.getElementById("dfDashboard");
+  if(!el) return;
+  if(!features || features.length === 0){ el.innerHTML = ""; return; }
+
+  var KEY_TASKS = [
+    { biz:"B2C", task:"B2C拣货" },
+    { biz:"B2C", task:"B2C打包" },
+    { biz:"进口", task:"过机扫描码托" }
+  ];
+
+  // 按天分组
+  var dayMap = {}; // day → { "B2C拣货": feature, ... }
+  var days = [];
+  for(var i=0;i<features.length;i++){
+    var f = features[i];
+    if(!dayMap[f.day_kst]){ dayMap[f.day_kst] = {}; days.push(f.day_kst); }
+    dayMap[f.day_kst][f.task] = f;
+  }
+  days.sort();
+
+  var html = "";
+  for(var di=0;di<days.length;di++){
+    var day = days[di];
+    var tasks = dayMap[day];
+    html += "<div style='margin-bottom:16px;'>";
+    html += "<div style='font-weight:bold;margin-bottom:2px;'>📋 " + day + " 关键任务验收看板</div>";
+    html += "<div style='font-size:12px;color:#666;margin-bottom:4px;'>红色：数据异常，需先处理 | 黄色：需关注 | 分摊数据主要来自进口打包表</div>";
+    html += "<table style='border-collapse:collapse;width:100%;font-size:13px;'>";
+    html += "<tr style='background:#f0f0f0;'>";
+    var headers = ["任务","总单量","直接单量","分摊单量","总件量","直接件量","分摊件量","作业人数","人效(单/人时)"];
+    for(var hi=0;hi<headers.length;hi++) html += "<th style='border:1px solid #ccc;padding:4px 6px;text-align:center;'>" + headers[hi] + "</th>";
+    html += "</tr>";
+
+    for(var ti=0;ti<KEY_TASKS.length;ti++){
+      var kt = KEY_TASKS[ti];
+      var f = tasks[kt.task] || null;
+      var isScan = (kt.task === "过机扫描码托");
+      var missing = !f;
+
+      // 取值
+      var orderCount = f ? (f.wms_order_count||0) : 0;
+      var direct = f ? (f.wms_order_count_direct||0) : 0;
+      var allocated = f ? (f.wms_order_count_allocated||0) : 0;
+      var qty = f ? (f.wms_qty||0) : 0;
+      var qtyDirect = f ? (f.wms_qty_direct||0) : 0;
+      var qtyAlloc = f ? (f.wms_qty_allocated||0) : 0;
+      var workers = f ? (f.unique_workers||0) : 0;
+      var eff = f ? (f.efficiency_per_person_hour||0) : 0;
+
+      // 标色规则
+      var rowStyle = "";
+      if(missing || orderCount === 0){
+        rowStyle = "background:#fdd;"; // 标红
+      }else if(workers === 0 || eff === 0){
+        rowStyle = "background:#fff3cd;"; // 标黄
+      }
+
+      // allocated 单元格标红: B2C任务 direct>0 但 allocated=0
+      var allocCellStyle = "";
+      if(!isScan && !missing && direct > 0 && allocated === 0){
+        allocCellStyle = "background:#fdd;font-weight:bold;";
+      }
+
+      html += "<tr style='" + rowStyle + "'>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;font-weight:bold;'>" + kt.task + (missing ? "（缺失）" : "") + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;'>" + orderCount + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;'>" + direct + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;" + allocCellStyle + "'>" + (isScan ? "-" : allocated) + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;'>" + qty + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;'>" + qtyDirect + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;'>" + (isScan ? "-" : qtyAlloc) + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;" + (workers===0&&!missing ? "background:#fff3cd;" : "") + "'>" + workers + "</td>";
+      html += "<td style='border:1px solid #ccc;padding:4px 6px;text-align:right;" + (eff===0&&!missing&&orderCount>0 ? "background:#fff3cd;" : "") + "'>" + eff + "</td>";
+      html += "</tr>";
+    }
+    html += "</table></div>";
+  }
+  el.innerHTML = html;
 }
 
 function dfRenderTable_(features){
@@ -4776,14 +4930,27 @@ function dfRenderTable_(features){
     "event_wave_count","wms_wave_count","wms_order_count","wms_order_count_direct","wms_order_count_allocated",
     "wms_qty","wms_qty_direct","wms_qty_allocated","wms_box_count","wms_pallet_count",
     "wms_weight","anomaly_count","efficiency_per_person_hour","source_summary"];
+  var colLabels = {
+    "day_kst":"日期","biz":"业务","task":"任务","total_person_minutes":"总作业分钟",
+    "unique_workers":"作业人数","session_count":"作业次数","event_wave_count":"事件波次",
+    "wms_wave_count":"WMS波次","wms_order_count":"总单量","wms_order_count_direct":"直接单量",
+    "wms_order_count_allocated":"分摊单量","wms_qty":"总件量","wms_qty_direct":"直接件量",
+    "wms_qty_allocated":"分摊件量","wms_box_count":"箱数","wms_pallet_count":"托盘数",
+    "wms_weight":"重量(kg)","anomaly_count":"异常次数","efficiency_per_person_hour":"人效(单/人时)",
+    "source_summary":"数据来源"
+  };
   var html = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr>";
-  cols.forEach(function(c){ html += "<th style='border:1px solid #ddd;padding:3px 6px;background:#f5f5f5;white-space:nowrap;'>" + esc(c) + "</th>"; });
+  cols.forEach(function(c){ html += "<th style='border:1px solid #ddd;padding:3px 6px;background:#f5f5f5;white-space:nowrap;'>" + esc(colLabels[c]||c) + "</th>"; });
   html += "</tr></thead><tbody>";
   features.forEach(function(f){
     html += "<tr>";
     cols.forEach(function(c){
       var v = f[c];
       if(typeof v === "number") v = Math.round(v*100)/100;
+      if(c === "source_summary" && typeof v === "string" && v){
+        var srcMap = {"b2c_order_export":"B2C订单表","b2c_pack_import":"进口打包表","import_express":"进口快件表","import_express:StarFans":"进口快件表（StarFans）"};
+        v = v.split(",").map(function(s){ return srcMap[s.trim()]||s.trim(); }).join(" + ");
+      }
       html += "<td style='border:1px solid #eee;padding:2px 5px;white-space:nowrap;'>" + esc(String(v!=null?v:"")) + "</td>";
     });
     html += "</tr>";
