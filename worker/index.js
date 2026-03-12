@@ -853,7 +853,7 @@ export default {
       const header = p.header || [];
       const rows = p.rows || [];
       if (!source_file) return jsonpOrJson({ ok:false, error:"missing source_file" }, callback);
-      if (!source_type || !["b2c_order_export","b2c_pack_import","import_express"].includes(source_type))
+      if (!source_type || !["b2c_order_export","b2c_pack_import","import_express","change_order_export","return_inbound_export","return_qc_export"].includes(source_type))
         return jsonpOrJson({ ok:false, error:"invalid source_type" }, callback);
       if (!Array.isArray(rows) || rows.length === 0) return jsonpOrJson({ ok:false, error:"empty rows" }, callback);
       if (source_type === "b2c_pack_import") {
@@ -917,8 +917,8 @@ export default {
       const batchStmt = env.DB.prepare(
         `INSERT OR IGNORE INTO wms_outputs(import_id,import_batch_id,content_fingerprint,source_file,sheet_name,row_index,
           biz,task,order_no,wave_no,sku,qty,box_count,pallet_count,signed_at,completed_at,raw_json,created_ms,
-          source_type,task_scope,pick_wave_no,location_code,location_type,box_code,weight,owner_name,completed_day_kst,business_day_kst)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          source_type,task_scope,pick_wave_no,location_code,location_type,box_code,weight,owner_name,completed_day_kst,business_day_kst,volume)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
 
       const stmts = [];
@@ -930,7 +930,7 @@ export default {
         let biz="", task="", task_scope="", order_no="", wave_no="", sku="", qty=0;
         let box_count=0, pallet_count=0, signed_at="", completed_at="";
         let pick_wave_no="", location_code="", location_type="", box_code="";
-        let weight=0, owner_name="";
+        let weight=0, owner_name="", volume=0;
 
         if (source_type === "b2c_order_export") {
           biz = "B2C"; task_scope = "B2C拣货,B2C打包";
@@ -959,6 +959,34 @@ export default {
           weight = parseFloat(pickField(r, ["称重重量","weight","重量"])) || 0;
           owner_name = pickField(r, ["发货单位","owner","shipper","发货人"]);
           completed_at = pickField(r, ["入库时间","completed_at","签收时间","完成时间"]);
+        } else if (source_type === "change_order_export") {
+          biz = "B2C"; task_scope = "换单";
+          order_no = pickField(r, ["快递单号","express_no","快递号"]);
+          qty = 1;
+          owner_name = pickField(r, ["商户名称","商户","owner","owner_name"]);
+          completed_at = pickField(r, ["发货时间","completed_at","完成时间"]);
+          signed_at = pickField(r, ["状态","status"]);  // 存状态，refresh 时过滤 已发出
+        } else if (source_type === "return_inbound_export") {
+          biz = "B2C"; task_scope = "退件入库";
+          order_no = pickField(r, ["包裹号","package_no","包裹"]);
+          if (!order_no) { skipped++; continue; }  // 跳过空行
+          qty = parseInt(pickField(r, ["数量","qty","件数"]), 10) || 0;
+          weight = parseFloat(pickField(r, ["重量（KG）","重量(KG)","重量","weight"])) || 0;
+          volume = parseFloat(pickField(r, ["体积","volume"])) || 0;
+          owner_name = pickField(r, ["商户名称","商户","owner","owner_name"]);
+          completed_at = pickField(r, ["仓库签收时间","签收时间","completed_at"]);
+          location_code = pickField(r, ["储位号","location_code","储位"]);
+        } else if (source_type === "return_qc_export") {
+          biz = "B2C"; task_scope = "质检";
+          order_no = pickField(r, ["包裹号","package_no","包裹"]);
+          if (!order_no) { skipped++; continue; }  // 跳过空行
+          qty = parseInt(pickField(r, ["数量","qty","件数"]), 10) || 0;
+          weight = parseFloat(pickField(r, ["重量（KG）","重量(KG)","重量","weight"])) || 0;
+          volume = parseFloat(pickField(r, ["体积","volume"])) || 0;
+          owner_name = pickField(r, ["商户名称","商户","owner","owner_name"]);
+          completed_at = pickField(r, ["质检时间","qc_time","completed_at"]);
+          signed_at = pickField(r, ["质检","qc_status"]);  // 存质检状态，refresh 时过滤 已质检
+          location_code = pickField(r, ["储位号","location_code","储位"]);
         }
 
         wave_no = pick_wave_no || pickField(r, ["wave_no","waveno","波次号"]);
@@ -974,7 +1002,7 @@ export default {
         stmts.push(batchStmt.bind(
           import_id, import_batch_id, content_fingerprint, source_file, sheet_name, i,
           biz, task, order_no, wave_no, sku, qty, box_count, pallet_count, signed_at, completed_at, raw_json, now,
-          source_type, task_scope, pick_wave_no, location_code, location_type, box_code, weight, owner_name, completed_day_kst, business_day_kst
+          source_type, task_scope, pick_wave_no, location_code, location_type, box_code, weight, owner_name, completed_day_kst, business_day_kst, volume
         ));
       }
 
@@ -1089,20 +1117,46 @@ export default {
            AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
          GROUP BY completed_day_kst`
       ).bind(start_date, end_date).all();
+      // 4) change_order_export: completed_day_kst (只统计 已发出)
+      const rs4 = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst, COUNT(*) as cnt
+         FROM wms_outputs WHERE source_type='change_order_export'
+           AND signed_at='已发出'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+      // 5) return_inbound_export: completed_day_kst (不过滤状态)
+      const rs5 = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst, COUNT(*) as cnt
+         FROM wms_outputs WHERE source_type='return_inbound_export'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+      // 6) return_qc_export: completed_day_kst (只统计 已质检)
+      const rs6 = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst, COUNT(*) as cnt
+         FROM wms_outputs WHERE source_type='return_qc_export'
+           AND signed_at='已质检'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
 
       // 按天汇总
-      const dayMap = {}; // day → { b2c_order_export, b2c_pack_import, import_express }
+      const dayMap = {}; // day → { b2c_order_export, b2c_pack_import, import_express, change_order_export, return_inbound_export, return_qc_export }
       // 生成日期列表
       const d = new Date(start_date + "T00:00:00+09:00");
       const dEnd = new Date(end_date + "T00:00:00+09:00");
       while (d <= dEnd) {
         const ds = d.toISOString().slice(0, 10);
-        dayMap[ds] = { b2c_order_export: 0, b2c_pack_import: 0, import_express: 0 };
+        dayMap[ds] = { b2c_order_export: 0, b2c_pack_import: 0, import_express: 0, change_order_export: 0, return_inbound_export: 0, return_qc_export: 0 };
         d.setDate(d.getDate() + 1);
       }
       for (const r of (rs1.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].b2c_order_export = r.cnt; }
       for (const r of (rs2.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].b2c_pack_import = r.cnt; }
       for (const r of (rs3.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].import_express = r.cnt; }
+      for (const r of (rs4.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].change_order_export = r.cnt; }
+      for (const r of (rs5.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].return_inbound_export = r.cnt; }
+      for (const r of (rs6.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].return_qc_export = r.cnt; }
 
       // 生成 gaps
       const gaps = [];
@@ -1110,6 +1164,9 @@ export default {
         if (counts.b2c_order_export === 0) gaps.push({ day, source_type: "b2c_order_export", label: "B2C订单表" });
         if (counts.b2c_pack_import === 0) gaps.push({ day, source_type: "b2c_pack_import", label: "进口打包表" });
         if (counts.import_express === 0) gaps.push({ day, source_type: "import_express", label: "进口快件表" });
+        if (counts.change_order_export === 0) gaps.push({ day, source_type: "change_order_export", label: "换单表" });
+        if (counts.return_inbound_export === 0) gaps.push({ day, source_type: "return_inbound_export", label: "退件入库表" });
+        if (counts.return_qc_export === 0) gaps.push({ day, source_type: "return_qc_export", label: "质检表" });
       }
 
       return jsonpOrJson({ ok: true, day_counts: dayMap, gaps }, callback);
@@ -1128,7 +1185,7 @@ export default {
       const endMs = new Date(end_date + "T23:59:59.999+09:00").getTime();
       if (isNaN(startMs) || isNaN(endMs)) return jsonpOrJson({ ok:false, error:"invalid date" }, callback);
 
-      const TASKS = ["B2C拣货", "B2C打包", "过机扫描码托"];
+      const TASKS = ["B2C拣货", "B2C打包", "过机扫描码托", "换单", "退件入库", "质检"];
 
       // Step1: 劳动数据 — join/leave 事件
       const evRs = await env.DB.prepare(
@@ -1217,6 +1274,45 @@ export default {
          GROUP BY completed_day_kst`
       ).bind(start_date, end_date).all();
 
+      // Step6: WMS 产出 — 换单 (change_order_export, 只统计 已发出, 全 direct 无 allocated)
+      const wmsChangeOrderRs = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst,
+                COUNT(DISTINCT order_no) as wms_order_count,
+                COUNT(DISTINCT order_no) as wms_qty
+         FROM wms_outputs
+         WHERE source_type='change_order_export'
+           AND signed_at='已发出'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+
+      // Step7: WMS 产出 — 退件入库 (return_inbound_export, 不过滤状态, 全 direct)
+      const wmsReturnInboundRs = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst,
+                COUNT(DISTINCT order_no) as wms_order_count,
+                SUM(qty) as wms_qty,
+                SUM(weight) as wms_weight,
+                SUM(volume) as wms_volume
+         FROM wms_outputs
+         WHERE source_type='return_inbound_export'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+
+      // Step8: WMS 产出 — 质检 (return_qc_export, 只统计 已质检, 产出单位=件数)
+      const wmsReturnQcRs = await env.DB.prepare(
+        `SELECT completed_day_kst as day_kst,
+                SUM(qty) as wms_order_count,
+                SUM(qty) as wms_qty,
+                SUM(weight) as wms_weight,
+                SUM(volume) as wms_volume
+         FROM wms_outputs
+         WHERE source_type='return_qc_export'
+           AND signed_at='已质检'
+           AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''
+         GROUP BY completed_day_kst`
+      ).bind(start_date, end_date).all();
+
       // 工时侧任务名 → WMS 侧任务名映射（仅 B2C 业务）
       function mapTask(biz, task) {
         if (biz === "B2C" && task === "拣货") return "B2C拣货";
@@ -1234,7 +1330,9 @@ export default {
             day_kst: day, biz, task,
             total_person_minutes: 0, unique_workers: 0, session_count: 0,
             event_wave_count: 0, wms_wave_count: 0, wms_order_count: 0,
-            wms_qty: 0, wms_box_count: 0, wms_pallet_count: 0, wms_weight: 0,
+            wms_qty: 0, wms_box_count: 0, wms_pallet_count: 0, wms_weight: 0, wms_volume: 0,
+            relocated_package_count: 0, relocation_rate: 0, relocation_type_summary: "",
+            final_location_type_summary: "", final_location_unknown_count: 0,
             wms_order_count_direct: 0, wms_order_count_allocated: 0,
             wms_qty_direct: 0, wms_qty_allocated: 0,
             anomaly_count: 0, correction_count: 0, efficiency_per_person_hour: 0,
@@ -1348,6 +1446,162 @@ export default {
         f.source_summary = "import_express";
       }
 
+      // WMS: 换单 (全部为 direct，无 allocated，只统计 已发出)
+      for (const r of (wmsChangeOrderRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "B2C", "换单");
+        f.wms_order_count_direct += (r.wms_order_count || 0);
+        f.wms_qty_direct += (r.wms_qty || 0);
+        f.source_summary = "change_order_export";
+      }
+
+      // WMS: 退件入库 (全部为 direct，无 allocated，不过滤状态)
+      for (const r of (wmsReturnInboundRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "B2C", "退件入库");
+        f.wms_order_count_direct += (r.wms_order_count || 0);
+        f.wms_qty_direct += (r.wms_qty || 0);
+        f.wms_weight += (r.wms_weight || 0);
+        f.wms_volume += (r.wms_volume || 0);
+        f.source_summary = "return_inbound_export";
+      }
+
+      // WMS: 质检 (全部为 direct，无 allocated，只统计 已质检，产出单位=件数)
+      for (const r of (wmsReturnQcRs.results || [])) {
+        const f = getOrCreate(r.day_kst, "B2C", "质检");
+        f.wms_order_count_direct += (r.wms_order_count || 0);
+        f.wms_qty_direct += (r.wms_qty || 0);
+        f.wms_weight += (r.wms_weight || 0);
+        f.wms_volume += (r.wms_volume || 0);
+        f.source_summary = "return_qc_export";
+      }
+
+      // 货位影响因子
+      {
+        // 辅助函数：解析储位号串，返回所有有效货位编码
+        function parseLocCodes(locStr) {
+          if (!locStr) return [];
+          const parts = String(locStr).split(";").filter(p => p.trim());
+          return parts.map(p => p.split(":")[0].trim()).filter(c => c);
+        }
+
+        // --- 退件入库：只看最终入库货位类型 ---
+        {
+          const rawRs = await env.DB.prepare(
+            `SELECT order_no, location_code, completed_day_kst FROM wms_outputs
+             WHERE source_type='return_inbound_export'
+               AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''`
+          ).bind(start_date, end_date).all();
+
+          const dayPkgMap = {}; // day → { order_no → location_code }
+          for (const r of (rawRs.results || [])) {
+            const dk = r.completed_day_kst;
+            if (!dayPkgMap[dk]) dayPkgMap[dk] = {};
+            if (!dayPkgMap[dk][r.order_no]) dayPkgMap[dk][r.order_no] = r.location_code;
+          }
+
+          // 收集所有最终货位编码
+          const allLocCodes = new Set();
+          for (const pkgs of Object.values(dayPkgMap)) {
+            for (const loc of Object.values(pkgs)) {
+              const codes = parseLocCodes(loc);
+              if (codes.length > 0) allLocCodes.add(codes[codes.length - 1]);
+            }
+          }
+
+          // 批量查 location_types
+          const locTypeMap = {};
+          const locArr = Array.from(allLocCodes);
+          for (let li = 0; li < locArr.length; li += 50) {
+            const chunk = locArr.slice(li, li + 50);
+            const ph = chunk.map(() => "?").join(",");
+            const ltRs = await env.DB.prepare(
+              `SELECT location_code, location_type FROM location_types WHERE location_code IN (${ph})`
+            ).bind(...chunk).all();
+            for (const row of (ltRs.results || [])) locTypeMap[row.location_code] = row.location_type;
+          }
+
+          // 按天统计最终货位类型分布
+          for (const [day, pkgs] of Object.entries(dayPkgMap)) {
+            const f = getOrCreate(day, "B2C", "退件入库");
+            let largeCount = 0, smallCount = 0, unknownCount = 0;
+
+            for (const [, loc] of Object.entries(pkgs)) {
+              const codes = parseLocCodes(loc);
+              if (codes.length === 0) { unknownCount++; continue; }
+              const finalCode = codes[codes.length - 1];
+              const locType = locTypeMap[finalCode] || "未知";
+              if (locType === "大货位") largeCount++;
+              else if (locType === "小货位") smallCount++;
+              else unknownCount++;
+            }
+
+            const parts = [];
+            if (largeCount > 0) parts.push("大货位:" + largeCount);
+            if (smallCount > 0) parts.push("小货位:" + smallCount);
+            if (unknownCount > 0) parts.push("未知:" + unknownCount);
+            f.final_location_type_summary = parts.join(",");
+            f.final_location_unknown_count = unknownCount;
+            // 退件入库不计算换位指标，保持 0/空
+          }
+        }
+
+        // --- 质检：保持换位轨迹逻辑不变 ---
+        {
+          const rawRs = await env.DB.prepare(
+            `SELECT order_no, location_code, completed_day_kst FROM wms_outputs
+             WHERE source_type='return_qc_export' AND signed_at='已质检'
+               AND completed_day_kst >= ? AND completed_day_kst <= ? AND completed_day_kst != ''`
+          ).bind(start_date, end_date).all();
+
+          const dayPkgMap = {};
+          for (const r of (rawRs.results || [])) {
+            const dk = r.completed_day_kst;
+            if (!dayPkgMap[dk]) dayPkgMap[dk] = {};
+            if (!dayPkgMap[dk][r.order_no]) dayPkgMap[dk][r.order_no] = r.location_code;
+          }
+
+          const allLocCodes = new Set();
+          for (const pkgs of Object.values(dayPkgMap)) {
+            for (const loc of Object.values(pkgs)) {
+              const codes = parseLocCodes(loc);
+              if (codes.length >= 2) { allLocCodes.add(codes[codes.length - 2]); allLocCodes.add(codes[codes.length - 1]); }
+            }
+          }
+
+          const locTypeMap = {};
+          const locArr = Array.from(allLocCodes);
+          for (let li = 0; li < locArr.length; li += 50) {
+            const chunk = locArr.slice(li, li + 50);
+            const ph = chunk.map(() => "?").join(",");
+            const ltRs = await env.DB.prepare(
+              `SELECT location_code, location_type FROM location_types WHERE location_code IN (${ph})`
+            ).bind(...chunk).all();
+            for (const row of (ltRs.results || [])) locTypeMap[row.location_code] = row.location_type;
+          }
+
+          for (const [day, pkgs] of Object.entries(dayPkgMap)) {
+            const f = getOrCreate(day, "B2C", "质检");
+            let totalPkgs = 0, relocatedPkgs = 0;
+            const typeCounts = {};
+
+            for (const [, loc] of Object.entries(pkgs)) {
+              totalPkgs++;
+              const codes = parseLocCodes(loc);
+              if (codes.length >= 2 && codes[codes.length - 2] !== codes[codes.length - 1]) {
+                relocatedPkgs++;
+                const fromType = locTypeMap[codes[codes.length - 2]] || "未知";
+                const toType = locTypeMap[codes[codes.length - 1]] || "未知";
+                const key = fromType + "→" + toType;
+                typeCounts[key] = (typeCounts[key] || 0) + 1;
+              }
+            }
+
+            f.relocated_package_count = relocatedPkgs;
+            f.relocation_rate = totalPkgs > 0 ? Math.round((relocatedPkgs / totalPkgs) * 100) / 100 : 0;
+            f.relocation_type_summary = Object.entries(typeCounts).map(([k, v]) => k + ":" + v).join(",");
+          }
+        }
+      }
+
       // 汇总 direct + allocated → total，然后计算效率
       for (const f of Object.values(featureMap)) {
         f.wms_order_count = f.wms_order_count_direct + f.wms_order_count_allocated;
@@ -1365,10 +1619,12 @@ export default {
       // 写入
       const insStmt = env.DB.prepare(
         `INSERT INTO daily_productivity_features(day_kst,biz,task,total_person_minutes,unique_workers,session_count,
-          event_wave_count,wms_wave_count,wms_order_count,wms_qty,wms_box_count,wms_pallet_count,wms_weight,
+          event_wave_count,wms_wave_count,wms_order_count,wms_qty,wms_box_count,wms_pallet_count,wms_weight,wms_volume,
           wms_order_count_direct,wms_order_count_allocated,wms_qty_direct,wms_qty_allocated,
-          anomaly_count,correction_count,efficiency_per_person_hour,source_summary,updated_ms)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          anomaly_count,correction_count,efficiency_per_person_hour,source_summary,updated_ms,
+          relocated_package_count,relocation_rate,relocation_type_summary,
+          final_location_type_summary,final_location_unknown_count)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
       const insStmts = [];
       const features = Object.values(featureMap);
@@ -1376,19 +1632,24 @@ export default {
         insStmts.push(insStmt.bind(
           f.day_kst, f.biz, f.task, Math.round(f.total_person_minutes * 100)/100, f.unique_workers, f.session_count,
           f.event_wave_count, f.wms_wave_count, f.wms_order_count, f.wms_qty, f.wms_box_count, f.wms_pallet_count,
-          Math.round(f.wms_weight * 100)/100,
+          Math.round(f.wms_weight * 100)/100, Math.round(f.wms_volume * 10000)/10000,
           f.wms_order_count_direct, f.wms_order_count_allocated, f.wms_qty_direct, f.wms_qty_allocated,
-          f.anomaly_count, f.correction_count, f.efficiency_per_person_hour, f.source_summary, now
+          f.anomaly_count, f.correction_count, f.efficiency_per_person_hour, f.source_summary, now,
+          f.relocated_package_count, f.relocation_rate, f.relocation_type_summary,
+          f.final_location_type_summary, f.final_location_unknown_count
         ));
       }
       if (insStmts.length > 0) await env.DB.batch(insStmts);
 
-      // post_warnings: 只检查 3 个关键任务
+      // post_warnings: 检查 6 个关键任务
       const post_warnings = [];
       const KEY_TASKS = [
         { biz: "B2C", task: "B2C拣货" },
         { biz: "B2C", task: "B2C打包" },
-        { biz: "进口", task: "过机扫描码托" }
+        { biz: "进口", task: "过机扫描码托" },
+        { biz: "B2C", task: "换单" },
+        { biz: "B2C", task: "退件入库" },
+        { biz: "B2C", task: "质检" }
       ];
       // 收集该日期范围内 b2c_pack_import 缺失的天
       const packMissingDays = new Set();

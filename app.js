@@ -4676,7 +4676,7 @@ async function wmsConfirmImport(){
   }
 
   // 构建校验摘要
-  var sourceLabel = {"b2c_order_export":"B2C订单表","b2c_pack_import":"进口打包表","import_express":"进口快件表"}[sourceType] || sourceType;
+  var sourceLabel = {"b2c_order_export":"B2C订单表","b2c_pack_import":"进口打包表","import_express":"进口快件表","change_order_export":"换单表","return_inbound_export":"退件入库表","return_qc_export":"质检表"}[sourceType] || sourceType;
   var lines = [sourceLabel + ": ✅ 插入 " + totalInserted + " 行"];
   if(totalSkipped) lines.push("⏭️ 跳过(重复/汇总) " + totalSkipped + " 行");
 
@@ -4737,7 +4737,10 @@ async function wmsLoadRecent(){
 var WMS_SOURCE_DESC = {
   "b2c_order_export": "B2C订单表\n波次号→拣货波次 | 物流单号→订单号 | 商品数量→件数 | 发货时间→完成日期 | 储位号→储位(查表映射大/小货位) | 箱型编码→箱型",
   "b2c_pack_import": "进口打包表\n分拣单号→拣货波次 | 物流单号→订单号 | 货品总数量→件数 | 货主→owner | 储位类型固定=小货位\n⚠️ 发货时间不可信，需手动指定业务日期",
-  "import_express": "进口快件表\n运单号→订单号 | 称重重量→重量 | 发货单位→owner | 入库时间→完成日期 | 件数固定=1"
+  "import_express": "进口快件表\n运单号→订单号 | 称重重量→重量 | 发货单位→owner | 入库时间→完成日期 | 件数固定=1",
+  "change_order_export": "换单表\n快递单号→订单号(主产出键) | 发货时间→完成日期 | 商户名称→owner | 状态→已发出才计入产出 | 件数固定=1",
+  "return_inbound_export": "退件入库表\n包裹号→订单号(主产出键) | 仓库签收时间→完成日期 | 商户名称→owner | 数量→件数 | 重量(KG)→重量 | 体积→体积 | 不过滤状态",
+  "return_qc_export": "质检表\n包裹号→订单号 | 质检时间→完成日期 | 商户名称→owner | 数量→件数(产出单位) | 重量(KG)→重量 | 体积→体积 | 只统计 质检=已质检"
 };
 (function(){
   var sel = document.getElementById("wmsSourceType");
@@ -4778,7 +4781,7 @@ async function dfRefresh(){
     var gaps = pc.gaps || [];
     var confirmMsg = "刷新日期范围: " + s + " ~ " + e;
     if(gaps.length === 0){
-      confirmMsg += "\n\n✅ 所有日期的 3 个数据源均有数据，确认刷新？";
+      confirmMsg += "\n\n✅ 所有日期的 6 个数据源均有数据，确认刷新？";
     }else{
       confirmMsg += "\n\n⚠️ 以下日期/数据源缺少数据：\n";
       for(var gi=0; gi<gaps.length; gi++){
@@ -4849,7 +4852,10 @@ function dfRenderDashboard_(features){
   var KEY_TASKS = [
     { biz:"B2C", task:"B2C拣货" },
     { biz:"B2C", task:"B2C打包" },
-    { biz:"进口", task:"过机扫描码托" }
+    { biz:"进口", task:"过机扫描码托" },
+    { biz:"B2C", task:"换单" },
+    { biz:"B2C", task:"退件入库" },
+    { biz:"B2C", task:"质检" }
   ];
 
   // 按天分组
@@ -4878,7 +4884,7 @@ function dfRenderDashboard_(features){
     for(var ti=0;ti<KEY_TASKS.length;ti++){
       var kt = KEY_TASKS[ti];
       var f = tasks[kt.task] || null;
-      var isScan = (kt.task === "过机扫描码托");
+      var isScan = (kt.task === "过机扫描码托" || kt.task === "换单" || kt.task === "退件入库" || kt.task === "质检");
       var missing = !f;
 
       // 取值
@@ -4929,14 +4935,19 @@ function dfRenderTable_(features){
   var cols = ["day_kst","biz","task","total_person_minutes","unique_workers","session_count",
     "event_wave_count","wms_wave_count","wms_order_count","wms_order_count_direct","wms_order_count_allocated",
     "wms_qty","wms_qty_direct","wms_qty_allocated","wms_box_count","wms_pallet_count",
-    "wms_weight","anomaly_count","efficiency_per_person_hour","source_summary"];
+    "wms_weight","wms_volume","relocated_package_count","relocation_rate","relocation_type_summary",
+    "final_location_type_summary","final_location_unknown_count",
+    "anomaly_count","efficiency_per_person_hour","source_summary"];
   var colLabels = {
     "day_kst":"日期","biz":"业务","task":"任务","total_person_minutes":"总作业分钟",
     "unique_workers":"作业人数","session_count":"作业次数","event_wave_count":"事件波次",
     "wms_wave_count":"WMS波次","wms_order_count":"总单量","wms_order_count_direct":"直接单量",
     "wms_order_count_allocated":"分摊单量","wms_qty":"总件量","wms_qty_direct":"直接件量",
     "wms_qty_allocated":"分摊件量","wms_box_count":"箱数","wms_pallet_count":"托盘数",
-    "wms_weight":"重量(kg)","anomaly_count":"异常次数","efficiency_per_person_hour":"人效(单/人时)",
+    "wms_weight":"重量(kg)","wms_volume":"体积(m³)",
+    "relocated_package_count":"换位包裹数","relocation_rate":"换位率","relocation_type_summary":"换位类型分布",
+    "final_location_type_summary":"最终货位分布","final_location_unknown_count":"未知货位数",
+    "anomaly_count":"异常次数","efficiency_per_person_hour":"人效(单/人时)",
     "source_summary":"数据来源"
   };
   var html = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr>";
@@ -4947,8 +4958,11 @@ function dfRenderTable_(features){
     cols.forEach(function(c){
       var v = f[c];
       if(typeof v === "number") v = Math.round(v*100)/100;
+      if(c === "relocation_rate" && typeof v === "number"){
+        v = Math.round(v * 100) + "%";
+      }
       if(c === "source_summary" && typeof v === "string" && v){
-        var srcMap = {"b2c_order_export":"B2C订单表","b2c_pack_import":"进口打包表","import_express":"进口快件表","import_express:StarFans":"进口快件表（StarFans）"};
+        var srcMap = {"b2c_order_export":"B2C订单表","b2c_pack_import":"进口打包表","import_express":"进口快件表","import_express:StarFans":"进口快件表（StarFans）","change_order_export":"换单表","return_inbound_export":"退件入库表","return_qc_export":"质检表"};
         v = v.split(",").map(function(s){ return srcMap[s.trim()]||s.trim(); }).join(" + ");
       }
       html += "<td style='border:1px solid #eee;padding:2px 5px;white-space:nowrap;'>" + esc(String(v!=null?v:"")) + "</td>";
