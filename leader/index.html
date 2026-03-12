@@ -23,15 +23,15 @@
   <div class="header">
     <div>
       <div class="title">CK 看板 / Dashboard</div>
-      <div class="subtitle">只读 · 全局在岗 + 工时汇总</div>
+      <div class="subtitle">实时在岗 · 工时 · 每日劳效</div>
     </div>
     <div class="pill" id="asofPill">--</div>
   </div>
 
   <div class="card">
-    <div class="cardTitle">查看口令（只用于“劳效/工时汇总”）</div>
+    <div class="cardTitle">报表口令</div>
     <div class="muted" style="margin-bottom:10px;">
-      全局在岗不需要口令；工时报表会调用 <span class="mono">admin_events_tail</span>，需要输入一次口令（浏览器会记住）。
+      实时在岗不需要口令；工时和每日劳效需要输入一次口令（浏览器会记住）。
     </div>
     <div class="row">
       <div>
@@ -47,22 +47,23 @@
 
   <div class="card">
     <div class="tabs">
-      <button class="primary" style="width:auto" onclick="showTab('active')">全局在岗</button>
-      <button class="primary" style="width:auto" onclick="showTab('report')">劳效/工时汇总</button>
+      <button class="primary" style="width:auto" onclick="showTab('active')">实时在岗</button>
+      <button class="primary" style="width:auto" onclick="showTab('report')">工时</button>
+      <button class="primary" style="width:auto" onclick="showTab('efficiency')">每日劳效</button>
       <button style="width:auto" onclick="refreshAll()">手动刷新</button>
     </div>
   </div>
 
   <!-- Active -->
   <div id="tab-active" class="card">
-    <div class="cardTitle">全局在岗</div>
+    <div class="cardTitle">实时在岗</div>
     <div id="activeMeta" class="muted"></div>
     <div id="activeCards" style="margin-top:10px;"></div>
   </div>
 
   <!-- Report -->
   <div id="tab-report" class="card" style="display:none;">
-    <div class="cardTitle">劳效 / 工时汇总（join/leave 统计）</div>
+    <div class="cardTitle">工时统计（join/leave）</div>
 
     <div class="row">
       <div>
@@ -83,6 +84,24 @@
     <div id="reportMeta" class="muted" style="margin-top:8px;"></div>
     <div id="reportTop" style="margin-top:10px;"></div>
     <div id="reportTable" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Efficiency -->
+  <div id="tab-efficiency" class="card" style="display:none;">
+    <div class="cardTitle">每日劳效</div>
+
+    <div class="row">
+      <div>
+        <small>日期（KST）</small>
+        <input id="effDate" type="date" />
+      </div>
+      <div style="display:flex;align-items:flex-end;">
+        <button class="primary" style="width:auto;min-width:140px" onclick="loadEfficiency()">查询</button>
+      </div>
+    </div>
+
+    <div id="effMeta" class="muted" style="margin-top:8px;"></div>
+    <div id="effResult" style="margin-top:10px;"></div>
   </div>
 
   <script src="./leader.js"></script>

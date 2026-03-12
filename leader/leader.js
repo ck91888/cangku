@@ -119,6 +119,7 @@ function logout(){
 function showTab(name){
   document.getElementById("tab-active").style.display = (name==="active") ? "" : "none";
   document.getElementById("tab-report").style.display  = (name==="report") ? "" : "none";
+  document.getElementById("tab-efficiency").style.display = (name==="efficiency") ? "" : "none";
 }
 
 // ===== 全局在岗（公开接口 active_now） :contentReference[oaicite:7]{index=7} =====
@@ -686,6 +687,87 @@ function renderDetailTable_(sum){
   return html;
 }
 
+// ===== 每日劳效 =====
+var EFF_KEY_TASKS = [
+  { biz:"B2C", task:"B2C拣货", label:"B2C拣货" },
+  { biz:"B2C", task:"B2C打包", label:"B2C打包" },
+  { biz:"进口", task:"过机扫描码托", label:"过机扫描码托" },
+  { biz:"B2C", task:"换单", label:"换单" },
+  { biz:"B2C", task:"退件入库", label:"退件入库" },
+  { biz:"B2C", task:"质检", label:"质检" }
+];
+
+async function loadEfficiency(){
+  var k = getKey_();
+  var meta = document.getElementById("effMeta");
+  var result = document.getElementById("effResult");
+  if(!k){
+    if(meta) meta.textContent = "请先输入口令";
+    return;
+  }
+
+  var day = String(document.getElementById("effDate").value || "").trim();
+  if(!day){ alert("请选择日期"); return; }
+
+  if(meta) meta.textContent = "查询中…";
+  if(result) result.innerHTML = "";
+
+  try{
+    var res = await fetchApi({ action:"admin_daily_productivity", k:k, start_date:day, end_date:day });
+    if(!res || res.ok !== true){
+      if(meta) meta.textContent = "查询失败：" + (res && res.error ? res.error : "unknown");
+      return;
+    }
+
+    var features = res.features || [];
+    // 按 biz/task 建索引
+    var fMap = {};
+    features.forEach(function(f){
+      fMap[String(f.biz||"") + "/" + String(f.task||"")] = f;
+    });
+
+    var hasAny = false;
+    EFF_KEY_TASKS.forEach(function(kt){
+      if(fMap[kt.biz + "/" + kt.task]) hasAny = true;
+    });
+
+    if(meta) meta.textContent = day + "（KST）" + (hasAny ? "" : " · 该日尚未刷新日报数据");
+
+    // 渲染固定 6 行表格
+    var html = '<div style="overflow:auto;"><table style="border-collapse:collapse;width:100%;">';
+    html += '<tr>' +
+      '<th style="text-align:left;padding:8px 10px;border-bottom:2px solid #eee;font-size:13px;">任务</th>' +
+      '<th style="text-align:right;padding:8px 10px;border-bottom:2px solid #eee;font-size:13px;">总单量</th>' +
+      '<th style="text-align:right;padding:8px 10px;border-bottom:2px solid #eee;font-size:13px;">总件量</th>' +
+      '<th style="text-align:right;padding:8px 10px;border-bottom:2px solid #eee;font-size:13px;">作业人数</th>' +
+      '<th style="text-align:right;padding:8px 10px;border-bottom:2px solid #eee;font-size:13px;">人效(单/人时)</th>' +
+    '</tr>';
+
+    EFF_KEY_TASKS.forEach(function(kt){
+      var f = fMap[kt.biz + "/" + kt.task];
+      var rowStyle = f ? '' : 'color:#ccc;';
+      var orderCount = f ? f.wms_order_count : "—";
+      var qty = f ? f.wms_qty : "—";
+      var workers = f ? f.unique_workers : "—";
+      var eff = f ? (f.efficiency_per_person_hour > 0 ? f.efficiency_per_person_hour : "0") : "—";
+
+      html += '<tr style="'+rowStyle+'">' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;font-weight:700;">' + esc(kt.label) + (f ? '' : ' <span style="font-weight:400;font-size:11px;">(缺失)</span>') + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;">' + orderCount + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;">' + qty + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;">' + workers + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:14px;font-weight:900;">' + eff + '</td>' +
+      '</tr>';
+    });
+
+    html += '</table></div>';
+    if(result) result.innerHTML = html;
+
+  }catch(e){
+    if(meta) meta.textContent = "异常：" + String(e && e.message ? e.message : e);
+  }
+}
+
 // ===== 一键刷新 + 自动刷新 =====
 async function refreshAll(){
   await refreshActive();
@@ -697,6 +779,7 @@ async function refreshAll(){
   var today = kstDayKey_(Date.now());
   document.getElementById("fromDate").value = today;
   document.getElementById("toDate").value = today;
+  document.getElementById("effDate").value = today;
 
   // 如果本地已保存 key，填回输入框（可选）
   var k = getKey_();
