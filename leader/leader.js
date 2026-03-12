@@ -135,6 +135,22 @@ async function refreshActive(){
     setAsofPill_(res.asof || Date.now());
 
     var active = res.active || [];
+
+    // 尝试拉取今日人效（静默降级，不影响在岗显示）
+    var effMap = {}; // "biz/task" → efficiency_per_person_hour
+    try{
+      var viewK = getKey_();
+      if(viewK){
+        var today = kstDayKey_(Date.now());
+        var dfRes = await fetchApi({ action:"admin_daily_productivity", k:viewK, start_date:today, end_date:today });
+        if(dfRes && dfRes.ok && dfRes.features){
+          dfRes.features.forEach(function(f){
+            effMap[String(f.biz||"") + "/" + String(f.task||"")] = f.efficiency_per_person_hour;
+          });
+        }
+      }
+    }catch(e){ /* 静默降级 */ }
+
     // group by biz/task
     var groups = {}; // key -> {biz,task,list:[]}
     active.forEach(function(lk){
@@ -169,12 +185,23 @@ async function refreshActive(){
           return '<span class="tag">'+esc(text)+'</span>';
         }).join("");
 
+      // 今日人效
+      var effKey = g.biz + "/" + g.task;
+      var effLine = "";
+      if(effMap.hasOwnProperty(effKey)){
+        var eff = effMap[effKey];
+        effLine = '<div class="sub" style="margin-top:2px;">今日人效：<b>' + (eff > 0 ? eff : "0") + '</b></div>';
+      } else {
+        effLine = '<div class="sub" style="margin-top:2px;color:#bbb;">今日人效：— <span style="font-size:11px;">未刷新日报</span></div>';
+      }
+
       return (
         '<div style="border:1px solid #eee;border-radius:16px;padding:12px;margin:10px 0;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;">' +
             '<div>' +
               '<div style="font-weight:900;font-size:16px;">'+esc(k)+'</div>' +
               '<div class="sub">在岗 '+g.list.length+' 人</div>' +
+              effLine +
             '</div>' +
             '<div class="bigNum">'+g.list.length+'</div>' +
           '</div>' +
