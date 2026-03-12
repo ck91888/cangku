@@ -1345,8 +1345,8 @@ function fmtDur(ms){
   var sec = Math.floor(ms/1000);
   var h = Math.floor(sec/3600);
   var m = Math.floor((sec%3600)/60);
-  if(h>0) return h + "h" + String(m).padStart(2,"0") + "m";
-  return m + "m";
+  if(h>0) return h + " 小时 " + m + " 分钟";
+  return m + " 分钟";
 }
 
 var _activeNowData = [];
@@ -1366,7 +1366,12 @@ async function refreshActiveNow(){
     _activeNowAsof = res.asof || Date.now();
 
     var meta = document.getElementById("activeNowMeta");
-    if(meta) meta.textContent = "在岗: " + _activeNowData.length + " 人 ｜ " + new Date(_activeNowAsof).toLocaleTimeString();
+    if(meta){
+      var taskSet = {};
+      _activeNowData.forEach(function(x){ taskSet[(x.biz||"")+"/"+(x.task||"")] = 1; });
+      var taskCount = Object.keys(taskSet).length;
+      meta.textContent = "在岗 " + _activeNowData.length + " 人 · 覆盖 " + taskCount + " 个任务 ｜ " + new Date(_activeNowAsof).toLocaleTimeString();
+    }
 
     // 如果当前在详情页，刷新详情；否则渲染索引
     if(_activeNowDetailKey){
@@ -1384,7 +1389,7 @@ async function refreshActiveNow(){
 function renderActiveNowIndex_(){
   _activeNowDetailKey = null;
   var titleEl = document.getElementById("activeNowTitle");
-  if(titleEl) titleEl.textContent = "全局在岗 / Active Now";
+  if(titleEl) titleEl.textContent = "实时在岗";
   var indexEl = document.getElementById("activeNowIndex");
   var detailEl = document.getElementById("activeNowDetail");
   if(detailEl) detailEl.style.display = "none";
@@ -1399,23 +1404,59 @@ function renderActiveNowIndex_(){
     by[k].count++;
   });
 
-  var keys = Object.keys(by).sort();
-  if(keys.length === 0){
-    indexEl.innerHTML = '<div class="muted" style="padding:10px 0;">当前无人在岗 / 현재 없음</div>';
+  if(Object.keys(by).length === 0){
+    indexEl.innerHTML = '<div class="muted" style="padding:10px 0;">当前无人在岗</div>';
     return;
   }
 
-  indexEl.innerHTML = '<div class="grid2">' +
-    keys.map(function(k){
-      var t = by[k];
-      var label = taskDisplayLabel(t.biz, t.task);
-      return '<button style="text-align:left;line-height:1.3;" ' +
+  // 按业务线分组，每组内固定排序
+  var BIZ_ORDER = ["B2C", "进口", "B2B", "仓库"];
+  var TASK_SORT = {
+    "拣货":1, "打包":2, "过机扫描码托":3, "换单":4, "退件入库":5, "质检":6,
+    "理货":7, "批量出库":8, "废弃处理":9, "B2C盘点":10,
+    "卸货":1, "装柜/出货":2, "取/送货":3, "问题处理":4,
+    "B2B卸货":1, "B2B入库理货":2, "B2B工单操作":3, "B2B出库":4, "B2B盘点":5,
+    "仓库整理":1
+  };
+
+  var html = "";
+  BIZ_ORDER.forEach(function(biz){
+    // 收集该 biz 下有人的任务
+    var tasks = [];
+    Object.keys(by).forEach(function(k){
+      if(by[k].biz === biz) tasks.push(by[k]);
+    });
+    if(tasks.length === 0) return;
+
+    tasks.sort(function(a,b){ return (TASK_SORT[a.task]||99) - (TASK_SORT[b.task]||99); });
+
+    html += '<div style="margin-top:12px;margin-bottom:6px;font-size:13px;font-weight:700;color:#666;">' + esc(biz) + '</div>';
+    html += '<div class="grid2">';
+    tasks.forEach(function(t){
+      // 卡片只显示任务名，不带 biz 前缀
+      var shortName = t.task;
+      html += '<button style="text-align:left;line-height:1.3;" ' +
         'data-biz="'+esc(t.biz)+'" data-task="'+esc(t.task)+'" onclick="activeNowShowDetail(this.dataset.biz,this.dataset.task)">' +
-        '<div style="font-size:13px;">' + esc(label) + '</div>' +
+        '<div style="font-size:13px;">' + esc(shortName) + '</div>' +
         '<div style="font-size:22px;font-weight:800;margin-top:4px;">' + t.count + ' <small style="font-size:13px;">人</small></div>' +
         '</button>';
-    }).join("") +
-  '</div>';
+    });
+    html += '</div>';
+  });
+
+  // 处理不在 BIZ_ORDER 里的其他 biz（兜底）
+  Object.keys(by).forEach(function(k){
+    if(BIZ_ORDER.indexOf(by[k].biz) === -1){
+      html += '<div style="margin-top:12px;margin-bottom:6px;font-size:13px;font-weight:700;color:#666;">' + esc(by[k].biz || "其他") + '</div>';
+      html += '<div class="grid2"><button style="text-align:left;line-height:1.3;" ' +
+        'data-biz="'+esc(by[k].biz)+'" data-task="'+esc(by[k].task)+'" onclick="activeNowShowDetail(this.dataset.biz,this.dataset.task)">' +
+        '<div style="font-size:13px;">' + esc(by[k].task) + '</div>' +
+        '<div style="font-size:22px;font-weight:800;margin-top:4px;">' + by[k].count + ' <small style="font-size:13px;">人</small></div>' +
+        '</button></div>';
+    }
+  });
+
+  indexEl.innerHTML = html;
 }
 
 function activeNowShowDetail(biz, task){
@@ -1431,12 +1472,11 @@ function renderActiveNowDetail_(biz, task){
   if(!detailEl) return;
   detailEl.style.display = "";
 
-  var label = taskDisplayLabel(biz, task);
   var workers = _activeNowData.filter(function(x){
     return (x.biz||"") === biz && (x.task||"") === task;
   });
 
-  if(titleEl) titleEl.textContent = label + " · " + workers.length + "人";
+  if(titleEl) titleEl.textContent = task + " · " + workers.length + " 人";
 
   var now = Date.now();
   var isAdmin = adminIsUnlocked_();
@@ -1452,8 +1492,7 @@ function renderActiveNowDetail_(biz, task){
           : "";
         return '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
           '<div style="font-weight:700;">'+esc(x.badge)+'</div>' +
-          '<div class="muted" style="margin-top:4px;">在岗: '+esc(dur)+'</div>' +
-          '<div class="muted" style="font-size:12px;margin-top:2px;">session: '+esc(x.session||"")+'</div>' +
+          '<div class="muted" style="margin-top:4px;">已在岗 '+esc(dur)+'</div>' +
           forceBtn +
         '</div>';
       }).join("");

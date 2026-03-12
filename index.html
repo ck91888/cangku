@@ -46,7 +46,7 @@
       <h3>入口 / 메뉴</h3>
       <div class="gridHome">
         <button class="primary" onclick="go('global_menu')">
-          总控台 / Global<br><small>全局在岗 / 总览</small>
+          仓库看板<br><small>实时在岗 · 任务总览</small>
         </button>
         <button class="primary" onclick="go('badge')">
           工牌 / 명찰<br><small>日当/员工 批量生成</small>
@@ -78,11 +78,11 @@
   <div id="page-global_menu" class="page" style="display:none;">
     <div class="topbar">
       <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill">总控台 / Global</div>
+      <div class="grow pill">仓库看板</div>
     </div>
 
     <div class="card">
-      <button class="primary" onclick="go('active_now')">全局在岗 / Active Now</button>
+      <button class="primary" onclick="go('active_now')">实时在岗</button>
       <button class="primary" id="btnReport" style="display:none;" onclick="go('report')">劳效 / 工时汇总 / Report</button>
       <button class="primary" id="btnSessions" style="display:none;" onclick="go('global_sessions')">全局Session / Sessions</button>
       <button class="primary" id="btnCorrection" style="display:none;" onclick="go('correction')">补录修正 / Correction</button>
@@ -218,7 +218,7 @@
   <div id="page-active_now" class="page" style="display:none;">
     <div class="topbar">
       <button class="back small" id="activeNowBackBtn" onclick="activeNowBack()">返回 / 뒤로</button>
-      <div class="grow pill" id="activeNowTitle">全局在岗 / Active Now</div>
+      <div class="grow pill" id="activeNowTitle">实时在岗</div>
       <button class="small" onclick="refreshActiveNow()">刷新</button>
     </div>
 
