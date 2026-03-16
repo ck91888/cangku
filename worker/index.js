@@ -196,18 +196,20 @@ function locksStub(env) {
   return env.LOCKS.get(id);
 }
 
-async function ensureSessionOpen(env, session, operator_id, biz, task) {
+async function ensureSessionOpen(env, session, operator_id, biz, task, opt_created_ms, opt_source) {
   const sid = String(session || "").trim();
   if (!sid) return;
 
-  const now = Date.now();
+  const ts = opt_created_ms || Date.now();
+  const source = opt_source || "scan";
   await env.DB.prepare(
-    `INSERT INTO sessions(session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task)
-     VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?)
+    `INSERT INTO sessions(session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task,source)
+     VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?, ?)
      ON CONFLICT(session) DO UPDATE SET
+       created_ms=MIN(sessions.created_ms, excluded.created_ms),
        biz=CASE WHEN excluded.biz!='' THEN excluded.biz ELSE sessions.biz END,
        task=CASE WHEN excluded.task!='' THEN excluded.task ELSE sessions.task END`
-  ).bind(sid, now, String(operator_id||""), String(biz||""), String(task||"")).run();
+  ).bind(sid, ts, String(operator_id||""), String(biz||""), String(task||""), source).run();
 }
 
 async function getSession(env, session) {
@@ -278,11 +280,67 @@ function isView_(p, env){
   const secret = String(env.VIEWKEY || "").trim(); // 新增只读口令
   return !!(secret && key && key === secret);
 }
+
+// ===== 补录后重算 session 状态（基于全部 events） =====
+async function recalcSessionStatus_(env, session, operator_id) {
+  const sid = String(session || "").trim();
+  if (!sid) return;
+
+  const rs = await env.DB.prepare(
+    `SELECT badge, event, server_ms FROM events
+     WHERE session=? AND event IN ('join','leave') AND ok=1
+     ORDER BY server_ms ASC`
+  ).bind(sid).all();
+  const rows = rs.results || [];
+
+  if (rows.length === 0) return; // 无事件，不动
+
+  // 按 badge 统计 join 次数 - leave 次数
+  const badgeCounts = {};
+  let maxLeaveMs = 0;
+  for (const r of rows) {
+    if (!badgeCounts[r.badge]) badgeCounts[r.badge] = 0;
+    if (r.event === "join") badgeCounts[r.badge]++;
+    if (r.event === "leave") {
+      badgeCounts[r.badge]--;
+      if (r.server_ms > maxLeaveMs) maxLeaveMs = r.server_ms;
+    }
+  }
+
+  // 任意一个 badge 的 join 次数 > leave 次数 → 仍有人在岗 → OPEN
+  const anyOpen = Object.values(badgeCounts).some(c => c > 0);
+
+  if (anyOpen) {
+    await env.DB.prepare(
+      `UPDATE sessions SET status='OPEN', closed_ms=NULL, closed_by_operator=NULL WHERE session=?`
+    ).bind(sid).run();
+  } else {
+    // 所有人都已 leave → CLOSED
+    await env.DB.prepare(
+      `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator=? WHERE session=?`
+    ).bind(maxLeaveMs, String(operator_id || "manual_correction"), sid).run();
+    // 同步关闭 task_state
+    await taskStateCloseAll_(env, sid, maxLeaveMs, String(operator_id || "manual_correction"));
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     // CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    // ===== 自动迁移：sessions 表加 source 列 =====
+    if (!env._migratedSource) {
+      try {
+        await env.DB.prepare(`ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'scan'`).run();
+        // 历史兼容回填：将已有的 -CORR session 标记为 manual_correction（一次性）
+        await env.DB.prepare(`UPDATE sessions SET source='manual_correction' WHERE session LIKE '%-CORR' AND (source IS NULL OR source='scan')`).run();
+      } catch(e) {
+        // 列已存在时 ALTER TABLE 会报错，忽略
+      }
+      env._migratedSource = true;
     }
 
     const url = new URL(request.url);
@@ -637,6 +695,7 @@ export default {
       const rows = await env.DB.prepare(
         `SELECT session, biz, task, created_ms FROM sessions
          WHERE status='OPEN' AND created_by_operator=?
+           AND (source IS NULL OR source != 'manual_correction')
          ORDER BY created_ms DESC LIMIT 10`
       ).bind(operator_id).all();
       return jsonpOrJson({ ok:true, sessions: rows.results || [] }, callback);
@@ -683,9 +742,13 @@ export default {
       if (event !== "join" && event !== "leave") return jsonpOrJson({ ok:false, error:"event must be join or leave" }, callback);
       if (!custom_ms || custom_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid custom_ms (need ms timestamp)" }, callback);
 
-      // 确保 session 记录存在（补录时自动生成的 session 可能不在 sessions 表中）
+      // 确保 session 记录存在（补录: created_ms 用事件时间, source 标记为 manual_correction）
       if (session) {
-        await ensureSessionOpen(env, session, operator_id, biz, task);
+        await ensureSessionOpen(env, session, operator_id, biz, task, custom_ms, "manual_correction");
+        // 补录 join 时确保 task_state 为 OPEN（补录没有 start 事件）
+        if (event === "join") {
+          await taskStateOpen_(env, session, biz, task, custom_ms, operator_id);
+        }
       }
 
       const event_id = "manual-" + event + "-" + badge + "-" + custom_ms + "-" + now;
@@ -693,6 +756,11 @@ export default {
         `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(custom_ms, custom_ms, event_id, event, badge, biz, task, session, "", operator_id, 1, note).run();
+
+      // 基于全部 events 重算 session 状态（status / closed_ms）
+      if (session) {
+        await recalcSessionStatus_(env, session, operator_id);
+      }
 
       return jsonpOrJson({ ok:true, inserted:true, event_id, event, badge, custom_ms }, callback);
     }
@@ -764,7 +832,7 @@ export default {
       if (since_ms) { where += " AND created_ms>=?"; binds.push(since_ms); }
       if (until_ms) { where += " AND created_ms<=?"; binds.push(until_ms); }
 
-      const sessionsSql = `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator FROM sessions ${where} ORDER BY created_ms DESC LIMIT ?`;
+      const sessionsSql = `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator,source FROM sessions ${where} ORDER BY created_ms DESC LIMIT ?`;
       binds.push(limit);
       const sessionRows = (await env.DB.prepare(sessionsSql).bind(...binds).all()).results || [];
       const stub = locksStub(env);
@@ -793,6 +861,7 @@ export default {
           created_by_operator: s.created_by_operator || "",
           closed_ms: s.closed_ms || 0,
           closed_by_operator: s.closed_by_operator || "",
+          source: s.source || "scan",
           active: activeLocks
         });
       }

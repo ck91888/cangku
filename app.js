@@ -1662,9 +1662,12 @@ function renderGlobalSessionsDetail_(status){
       : "";
     var taskLabel = (s.biz && s.task) ? taskDisplayLabel(s.biz, s.task) : (s.biz||"-");
     var viewEventsBtn = '<button class="small" style="margin-top:6px;width:auto;margin-left:6px;" data-session="'+esc(s.session)+'" onclick="gsViewEvents(this.dataset.session)">查看/修正事件</button>';
+    var sourceTag = (s.source === "manual_correction")
+      ? ' <span style="background:#f0ad4e;color:#fff;font-size:10px;padding:1px 5px;border-radius:4px;margin-left:6px;">补录</span>'
+      : '';
     return (
       '<div style="border:1px solid #eee;border-radius:12px;padding:10px;margin:8px 0;">' +
-        '<div style="font-weight:700;font-size:13px;">'+esc(s.session)+'</div>' +
+        '<div style="font-weight:700;font-size:13px;">'+esc(s.session)+sourceTag+'</div>' +
         '<div style="margin-top:4px;">'+esc(taskLabel)+'</div>' +
         '<div class="muted" style="margin-top:2px;font-size:12px;">创建: '+new Date(s.created_ms||0).toLocaleString()+' ｜ 操作员: '+esc(s.created_by_operator||"-")+'</div>' +
         (s.closed_ms ? '<div class="muted" style="font-size:12px;">关闭: '+new Date(s.closed_ms).toLocaleString()+'</div>' : '') +
