@@ -460,6 +460,21 @@ export default {
 
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v3_b2b_tables', ?)`).bind(Date.now()).run();
         }
+
+        // --- v4: B2B 作业单三模式拆分（operation_mode / outbound_mode 改含义 / detail_mode 新增） ---
+        const m4 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v4_b2b_wo_3modes'`).first();
+        if (!m4) {
+          // 新增 detail_mode 列，默认 sku_based
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN detail_mode TEXT DEFAULT 'sku_based'`).run();
+          // 新增 operation_mode 列
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN operation_mode TEXT DEFAULT ''`).run();
+          // 把旧 outbound_mode（sku_based/carton_based）迁移到 detail_mode
+          await env.DB.prepare(`UPDATE b2b_workorders SET detail_mode = outbound_mode WHERE outbound_mode IN ('sku_based','carton_based')`).run();
+          // 清空旧 outbound_mode（旧值不是真实出库模式）
+          await env.DB.prepare(`UPDATE b2b_workorders SET outbound_mode = '' WHERE outbound_mode IN ('sku_based','carton_based')`).run();
+
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v4_b2b_wo_3modes', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -1966,10 +1981,54 @@ export default {
       return jsonpOrJson({ ok:true, plan_id, status }, callback);
     }
 
+    // ===== B2B 入库计划编辑（不改 status） =====
+    if (action === "b2b_plan_update") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const plan_id = String(p.plan_id || "").trim();
+      if (!plan_id) return jsonpOrJson({ ok:false, error:"missing plan_id" }, callback);
+
+      const existing = await env.DB.prepare(`SELECT plan_id, status FROM b2b_inbound_plans WHERE plan_id=?`).bind(plan_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"plan_id not found" }, callback);
+
+      // 只有非终态允许编辑
+      if (existing.status === "completed") return jsonpOrJson({ ok:false, error:"completed plan cannot be edited" }, callback);
+      if (existing.status === "cancelled") return jsonpOrJson({ ok:false, error:"cancelled plan cannot be edited" }, callback);
+
+      const plan_day = String(p.plan_day || "").trim();
+      const customer_name = String(p.customer_name || "").trim();
+      const biz_type = String(p.biz_type || "other").trim();
+      const goods_summary = String(p.goods_summary || "").trim();
+      const expected_arrival_time = String(p.expected_arrival_time || "").trim();
+      const purpose_text = String(p.purpose_text || "").trim();
+      const remark = String(p.remark || "").trim();
+
+      if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
+      if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
+      if (!goods_summary) return jsonpOrJson({ ok:false, error:"missing goods_summary" }, callback);
+
+      await env.DB.prepare(
+        `UPDATE b2b_inbound_plans SET plan_day=?, customer_name=?, biz_type=?, goods_summary=?, expected_arrival_time=?, purpose_text=?, remark=? WHERE plan_id=?`
+      ).bind(plan_day, customer_name, biz_type, goods_summary, expected_arrival_time, purpose_text, remark, plan_id).run();
+
+      return jsonpOrJson({ ok:true, plan_id }, callback);
+    }
+
     // ===== B2B 出库作业单 =====
     if (action === "b2b_wo_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
-      const outbound_mode = String(p.outbound_mode || "").trim();
+
+      // 三模式字段（向后兼容：旧前端可能只传 outbound_mode=sku_based/carton_based）
+      let detail_mode = String(p.detail_mode || "").trim();
+      let operation_mode = String(p.operation_mode || "").trim();
+      let outbound_mode = String(p.outbound_mode || "").trim();
+      // 向后兼容：旧前端传 outbound_mode=sku_based/carton_based 时自动映射
+      if (["sku_based","carton_based"].includes(outbound_mode) && !detail_mode) {
+        detail_mode = outbound_mode;
+        outbound_mode = "";
+      }
+      if (!detail_mode || !["sku_based","carton_based"].includes(detail_mode))
+        return jsonpOrJson({ ok:false, error:"invalid detail_mode, must be sku_based or carton_based" }, callback);
+
       const customer_name = String(p.customer_name || "").trim();
       const plan_day = String(p.plan_day || "").trim();
       const customer_name_kr = String(p.customer_name_kr || "").trim();
@@ -1981,8 +2040,6 @@ export default {
       const created_by = String(p.created_by || "").trim();
       const lines = p.lines; // array of line objects
 
-      if (!outbound_mode || !["sku_based","carton_based"].includes(outbound_mode))
-        return jsonpOrJson({ ok:false, error:"invalid outbound_mode" }, callback);
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
       if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
@@ -1999,10 +2056,11 @@ export default {
       }
       const workorder_id = "WO-" + dayTag + "-" + String(seq).padStart(3, "0");
 
-      // 汇总明细
+      // 汇总明细 + 构造 batch 语句
       let total_qty = 0, total_weight_kg = 0, total_cbm = 0;
-      const line_type = outbound_mode === "carton_based" ? "carton" : "sku";
-      const total_qty_unit = outbound_mode === "carton_based" ? "箱" : "件";
+      const line_type = detail_mode === "carton_based" ? "carton" : "sku";
+      const total_qty_unit = detail_mode === "carton_based" ? "箱" : "件";
+      const batchStmts = [];
 
       for (let i = 0; i < lines.length; i++) {
         const ln = lines[i];
@@ -2015,28 +2073,35 @@ export default {
         total_weight_kg += w;
         if (l > 0 && wd > 0 && h > 0) total_cbm += (l * wd * h) / 1000000;
 
-        await env.DB.prepare(
-          `INSERT INTO b2b_workorder_lines(workorder_id,line_no,line_type,sku_code,product_name,carton_no,qty,length_cm,width_cm,height_cm,weight_kg,remark)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(
-          workorder_id, i + 1, line_type,
-          String(ln.sku_code || ""), String(ln.product_name || ""), String(ln.carton_no || ""),
-          qty, l, wd, h, w, String(ln.remark || "")
-        ).run();
+        batchStmts.push(
+          env.DB.prepare(
+            `INSERT INTO b2b_workorder_lines(workorder_id,line_no,line_type,sku_code,product_name,carton_no,qty,length_cm,width_cm,height_cm,weight_kg,remark)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(
+            workorder_id, i + 1, line_type,
+            String(ln.sku_code || ""), String(ln.product_name || ""), String(ln.carton_no || ""),
+            qty, l, wd, h, w, String(ln.remark || "")
+          )
+        );
       }
 
       total_cbm = Math.round(total_cbm * 1000) / 1000;
       total_weight_kg = Math.round(total_weight_kg * 1000) / 1000;
 
-      await env.DB.prepare(
-        `INSERT INTO b2b_workorders(workorder_id,external_workorder_no,outbound_mode,status,customer_name,customer_name_kr,plan_day,planned_start_at,planned_end_at,total_qty,total_qty_unit,total_weight_kg,total_cbm,instruction_text,remark,created_by,created_at)
-         VALUES(?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind(
-        workorder_id, external_workorder_no, outbound_mode, customer_name, customer_name_kr,
-        plan_day, planned_start_at, planned_end_at,
-        total_qty, total_qty_unit, total_weight_kg, total_cbm,
-        instruction_text, remark, created_by, now
-      ).run();
+      batchStmts.push(
+        env.DB.prepare(
+          `INSERT INTO b2b_workorders(workorder_id,external_workorder_no,outbound_mode,detail_mode,operation_mode,status,customer_name,customer_name_kr,plan_day,planned_start_at,planned_end_at,total_qty,total_qty_unit,total_weight_kg,total_cbm,instruction_text,remark,created_by,created_at)
+           VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(
+          workorder_id, external_workorder_no, outbound_mode, detail_mode, operation_mode,
+          customer_name, customer_name_kr,
+          plan_day, planned_start_at, planned_end_at,
+          total_qty, total_qty_unit, total_weight_kg, total_cbm,
+          instruction_text, remark, created_by, now
+        )
+      );
+
+      await env.DB.batch(batchStmts);
 
       return jsonpOrJson({ ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm }, callback);
     }
@@ -2071,6 +2136,91 @@ export default {
       ).bind(workorder_id).all();
 
       return jsonpOrJson({ ok:true, workorder: wo, lines: linesRs.results || [] }, callback);
+    }
+
+    // ===== B2B 出库作业单编辑（仅 draft 状态，原子 batch） =====
+    if (action === "b2b_wo_update") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const workorder_id = String(p.workorder_id || "").trim();
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+
+      const existing = await env.DB.prepare(`SELECT workorder_id, status FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+      if (existing.status !== "draft") return jsonpOrJson({ ok:false, error:"only draft workorders can be edited, current status: " + existing.status }, callback);
+
+      // 三模式字段
+      const detail_mode = String(p.detail_mode || "").trim();
+      const operation_mode = String(p.operation_mode || "").trim();
+      const outbound_mode = String(p.outbound_mode || "").trim();
+      if (!detail_mode || !["sku_based","carton_based"].includes(detail_mode))
+        return jsonpOrJson({ ok:false, error:"invalid detail_mode" }, callback);
+
+      const customer_name = String(p.customer_name || "").trim();
+      const plan_day = String(p.plan_day || "").trim();
+      const customer_name_kr = String(p.customer_name_kr || "").trim();
+      const external_workorder_no = String(p.external_workorder_no || "").trim();
+      const instruction_text = String(p.instruction_text || "").trim();
+      const remark = String(p.remark || "").trim();
+      const lines = p.lines;
+
+      if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
+      if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
+      if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
+
+      // 构造原子 batch：删旧明细 → 插新明细 → 更新主表
+      const batchStmts = [];
+
+      // 1. 删除旧明细
+      batchStmts.push(
+        env.DB.prepare(`DELETE FROM b2b_workorder_lines WHERE workorder_id=?`).bind(workorder_id)
+      );
+
+      // 2. 插入新明细 + 汇总
+      let total_qty = 0, total_weight_kg = 0, total_cbm = 0;
+      const line_type = detail_mode === "carton_based" ? "carton" : "sku";
+      const total_qty_unit = detail_mode === "carton_based" ? "箱" : "件";
+
+      for (let i = 0; i < lines.length; i++) {
+        const ln = lines[i];
+        const qty = Number(ln.qty || 0);
+        const w = Number(ln.weight_kg || 0);
+        const l = Number(ln.length_cm || 0);
+        const wd = Number(ln.width_cm || 0);
+        const h = Number(ln.height_cm || 0);
+        total_qty += qty;
+        total_weight_kg += w;
+        if (l > 0 && wd > 0 && h > 0) total_cbm += (l * wd * h) / 1000000;
+
+        batchStmts.push(
+          env.DB.prepare(
+            `INSERT INTO b2b_workorder_lines(workorder_id,line_no,line_type,sku_code,product_name,carton_no,qty,length_cm,width_cm,height_cm,weight_kg,remark)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(
+            workorder_id, i + 1, line_type,
+            String(ln.sku_code || ""), String(ln.product_name || ""), String(ln.carton_no || ""),
+            qty, l, wd, h, w, String(ln.remark || "")
+          )
+        );
+      }
+
+      total_cbm = Math.round(total_cbm * 1000) / 1000;
+      total_weight_kg = Math.round(total_weight_kg * 1000) / 1000;
+
+      // 3. 更新主表（不改 status / workorder_id / created_by / created_at）
+      batchStmts.push(
+        env.DB.prepare(
+          `UPDATE b2b_workorders SET detail_mode=?, operation_mode=?, outbound_mode=?, customer_name=?, customer_name_kr=?, plan_day=?, external_workorder_no=?, instruction_text=?, remark=?, total_qty=?, total_qty_unit=?, total_weight_kg=?, total_cbm=? WHERE workorder_id=?`
+        ).bind(
+          detail_mode, operation_mode, outbound_mode, customer_name, customer_name_kr,
+          plan_day, external_workorder_no, instruction_text, remark,
+          total_qty, total_qty_unit, total_weight_kg, total_cbm, workorder_id
+        )
+      );
+
+      // 原子执行
+      await env.DB.batch(batchStmts);
+
+      return jsonpOrJson({ ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm }, callback);
     }
 
     if (action === "b2b_wo_update_status") {

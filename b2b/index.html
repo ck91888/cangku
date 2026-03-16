@@ -38,6 +38,7 @@
     .detail-field{margin-bottom:6px;font-size:13px;}
     .detail-field b{font-weight:700;}
     .row-dim{opacity:0.45;}
+    .edit-id-bar{background:#f0f5ff;border:1px solid #b3d4fc;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:14px;font-weight:700;color:#1a5276;}
     @media print{.no-print{display:none !important;} body{margin:0;}}
   </style>
 </head>
@@ -70,8 +71,8 @@
   <!-- 导航 -->
   <div class="topnav no-print">
     <button class="primary" onclick="goHome()">首页</button>
-    <button onclick="goView('plan_create')">+ 入库计划</button>
-    <button onclick="goView('wo_create')">+ 出库作业单</button>
+    <button onclick="goNewPlan()">+ 入库计划</button>
+    <button onclick="goNewWo()">+ 出库作业单</button>
     <button onclick="goView('wo_list')">作业单列表</button>
     <button style="margin-left:auto;" onclick="doLogout()">退出</button>
   </div>
@@ -98,10 +99,11 @@
     </div>
   </div>
 
-  <!-- 新建入库计划 -->
+  <!-- 新建/编辑入库计划 -->
   <div id="v-plan_create" style="display:none;">
     <div class="card">
-      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">新建入库计划</div>
+      <div id="pc-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">新建入库计划</div>
+      <div id="pc-id-bar" class="edit-id-bar" style="display:none;"></div>
       <div class="form-group"><label>计划到货日</label><input id="pc-day" type="date" /></div>
       <div class="form-group"><label>客户名</label><input id="pc-customer" placeholder="客户名称" /></div>
       <div class="form-group">
@@ -117,24 +119,45 @@
       <div class="form-group"><label>预计到达时间</label><input id="pc-arrival" placeholder="如：上午 / 14:00（选填）" /></div>
       <div class="form-group"><label>用途说明</label><input id="pc-purpose" placeholder="如：入库上架 / 直接转发至XX（选填）" /></div>
       <div class="form-group"><label>备注</label><textarea id="pc-remark" rows="2" placeholder="选填"></textarea></div>
-      <div class="form-group"><label>创建人</label><input id="pc-creator" placeholder="你的名字" /></div>
-      <button class="primary" onclick="submitPlan()">保存</button>
+      <div id="pc-creator-group" class="form-group"><label>创建人</label><input id="pc-creator" placeholder="你的名字" /></div>
+      <button id="pc-submit-btn" class="primary" onclick="submitPlan()">保存</button>
       <div id="pc-result" style="margin-top:8px;font-size:13px;"></div>
     </div>
   </div>
 
-  <!-- 新建出库作业单 -->
+  <!-- 新建/编辑出库作业单 -->
   <div id="v-wo_create" style="display:none;">
     <div class="card">
-      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">新建出库作业单</div>
+      <div id="wc-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">新建出库作业单</div>
+      <div id="wc-id-bar" class="edit-id-bar" style="display:none;"></div>
       <div class="row">
-        <div class="form-group"><label>出库模式</label>
-          <select id="wc-mode" onchange="wcModeChanged()">
+        <div class="form-group"><label>明细结构</label>
+          <select id="wc-detail-mode" onchange="wcDetailModeChanged()">
             <option value="sku_based">按 SKU / 产品</option>
             <option value="carton_based">按 箱</option>
           </select>
         </div>
         <div class="form-group"><label>计划出库日</label><input id="wc-day" type="date" /></div>
+      </div>
+      <div class="row">
+        <div class="form-group"><label>操作模式</label>
+          <select id="wc-op-mode">
+            <option value="">（选填）</option>
+            <option value="箱子操作">箱子操作</option>
+            <option value="打托">打托</option>
+            <option value="整进整出">整进整出</option>
+          </select>
+        </div>
+        <div class="form-group"><label>出库模式</label>
+          <select id="wc-ob-mode">
+            <option value="">（选填）</option>
+            <option value="仓库叫车">仓库叫车</option>
+            <option value="客户自提">客户自提</option>
+            <option value="牛奶快递">牛奶快递</option>
+            <option value="牛奶托盘">牛奶托盘</option>
+            <option value="柜子提货">柜子提货</option>
+          </select>
+        </div>
       </div>
       <div class="row">
         <div class="form-group"><label>客户名</label><input id="wc-customer" placeholder="客户名称" /></div>
@@ -143,9 +166,15 @@
       <div class="form-group"><label>WMS 工单号（选填）</label><input id="wc-ext-no" placeholder="WMS 系统工单号" /></div>
       <div class="form-group"><label>作业指示（选填）</label><textarea id="wc-instr" rows="2" placeholder="如：需要打托 / 轻拿轻放"></textarea></div>
       <div class="form-group"><label>备注（选填）</label><textarea id="wc-remark" rows="2" placeholder=""></textarea></div>
-      <div class="form-group"><label>创建人</label><input id="wc-creator" placeholder="你的名字" /></div>
+      <div id="wc-creator-group" class="form-group"><label>创建人</label><input id="wc-creator" placeholder="你的名字" /></div>
 
       <div style="font-size:14px;font-weight:700;margin:12px 0 6px;">明细行</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        <button style="width:auto;padding:6px 14px;font-size:12px;" onclick="wcDownloadTemplate()">下载模板</button>
+        <button style="width:auto;padding:6px 14px;font-size:12px;" onclick="document.getElementById('wc-import-file').click()">导入 Excel</button>
+        <input type="file" id="wc-import-file" accept=".xlsx,.xls" style="display:none;" onchange="wcImportExcel(this)" />
+      </div>
+      <div id="wc-import-err" style="font-size:13px;margin-bottom:6px;"></div>
       <div style="overflow-x:auto;">
         <table class="line-table" id="wc-lines-table">
           <thead id="wc-lines-head"></thead>
@@ -155,7 +184,7 @@
       <button style="width:auto;padding:6px 14px;font-size:12px;margin-top:6px;" onclick="wcAddLine()">+ 添加一行</button>
       <div id="wc-summary" class="muted" style="margin-top:8px;font-size:13px;"></div>
 
-      <button class="primary" style="margin-top:12px;" onclick="submitWo()">保存（草稿）</button>
+      <button id="wc-submit-btn" class="primary" style="margin-top:12px;" onclick="submitWo()">保存（草稿）</button>
       <div id="wc-result" style="margin-top:8px;font-size:13px;"></div>
     </div>
   </div>
@@ -182,6 +211,7 @@
 
 </div><!-- /v-main -->
 
+<script src="./xlsx.min.js"></script>
 <script src="./qrcode.min.js"></script>
 <script src="./b2b.js"></script>
 </body>
