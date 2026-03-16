@@ -39,6 +39,13 @@
     .detail-field b{font-weight:700;}
     .row-dim{opacity:0.45;}
     .edit-id-bar{background:#f0f5ff;border:1px solid #b3d4fc;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:14px;font-weight:700;color:#1a5276;}
+    .q-clickable{cursor:pointer;transition:box-shadow .15s;}
+    .q-clickable:hover{box-shadow:0 2px 8px rgba(0,0,0,.12);}
+    .card-status-row{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;}
+    .overdue-warn{background:#fff3e0;color:#e65100;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;margin-top:8px;cursor:pointer;}
+    .overdue-warn:hover{background:#ffe0b2;}
+    .list-section-title{font-size:14px;font-weight:700;padding:8px 0 4px;border-bottom:2px solid #eee;margin-bottom:4px;}
+    .overdue-section-title{color:#e65100;}
     @media print{.no-print{display:none !important;} body{margin:0;}}
   </style>
 </head>
@@ -73,6 +80,7 @@
     <button class="primary" onclick="goHome()">首页</button>
     <button onclick="goNewPlan()">+ 入库计划</button>
     <button onclick="goNewWo()">+ 出库作业单</button>
+    <button onclick="goCardDetail('plan','today')">计划列表</button>
     <button onclick="goView('wo_list')">作业单列表</button>
     <button style="margin-left:auto;" onclick="doLogout()">退出</button>
   </div>
@@ -80,21 +88,21 @@
   <!-- 首页 -->
   <div id="v-home">
     <div class="quadrant">
-      <div class="q-card">
-        <div class="q-title">📥 今日入库计划 <span class="count" id="ip-today-count"></span></div>
-        <div id="ip-today-list"><div class="q-empty">加载中...</div></div>
+      <div class="q-card q-clickable" onclick="goCardDetail('plan','today')">
+        <div class="q-title">📥 今日入库计划 <span class="count" id="ip-today-count">--</span></div>
+        <div id="ip-today-body"><div class="q-empty">加载中...</div></div>
       </div>
-      <div class="q-card">
-        <div class="q-title">📥 明日入库计划 <span class="count" id="ip-tmr-count"></span></div>
-        <div id="ip-tmr-list"><div class="q-empty">加载中...</div></div>
+      <div class="q-card q-clickable" onclick="goCardDetail('plan','tomorrow')">
+        <div class="q-title">📥 明日入库计划 <span class="count" id="ip-tmr-count">--</span></div>
+        <div id="ip-tmr-body"><div class="q-empty">加载中...</div></div>
       </div>
-      <div class="q-card">
-        <div class="q-title">📦 今日出库作业单 <span class="count" id="wo-today-count"></span></div>
-        <div id="wo-today-list"><div class="q-empty">加载中...</div></div>
+      <div class="q-card q-clickable" onclick="goCardDetail('wo','today')">
+        <div class="q-title">📦 今日出库作业单 <span class="count" id="wo-today-count">--</span></div>
+        <div id="wo-today-body"><div class="q-empty">加载中...</div></div>
       </div>
-      <div class="q-card">
-        <div class="q-title">📦 明日出库作业单 <span class="count" id="wo-tmr-count"></span></div>
-        <div id="wo-tmr-list"><div class="q-empty">加载中...</div></div>
+      <div class="q-card q-clickable" onclick="goCardDetail('wo','tomorrow')">
+        <div class="q-title">📦 明日出库作业单 <span class="count" id="wo-tmr-count">--</span></div>
+        <div id="wo-tmr-body"><div class="q-empty">加载中...</div></div>
       </div>
     </div>
   </div>
@@ -189,10 +197,18 @@
     </div>
   </div>
 
+  <!-- 入库计划列表 -->
+  <div id="v-plan_list" style="display:none;">
+    <div class="card">
+      <div id="pl-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">入库计划列表</div>
+      <div id="pl-result"></div>
+    </div>
+  </div>
+
   <!-- 作业单列表 -->
   <div id="v-wo_list" style="display:none;">
     <div class="card">
-      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">出库作业单列表</div>
+      <div id="wl-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">出库作业单列表</div>
       <div class="row">
         <div class="form-group"><label>开始日期</label><input id="wl-start" type="date" /></div>
         <div class="form-group"><label>结束日期</label><input id="wl-end" type="date" /></div>
