@@ -331,16 +331,76 @@ export default {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
-    // ===== 自动迁移：sessions 表加 source 列 =====
-    if (!env._migratedSource) {
+    // ===== 一次性迁移系统（带标记，幂等） =====
+    if (!env._migrationsChecked) {
       try {
-        await env.DB.prepare(`ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'scan'`).run();
-        // 历史兼容回填：将已有的 -CORR session 标记为 manual_correction（一次性）
-        await env.DB.prepare(`UPDATE sessions SET source='manual_correction' WHERE session LIKE '%-CORR' AND (source IS NULL OR source='scan')`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS _migrations(key TEXT PRIMARY KEY, ran_at INTEGER)`).run();
+
+        // --- v1: sessions 表加 source 列 + 历史 -CORR 回填 source ---
+        const m1 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v1_add_source_column'`).first();
+        if (!m1) {
+          try {
+            await env.DB.prepare(`ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'scan'`).run();
+          } catch(e) { /* 列已存在则忽略 */ }
+          await env.DB.prepare(`UPDATE sessions SET source='manual_correction' WHERE session LIKE '%-CORR' AND (source IS NULL OR source='scan')`).run();
+          // 迁移完整成功后才写标记
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v1_add_source_column', ?)`).bind(Date.now()).run();
+        }
+
+        // --- v2: 回填历史补录 session 的 created_ms / status / closed_ms ---
+        const m2 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v2_backfill_corr_sessions'`).first();
+        if (!m2) {
+          // Step 1: created_ms = 该 session 最早的 join/leave 事件时间
+          await env.DB.prepare(`
+            UPDATE sessions SET created_ms = (
+              SELECT MIN(server_ms) FROM events
+              WHERE events.session = sessions.session AND ok=1 AND event IN ('join','leave')
+            )
+            WHERE source='manual_correction'
+              AND EXISTS (SELECT 1 FROM events WHERE events.session = sessions.session AND ok=1 AND event IN ('join','leave'))
+          `).run();
+
+          // Step 2: 逐个 session 重算 status / closed_ms（只基于 join/leave）
+          const corrRows = await env.DB.prepare(`SELECT session FROM sessions WHERE source='manual_correction'`).all();
+          for (const row of (corrRows.results || [])) {
+            const sid = row.session;
+            const evRs = await env.DB.prepare(
+              `SELECT badge, event, server_ms FROM events
+               WHERE session=? AND event IN ('join','leave') AND ok=1
+               ORDER BY server_ms ASC`
+            ).bind(sid).all();
+            const evts = evRs.results || [];
+            if (evts.length === 0) continue;
+
+            const badgeCounts = {};
+            let maxLeaveMs = 0;
+            for (const e of evts) {
+              if (!badgeCounts[e.badge]) badgeCounts[e.badge] = 0;
+              if (e.event === "join") badgeCounts[e.badge]++;
+              if (e.event === "leave") {
+                badgeCounts[e.badge]--;
+                if (e.server_ms > maxLeaveMs) maxLeaveMs = e.server_ms;
+              }
+            }
+            const anyOpen = Object.values(badgeCounts).some(c => c > 0);
+            if (anyOpen) {
+              await env.DB.prepare(
+                `UPDATE sessions SET status='OPEN', closed_ms=NULL, closed_by_operator=NULL WHERE session=?`
+              ).bind(sid).run();
+            } else {
+              await env.DB.prepare(
+                `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator='backfill' WHERE session=?`
+              ).bind(maxLeaveMs, sid).run();
+            }
+          }
+
+          // 迁移完整成功后才写标记
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v2_backfill_corr_sessions', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
-        // 列已存在时 ALTER TABLE 会报错，忽略
+        // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
-      env._migratedSource = true;
+      env._migrationsChecked = true;
     }
 
     const url = new URL(request.url);
