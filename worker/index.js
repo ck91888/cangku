@@ -1144,12 +1144,13 @@ export default {
       // 按天汇总
       const dayMap = {}; // day → { b2c_order_export, b2c_pack_import, import_express, change_order_export, return_inbound_export, return_qc_export }
       // 生成日期列表
-      const d = new Date(start_date + "T00:00:00+09:00");
-      const dEnd = new Date(end_date + "T00:00:00+09:00");
+      // 纯 UTC 日期迭代，避免时区偏移导致日期减一天
+      const d = new Date(start_date + "T00:00:00Z");
+      const dEnd = new Date(end_date + "T00:00:00Z");
       while (d <= dEnd) {
-        const ds = d.toISOString().slice(0, 10);
+        const ds = d.getUTCFullYear() + "-" + String(d.getUTCMonth()+1).padStart(2,"0") + "-" + String(d.getUTCDate()).padStart(2,"0");
         dayMap[ds] = { b2c_order_export: 0, b2c_pack_import: 0, import_express: 0, change_order_export: 0, return_inbound_export: 0, return_qc_export: 0 };
-        d.setDate(d.getDate() + 1);
+        d.setUTCDate(d.getUTCDate() + 1);
       }
       for (const r of (rs1.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].b2c_order_export = r.cnt; }
       for (const r of (rs2.results || [])) { if (dayMap[r.day_kst]) dayMap[r.day_kst].b2c_pack_import = r.cnt; }
@@ -1655,9 +1656,14 @@ export default {
       const packMissingDays = new Set();
       {
         const daysInRange = new Set();
-        const dd = new Date(start_date + "T00:00:00+09:00");
-        const ddEnd = new Date(end_date + "T00:00:00+09:00");
-        while (dd <= ddEnd) { daysInRange.add(dd.toISOString().slice(0, 10)); dd.setDate(dd.getDate() + 1); }
+        // 纯 UTC 日期迭代，避免时区偏移导致日期减一天
+        const dd = new Date(start_date + "T00:00:00Z");
+        const ddEnd = new Date(end_date + "T00:00:00Z");
+        while (dd <= ddEnd) {
+          const ds = dd.getUTCFullYear() + "-" + String(dd.getUTCMonth()+1).padStart(2,"0") + "-" + String(dd.getUTCDate()).padStart(2,"0");
+          daysInRange.add(ds);
+          dd.setUTCDate(dd.getUTCDate() + 1);
+        }
         const packRs = await env.DB.prepare(
           `SELECT DISTINCT business_day_kst FROM wms_outputs
            WHERE source_type='b2c_pack_import' AND business_day_kst >= ? AND business_day_kst <= ? AND business_day_kst != ''`
