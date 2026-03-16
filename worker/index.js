@@ -496,6 +496,16 @@ export default {
           )`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v5_b2b_attachments', ?)`).bind(Date.now()).run();
         }
+
+        // --- v6: B2B 作业单新增出库目的地/发注番号/箱托数 ---
+        const m6 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v6_b2b_wo_extra_fields'`).first();
+        if (!m6) {
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN outbound_destination TEXT NOT NULL DEFAULT ''`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN order_ref_no TEXT NOT NULL DEFAULT ''`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN outbound_box_count REAL NOT NULL DEFAULT 0`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN outbound_pallet_count REAL NOT NULL DEFAULT 0`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v6_b2b_wo_extra_fields', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2052,13 +2062,15 @@ export default {
 
       const customer_name = String(p.customer_name || "").trim();
       const plan_day = String(p.plan_day || "").trim();
-      const customer_name_kr = String(p.customer_name_kr || "").trim();
       const external_workorder_no = String(p.external_workorder_no || "").trim();
       const planned_start_at = String(p.planned_start_at || "").trim();
       const planned_end_at = String(p.planned_end_at || "").trim();
       const instruction_text = String(p.instruction_text || "").trim();
-      const remark = String(p.remark || "").trim();
       const created_by = String(p.created_by || "").trim();
+      const outbound_destination = String(p.outbound_destination || "").trim();
+      const order_ref_no = String(p.order_ref_no || "").trim();
+      const outbound_box_count = Number(p.outbound_box_count || 0);
+      const outbound_pallet_count = Number(p.outbound_pallet_count || 0);
       const lines = p.lines; // array of line objects
 
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
@@ -2111,14 +2123,15 @@ export default {
 
       batchStmts.push(
         env.DB.prepare(
-          `INSERT INTO b2b_workorders(workorder_id,external_workorder_no,outbound_mode,detail_mode,operation_mode,status,customer_name,customer_name_kr,plan_day,planned_start_at,planned_end_at,total_qty,total_qty_unit,total_weight_kg,total_cbm,instruction_text,remark,created_by,created_at)
-           VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          `INSERT INTO b2b_workorders(workorder_id,external_workorder_no,outbound_mode,detail_mode,operation_mode,status,customer_name,plan_day,planned_start_at,planned_end_at,total_qty,total_qty_unit,total_weight_kg,total_cbm,instruction_text,created_by,created_at,outbound_destination,order_ref_no,outbound_box_count,outbound_pallet_count)
+           VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         ).bind(
           workorder_id, external_workorder_no, outbound_mode, detail_mode, operation_mode,
-          customer_name, customer_name_kr,
+          customer_name,
           plan_day, planned_start_at, planned_end_at,
           total_qty, total_qty_unit, total_weight_kg, total_cbm,
-          instruction_text, remark, created_by, now
+          instruction_text, created_by, now,
+          outbound_destination, order_ref_no, outbound_box_count, outbound_pallet_count
         )
       );
 
@@ -2183,10 +2196,12 @@ export default {
 
       const customer_name = String(p.customer_name || "").trim();
       const plan_day = String(p.plan_day || "").trim();
-      const customer_name_kr = String(p.customer_name_kr || "").trim();
       const external_workorder_no = String(p.external_workorder_no || "").trim();
       const instruction_text = String(p.instruction_text || "").trim();
-      const remark = String(p.remark || "").trim();
+      const outbound_destination = String(p.outbound_destination || "").trim();
+      const order_ref_no = String(p.order_ref_no || "").trim();
+      const outbound_box_count = Number(p.outbound_box_count || 0);
+      const outbound_pallet_count = Number(p.outbound_pallet_count || 0);
       const lines = p.lines;
 
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
@@ -2235,10 +2250,11 @@ export default {
       // 3. 更新主表（不改 status / workorder_id / created_by / created_at）
       batchStmts.push(
         env.DB.prepare(
-          `UPDATE b2b_workorders SET detail_mode=?, operation_mode=?, outbound_mode=?, customer_name=?, customer_name_kr=?, plan_day=?, external_workorder_no=?, instruction_text=?, remark=?, total_qty=?, total_qty_unit=?, total_weight_kg=?, total_cbm=? WHERE workorder_id=?`
+          `UPDATE b2b_workorders SET detail_mode=?, operation_mode=?, outbound_mode=?, customer_name=?, plan_day=?, external_workorder_no=?, instruction_text=?, outbound_destination=?, order_ref_no=?, outbound_box_count=?, outbound_pallet_count=?, total_qty=?, total_qty_unit=?, total_weight_kg=?, total_cbm=? WHERE workorder_id=?`
         ).bind(
-          detail_mode, operation_mode, outbound_mode, customer_name, customer_name_kr,
-          plan_day, external_workorder_no, instruction_text, remark,
+          detail_mode, operation_mode, outbound_mode, customer_name,
+          plan_day, external_workorder_no, instruction_text,
+          outbound_destination, order_ref_no, outbound_box_count, outbound_pallet_count,
           total_qty, total_qty_unit, total_weight_kg, total_cbm, workorder_id
         )
       );

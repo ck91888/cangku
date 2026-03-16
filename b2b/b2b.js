@@ -417,10 +417,12 @@ function initWoCreate(data){
   document.getElementById("wc-op-mode").value = isEdit ? (data.operation_mode||"") : "";
   document.getElementById("wc-ob-mode").value = isEdit ? (data.outbound_mode||"") : "";
   document.getElementById("wc-customer").value = isEdit ? data.customer_name : "";
-  document.getElementById("wc-customer-kr").value = isEdit ? (data.customer_name_kr||"") : "";
+  document.getElementById("wc-destination").value = isEdit ? (data.outbound_destination||"") : "";
+  document.getElementById("wc-order-ref").value = isEdit ? (data.order_ref_no||"") : "";
   document.getElementById("wc-ext-no").value = isEdit ? (data.external_workorder_no||"") : "";
+  document.getElementById("wc-box-count").value = isEdit && data.outbound_box_count ? data.outbound_box_count : "";
+  document.getElementById("wc-pallet-count").value = isEdit && data.outbound_pallet_count ? data.outbound_pallet_count : "";
   document.getElementById("wc-instr").value = isEdit ? (data.instruction_text||"") : "";
-  document.getElementById("wc-remark").value = isEdit ? (data.remark||"") : "";
   document.getElementById("wc-creator").value = "";
   document.getElementById("wc-result").textContent = "";
   document.getElementById("wc-summary").textContent = "";
@@ -560,10 +562,12 @@ function submitWo(){
   var obMode = document.getElementById("wc-ob-mode").value;
   var day = document.getElementById("wc-day").value;
   var customer = document.getElementById("wc-customer").value.trim();
-  var customerKr = document.getElementById("wc-customer-kr").value.trim();
+  var destination = document.getElementById("wc-destination").value.trim();
+  var orderRef = document.getElementById("wc-order-ref").value.trim();
   var extNo = document.getElementById("wc-ext-no").value.trim();
+  var boxCount = Number(document.getElementById("wc-box-count").value) || 0;
+  var palletCount = Number(document.getElementById("wc-pallet-count").value) || 0;
   var instr = document.getElementById("wc-instr").value.trim();
-  var remark = document.getElementById("wc-remark").value.trim();
   var creator = document.getElementById("wc-creator").value.trim();
   var lines = wcCollectLines();
 
@@ -576,8 +580,10 @@ function submitWo(){
     fetchApi({
       action:"b2b_wo_update", workorder_id:_editingWoId,
       detail_mode:detailMode, operation_mode:opMode, outbound_mode:obMode,
-      plan_day:day, customer_name:customer, customer_name_kr:customerKr,
-      external_workorder_no:extNo, instruction_text:instr, remark:remark,
+      plan_day:day, customer_name:customer,
+      external_workorder_no:extNo, instruction_text:instr,
+      outbound_destination:destination, order_ref_no:orderRef,
+      outbound_box_count:boxCount, outbound_pallet_count:palletCount,
       lines:lines
     }).then(function(res){
       if(res && res.ok){
@@ -593,8 +599,10 @@ function submitWo(){
     fetchApi({
       action:"b2b_wo_create", detail_mode:detailMode, operation_mode:opMode,
       outbound_mode:obMode, plan_day:day,
-      customer_name:customer, customer_name_kr:customerKr,
-      external_workorder_no:extNo, instruction_text:instr, remark:remark,
+      customer_name:customer,
+      external_workorder_no:extNo, instruction_text:instr,
+      outbound_destination:destination, order_ref_no:orderRef,
+      outbound_box_count:boxCount, outbound_pallet_count:palletCount,
       created_by:creator, lines:lines
     }).then(function(res){
       if(res && res.ok){
@@ -761,14 +769,16 @@ function goWoDetail(id){
       '<div style="font-size:18px;font-weight:800;margin-bottom:10px;">' +
         esc(w.workorder_id) + ' <span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span>' +
       '</div>' +
-      '<div class="detail-field"><b>客户:</b> '+esc(w.customer_name)+(w.customer_name_kr ? ' ('+esc(w.customer_name_kr)+')' : '')+'</div>' +
+      '<div class="detail-field"><b>客户:</b> '+esc(w.customer_name)+'</div>' +
       '<div class="detail-field"><b>计划出库日:</b> '+esc(w.plan_day)+'</div>' +
       '<div class="detail-field"><b>操作模式:</b> '+esc(opLabel)+'</div>' +
       '<div class="detail-field"><b>出库模式:</b> '+esc(obLabel)+'</div>' +
+      (w.outbound_destination ? '<div class="detail-field"><b>出库目的地:</b> '+esc(w.outbound_destination)+'</div>' : '') +
+      (w.order_ref_no ? '<div class="detail-field"><b>발주번호:</b> '+esc(w.order_ref_no)+'</div>' : '') +
+      (fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count) ? '<div class="detail-field"><b>出库量:</b> '+esc(fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count))+'</div>' : '') +
       '<div class="detail-field"><b>汇总:</b> '+w.total_qty+(w.total_qty_unit||"")+' · '+w.total_weight_kg+'kg' + (w.total_cbm ? ' · '+w.total_cbm+'m³' : '') + '</div>' +
       (w.external_workorder_no ? '<div class="detail-field"><b>WMS工单号:</b> '+esc(w.external_workorder_no)+'</div>' : '') +
       (w.instruction_text ? '<div class="detail-field"><b>作业指示:</b> '+esc(w.instruction_text)+'</div>' : '') +
-      (w.remark ? '<div class="detail-field"><b>备注:</b> '+esc(w.remark)+'</div>' : '') +
       '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(w.created_by)+' · 创建时间: '+new Date(w.created_at).toLocaleString()+'</div>' +
 
       '<div style="margin:12px 0;" class="no-print">' + statusBtns + editBtn +
@@ -1085,6 +1095,14 @@ function makeQrDataUrl(text){
   return qr.createDataURL(4, 0);
 }
 
+// 出库量格式化（详情页+打印页共用）
+function fmtOutboundQty(box, pallet){
+  var parts = [];
+  if(box) parts.push(box + "箱");
+  if(pallet) parts.push(pallet + "托");
+  return parts.join(" / ");
+}
+
 // ===== 打印 =====
 function printWo(id){
   fetchApi({ action:"b2b_wo_detail", workorder_id:id }).then(function(res){
@@ -1169,14 +1187,16 @@ function printWo(id){
       '<div class="info-grid">' +
         '<div><span class="label">作业单号：</span>'+esc(w.workorder_id)+'</div>' +
         '<div><span class="label">状态：</span>'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</div>' +
-        '<div><span class="label">客户：</span>'+esc(w.customer_name)+(w.customer_name_kr?' ('+esc(w.customer_name_kr)+')':'')+'</div>' +
+        '<div><span class="label">客户：</span>'+esc(w.customer_name)+'</div>' +
         '<div><span class="label">计划出库日：</span>'+esc(w.plan_day)+'</div>' +
         (opLabel ? '<div><span class="label">操作模式：</span>'+esc(opLabel)+'</div>' : '') +
         (obLabel ? '<div><span class="label">出库模式：</span>'+esc(obLabel)+'</div>' : '') +
+        (w.outbound_destination ? '<div><span class="label">出库目的地：</span>'+esc(w.outbound_destination)+'</div>' : '') +
+        (w.order_ref_no ? '<div><span class="label">발주번호：</span>'+esc(w.order_ref_no)+'</div>' : '') +
+        (fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count) ? '<div><span class="label">出库量：</span>'+fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)+'</div>' : '') +
         '<div><span class="label">汇总：</span>'+w.total_qty+(w.total_qty_unit||"")+' · '+w.total_weight_kg+'kg'+(w.total_cbm?' · '+w.total_cbm+'m³':'')+'</div>' +
         (w.external_workorder_no ? '<div><span class="label">WMS工单号：</span>'+esc(w.external_workorder_no)+'</div>' : '') +
         (w.instruction_text ? '<div style="grid-column:1/-1;"><span class="label">作业指示：</span>'+esc(w.instruction_text)+'</div>' : '') +
-        (w.remark ? '<div style="grid-column:1/-1;"><span class="label">备注：</span>'+esc(w.remark)+'</div>' : '') +
       '</div>' +
 
       '<table><thead>'+thead+'</thead><tbody>'+tbody+'</tbody>' +
