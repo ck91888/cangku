@@ -95,6 +95,8 @@ var PLAN_NEXT_STATUS = {
   abnormal: ["processing","cancelled"],
   cancelled: []
 };
+var PLAN_STATUS_PRIORITY = { abnormal:0, processing:1, arrived:2, pending:3, completed:4, cancelled:5 };
+var WO_STATUS_PRIORITY = { working:0, issued:1, draft:2, completed:3, cancelled:4 };
 
 function loadPlansQuadrant(start, end, listId, countId){
   fetchApi({ action:"b2b_plan_list", start_day:start, end_day:end }).then(function(res){
@@ -102,13 +104,15 @@ function loadPlansQuadrant(start, end, listId, countId){
     var countEl = document.getElementById(countId);
     if(!res || !res.ok){ el.innerHTML = '<div class="q-empty">加载失败</div>'; return; }
     var plans = res.plans || [];
+    plans.sort(function(a,b){ return (PLAN_STATUS_PRIORITY[a.status]||9) - (PLAN_STATUS_PRIORITY[b.status]||9); });
     if(countEl) countEl.textContent = plans.length + "条";
     if(plans.length === 0){ el.innerHTML = '<div class="q-empty">暂无计划</div>'; return; }
     el.innerHTML = plans.map(function(p){
+      var dimClass = (p.status==="cancelled") ? " row-dim" : "";
       var btns = (PLAN_NEXT_STATUS[p.status]||[]).map(function(s){
         return '<button onclick="changePlanStatus(\''+esc(p.plan_id)+'\',\''+s+'\')">'+esc(PLAN_STATUS_LABEL[s]||s)+'</button>';
       }).join("");
-      return '<div class="plan-row">' +
+      return '<div class="plan-row'+dimClass+'">' +
         '<div><span class="st st-'+esc(p.status)+'">'+esc(PLAN_STATUS_LABEL[p.status]||p.status)+'</span> ' +
         '<b>'+esc(p.customer_name)+'</b> <span class="muted" style="font-size:11px;">'+esc(BIZ_TYPE_LABEL[p.biz_type]||p.biz_type)+'</span></div>' +
         '<div class="meta">'+esc(p.goods_summary) + (p.expected_arrival_time ? ' · 预计'+esc(p.expected_arrival_time) : '') + '</div>' +
@@ -145,10 +149,12 @@ function loadWoQuadrant(start, end, listId, countId){
     var countEl = document.getElementById(countId);
     if(!res || !res.ok){ el.innerHTML = '<div class="q-empty">加载失败</div>'; return; }
     var wos = res.workorders || [];
+    wos.sort(function(a,b){ return (WO_STATUS_PRIORITY[a.status]||9) - (WO_STATUS_PRIORITY[b.status]||9); });
     if(countEl) countEl.textContent = wos.length + "条";
     if(wos.length === 0){ el.innerHTML = '<div class="q-empty">暂无作业单</div>'; return; }
     el.innerHTML = wos.map(function(w){
-      return '<div class="wo-row" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
+      var dimClass = (w.status==="cancelled") ? " row-dim" : "";
+      return '<div class="wo-row'+dimClass+'" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
         '<div><span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
         '<b>'+esc(w.workorder_id)+'</b></div>' +
         '<div class="meta">'+esc(w.customer_name)+' · '+esc(MODE_LABEL[w.outbound_mode]||w.outbound_mode) +
@@ -181,13 +187,8 @@ function submitPlan(){
   }).then(function(res){
     var el = document.getElementById("pc-result");
     if(res && res.ok){
-      el.innerHTML = '<span class="ok">创建成功！编号: <b>'+esc(res.plan_id)+'</b></span>';
-      // 清空表单
-      document.getElementById("pc-customer").value = "";
-      document.getElementById("pc-summary").value = "";
-      document.getElementById("pc-arrival").value = "";
-      document.getElementById("pc-purpose").value = "";
-      document.getElementById("pc-remark").value = "";
+      alert("创建成功！编号: " + res.plan_id);
+      goHome();
     } else {
       el.innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
     }
@@ -295,8 +296,7 @@ function submitWo(){
   }).then(function(res){
     var el = document.getElementById("wc-result");
     if(res && res.ok){
-      el.innerHTML = '<span class="ok">创建成功！作业单号: <b>'+esc(res.workorder_id)+'</b>' +
-        '  明细'+res.lines_count+'行 · 总数量'+res.total_qty+' · 总重量'+res.total_weight_kg+'kg</span>';
+      goWoDetail(res.workorder_id);
     } else {
       el.innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
     }
@@ -317,9 +317,11 @@ function loadWoList(){
     var el = document.getElementById("wl-result");
     if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败</div>'; return; }
     var wos = res.workorders || [];
+    wos.sort(function(a,b){ return (WO_STATUS_PRIORITY[a.status]||9) - (WO_STATUS_PRIORITY[b.status]||9); });
     if(wos.length === 0){ el.innerHTML = '<div class="muted">暂无作业单</div>'; return; }
     el.innerHTML = wos.map(function(w){
-      return '<div class="wo-row" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
+      var dimClass = (w.status==="cancelled") ? " row-dim" : "";
+      return '<div class="wo-row'+dimClass+'" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
         '<div><span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
         '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name)+'</div>' +
         '<div class="meta">'+esc(w.plan_day)+' · '+esc(MODE_LABEL[w.outbound_mode]||w.outbound_mode) +
@@ -407,10 +409,98 @@ function changeWoStatus(id, status){
   });
 }
 
+// ===== 本地生成二维码 data URL =====
+function makeQrDataUrl(text){
+  var qr = qrcode(0, "M");
+  qr.addData(text);
+  qr.make();
+  return qr.createDataURL(4, 0);
+}
+
 // ===== 打印 =====
 function printWo(id){
-  // 详情已在页面上，直接触发打印
-  window.print();
+  fetchApi({ action:"b2b_wo_detail", workorder_id:id }).then(function(res){
+    if(!res || !res.ok){ alert("加载失败"); return; }
+    var w = res.workorder;
+    var lines = res.lines || [];
+    var isSku = w.outbound_mode === "sku_based";
+    var qrDataUrl = makeQrDataUrl(w.workorder_id);
+
+    // 明细表格 HTML
+    var thead, tbody;
+    if(isSku){
+      thead = '<tr><th>#</th><th>产品编码</th><th>产品名称</th><th>数量</th><th>长cm</th><th>宽cm</th><th>高cm</th><th>重量kg</th><th>备注</th></tr>';
+      tbody = lines.map(function(ln){
+        return '<tr><td>'+ln.line_no+'</td><td>'+esc(ln.sku_code)+'</td><td>'+esc(ln.product_name)+'</td><td>'+ln.qty+'</td>' +
+          '<td>'+(ln.length_cm||"")+'</td><td>'+(ln.width_cm||"")+'</td><td>'+(ln.height_cm||"")+'</td><td>'+(ln.weight_kg||"")+'</td><td>'+esc(ln.remark)+'</td></tr>';
+      }).join("");
+    } else {
+      thead = '<tr><th>#</th><th>箱号</th><th>数量</th><th>长cm</th><th>宽cm</th><th>高cm</th><th>重量kg</th><th>备注</th></tr>';
+      tbody = lines.map(function(ln){
+        return '<tr><td>'+ln.line_no+'</td><td>'+esc(ln.carton_no)+'</td><td>'+ln.qty+'</td>' +
+          '<td>'+(ln.length_cm||"")+'</td><td>'+(ln.width_cm||"")+'</td><td>'+(ln.height_cm||"")+'</td><td>'+(ln.weight_kg||"")+'</td><td>'+esc(ln.remark)+'</td></tr>';
+      }).join("");
+    }
+    var footColspan = isSku ? 3 : 2;
+
+    var html = '<!doctype html><html><head><meta charset="utf-8"/>' +
+      '<title>打印 - '+esc(w.workorder_id)+'</title>' +
+      '<style>' +
+      'body{font-family:"Microsoft YaHei","Helvetica Neue",sans-serif;margin:20px 30px;color:#000;}' +
+      '.print-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #000;padding-bottom:10px;margin-bottom:14px;}' +
+      '.print-title{font-size:22px;font-weight:900;}' +
+      '.print-sub{font-size:13px;color:#333;margin-top:4px;}' +
+      '.qr-box{text-align:center;}' +
+      '.qr-label{font-size:10px;color:#666;margin-top:2px;}' +
+      '.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;font-size:13px;margin-bottom:14px;}' +
+      '.info-grid .label{font-weight:700;}' +
+      'table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px;}' +
+      'th,td{border:1px solid #333;padding:5px 6px;text-align:left;}' +
+      'th{background:#eee;font-weight:700;}' +
+      'tfoot td{font-weight:700;}' +
+      '.sig-row{display:flex;gap:40px;margin-top:30px;font-size:13px;}' +
+      '.sig-item{flex:1;}' +
+      '.sig-line{border-bottom:1px solid #333;height:30px;margin-top:4px;}' +
+      '@media print{@page{size:A4;margin:15mm 20mm;} body{margin:0;}}' +
+      '</style></head><body>' +
+
+      '<div class="print-header">' +
+        '<div>' +
+          '<div class="print-title">出库作业单</div>' +
+          '<div class="print-sub">CK 仓储</div>' +
+        '</div>' +
+        '<div class="qr-box"><img width="120" height="120" src="'+qrDataUrl+'" alt="QR"/><div class="qr-label">'+esc(w.workorder_id)+'</div></div>' +
+      '</div>' +
+
+      '<div class="info-grid">' +
+        '<div><span class="label">作业单号：</span>'+esc(w.workorder_id)+'</div>' +
+        '<div><span class="label">状态：</span>'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</div>' +
+        '<div><span class="label">客户：</span>'+esc(w.customer_name)+(w.customer_name_kr?' ('+esc(w.customer_name_kr)+')':'')+'</div>' +
+        '<div><span class="label">计划出库日：</span>'+esc(w.plan_day)+'</div>' +
+        '<div><span class="label">出库模式：</span>'+esc(MODE_LABEL[w.outbound_mode]||w.outbound_mode)+'</div>' +
+        '<div><span class="label">汇总：</span>'+w.total_qty+(w.total_qty_unit||"")+' · '+w.total_weight_kg+'kg'+(w.total_cbm?' · '+w.total_cbm+'m³':'')+'</div>' +
+        (w.external_workorder_no ? '<div><span class="label">WMS工单号：</span>'+esc(w.external_workorder_no)+'</div>' : '') +
+        (w.instruction_text ? '<div style="grid-column:1/-1;"><span class="label">作业指示：</span>'+esc(w.instruction_text)+'</div>' : '') +
+        (w.remark ? '<div style="grid-column:1/-1;"><span class="label">备注：</span>'+esc(w.remark)+'</div>' : '') +
+      '</div>' +
+
+      '<table><thead>'+thead+'</thead><tbody>'+tbody+'</tbody>' +
+      '<tfoot><tr><td colspan="'+footColspan+'">合计</td><td>'+w.total_qty+'</td><td colspan="3"></td><td>'+w.total_weight_kg+'</td><td></td></tr></tfoot></table>' +
+
+      '<div class="sig-row">' +
+        '<div class="sig-item"><span class="label">制单人：</span>'+esc(w.created_by)+'<div class="sig-line"></div></div>' +
+        '<div class="sig-item"><span class="label">仓库确认：</span><div class="sig-line"></div></div>' +
+        '<div class="sig-item"><span class="label">客户签收：</span><div class="sig-line"></div></div>' +
+        '<div class="sig-item"><span class="label">日期：</span><div class="sig-line"></div></div>' +
+      '</div>' +
+
+      '<script>window.onload=function(){window.print();};</script>' +
+      '</body></html>';
+
+    var win = window.open("","_blank");
+    win.document.write(html);
+    win.document.close();
+  });
 }
 
 // ===== 初始化 =====
