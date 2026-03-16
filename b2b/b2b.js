@@ -1091,6 +1091,8 @@ function printWo(id){
     if(!res || !res.ok){ alert("加载失败"); return; }
     var w = res.workorder;
     var lines = res.lines || [];
+    var attachments = res.attachments || [];
+    var attCount = attachments.length;
     var isSku = (w.detail_mode || w.outbound_mode) !== "carton_based";
     var qrDataUrl = makeQrDataUrl(w.workorder_id);
 
@@ -1114,6 +1116,21 @@ function printWo(id){
     }
     var footColspan = isSku ? 3 : 2;
 
+    // 附件页 HTML（每张一页）
+    var attPagesHtml = "";
+    attachments.forEach(function(att, idx){
+      var url = attFileUrl(att.attachment_id);
+      attPagesHtml +=
+        '<div class="att-page">' +
+          '<div class="att-page-header">' +
+            '<span class="label">作业单号：</span>'+esc(w.workorder_id) +
+            '<span style="float:right;">附件 '+(idx+1)+'/'+attCount+'</span>' +
+          '</div>' +
+          '<div class="att-img-wrap"><img class="att-img" src="'+esc(url)+'" alt="附件'+(idx+1)+'"/></div>' +
+          '<div class="att-fname">'+esc(att.file_name)+'</div>' +
+        '</div>';
+    });
+
     var html = '<!doctype html><html><head><meta charset="utf-8"/>' +
       '<title>打印 - '+esc(w.workorder_id)+'</title>' +
       '<style>' +
@@ -1132,6 +1149,12 @@ function printWo(id){
       '.sig-row{display:flex;gap:40px;margin-top:30px;font-size:13px;}' +
       '.sig-item{flex:1;}' +
       '.sig-line{border-bottom:1px solid #333;height:30px;margin-top:4px;}' +
+      '.att-hint{margin-top:16px;font-size:12px;color:#666;text-align:center;border-top:1px dashed #ccc;padding-top:8px;}' +
+      '.att-page{page-break-before:always;text-align:center;}' +
+      '.att-page-header{font-size:14px;font-weight:700;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:16px;text-align:left;}' +
+      '.att-img-wrap{display:flex;justify-content:center;align-items:flex-start;}' +
+      '.att-img{max-width:170mm;max-height:230mm;object-fit:contain;}' +
+      '.att-fname{margin-top:10px;font-size:11px;color:#555;word-break:break-all;overflow-wrap:break-word;}' +
       '@media print{@page{size:A4;margin:15mm 20mm;} body{margin:0;}}' +
       '</style></head><body>' +
 
@@ -1166,7 +1189,22 @@ function printWo(id){
         '<div class="sig-item"><span class="label">日期：</span><div class="sig-line"></div></div>' +
       '</div>' +
 
-      '<script>window.onload=function(){window.print();};</script>' +
+      (attCount > 0 ? '<div class="att-hint">附件共 '+attCount+' 页，请翻页查看</div>' : '') +
+
+      attPagesHtml +
+
+      '<script>' +
+      'window.onload=function(){' +
+        'var imgs=document.querySelectorAll("img.att-img");' +
+        'if(!imgs.length){window.print();return;}' +
+        'var loaded=0,total=imgs.length;' +
+        'function check(){loaded++;if(loaded>=total)window.print();}' +
+        'for(var i=0;i<total;i++){' +
+          'if(imgs[i].complete){check();}' +
+          'else{imgs[i].onload=check;imgs[i].onerror=check;}' +
+        '}' +
+      '};' +
+      '</script>' +
       '</body></html>';
 
     var win = window.open("","_blank");
