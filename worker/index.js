@@ -184,6 +184,10 @@ async function readBody(request) {
   const method = request.method.toUpperCase();
   if (method === "GET") return {};
   const ct = request.headers.get("content-type") || "";
+  // multipart/form-data — 用于附件上传，返回特殊标记让调用方用 request 原始 formData
+  if (ct.includes("multipart/form-data")) {
+    return { _multipart: true };
+  }
   if (ct.includes("application/json")) {
     return await request.json().catch(() => ({}));
   }
@@ -474,6 +478,23 @@ export default {
           await env.DB.prepare(`UPDATE b2b_workorders SET outbound_mode = '' WHERE outbound_mode IN ('sku_based','carton_based')`).run();
 
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v4_b2b_wo_3modes', ?)`).bind(Date.now()).run();
+        }
+
+        // --- v5: B2B 作业单附件表 ---
+        const m5 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v5_b2b_attachments'`).first();
+        if (!m5) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_workorder_attachments (
+            attachment_id TEXT PRIMARY KEY,
+            workorder_id TEXT NOT NULL,
+            file_key TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            content_type TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            uploaded_by TEXT DEFAULT '',
+            created_at INTEGER NOT NULL
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v5_b2b_attachments', ?)`).bind(Date.now()).run();
         }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
@@ -2135,7 +2156,12 @@ export default {
         `SELECT * FROM b2b_workorder_lines WHERE workorder_id=? ORDER BY line_no ASC`
       ).bind(workorder_id).all();
 
-      return jsonpOrJson({ ok:true, workorder: wo, lines: linesRs.results || [] }, callback);
+      const attRs = await env.DB.prepare(
+        `SELECT attachment_id, workorder_id, file_name, file_size, content_type, sort_order, uploaded_by, created_at
+         FROM b2b_workorder_attachments WHERE workorder_id=? ORDER BY sort_order ASC`
+      ).bind(workorder_id).all();
+
+      return jsonpOrJson({ ok:true, workorder: wo, lines: linesRs.results || [], attachments: attRs.results || [] }, callback);
     }
 
     // ===== B2B 出库作业单编辑（仅 draft 状态，原子 batch） =====
@@ -2259,6 +2285,139 @@ export default {
       ).bind(status, workorder_id).run();
 
       return jsonpOrJson({ ok:true, workorder_id, status }, callback);
+    }
+
+    // ===== B2B 附件上传（multipart/form-data） =====
+    if (action === "b2b_attachment_upload") {
+      // multipart 请求需要重新解析 formData
+      const formData = await request.formData().catch(() => null);
+      if (!formData) return jsonpOrJson({ ok:false, error:"invalid multipart body" }, callback);
+
+      const k = formData.get("k") || "";
+      const pAuth = { k };
+      if (!isAdmin_(pAuth, env) && !isView_(pAuth, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+
+      const workorder_id = String(formData.get("workorder_id") || "").trim();
+      const uploaded_by = String(formData.get("uploaded_by") || "").trim();
+      const file = formData.get("file");
+
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+      if (!file || !file.size) return jsonpOrJson({ ok:false, error:"missing file" }, callback);
+
+      // 校验作业单存在 + 状态
+      const wo = await env.DB.prepare(`SELECT workorder_id, status FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!wo) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+      if (wo.status !== "draft" && wo.status !== "issued")
+        return jsonpOrJson({ ok:false, error:"当前状态不允许上传附件（仅草稿/已下发）" }, callback);
+
+      // 校验文件格式
+      const ALLOWED_TYPES = { "image/jpeg":".jpg", "image/png":".png", "image/webp":".webp" };
+      const ct = file.type || "";
+      if (!ALLOWED_TYPES[ct])
+        return jsonpOrJson({ ok:false, error:"不支持的文件格式，仅允许 jpg/png/webp" }, callback);
+
+      // 校验文件大小（5MB）
+      if (file.size > 5 * 1024 * 1024)
+        return jsonpOrJson({ ok:false, error:"文件过大，单张上限 5MB" }, callback);
+
+      // 校验附件数量上限（后端为准）
+      const countRs = await env.DB.prepare(
+        `SELECT COUNT(*) as cnt FROM b2b_workorder_attachments WHERE workorder_id=?`
+      ).bind(workorder_id).first();
+      if (countRs && countRs.cnt >= 3)
+        return jsonpOrJson({ ok:false, error:"已达上限（每张作业单最多 3 张附件）" }, callback);
+
+      // 生成 attachment_id
+      const shortRand = Math.random().toString(16).slice(2, 6);
+      const attachment_id = "ATT-" + workorder_id + "-" + now + "-" + shortRand;
+      const ext = ALLOWED_TYPES[ct];
+      const file_key = "b2b-att/" + workorder_id + "/" + attachment_id + ext;
+
+      // sort_order
+      const maxSort = await env.DB.prepare(
+        `SELECT MAX(sort_order) as mx FROM b2b_workorder_attachments WHERE workorder_id=?`
+      ).bind(workorder_id).first();
+      const sort_order = (maxSort && maxSort.mx != null) ? maxSort.mx + 1 : 0;
+
+      // 写入 R2
+      const fileData = await file.arrayBuffer();
+      await env.R2_BUCKET.put(file_key, fileData, {
+        httpMetadata: { contentType: ct }
+      });
+
+      // 写入 D1（如果失败则回滚 R2）
+      try {
+        await env.DB.prepare(
+          `INSERT INTO b2b_workorder_attachments(attachment_id, workorder_id, file_key, file_name, file_size, content_type, sort_order, uploaded_by, created_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(attachment_id, workorder_id, file_key, file.name || "unnamed", file.size, ct, sort_order, uploaded_by, now).run();
+      } catch (dbErr) {
+        // D1 写入失败 → 立刻删除刚写入的 R2 对象，避免孤儿文件
+        await env.R2_BUCKET.delete(file_key).catch(() => {});
+        return jsonpOrJson({ ok:false, error:"元数据写入失败: " + String(dbErr) }, callback);
+      }
+
+      return jsonpOrJson({ ok:true, attachment_id, file_name: file.name || "unnamed" }, callback);
+    }
+
+    // ===== B2B 附件删除 =====
+    if (action === "b2b_attachment_delete") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const attachment_id = String(p.attachment_id || "").trim();
+      if (!attachment_id) return jsonpOrJson({ ok:false, error:"missing attachment_id" }, callback);
+
+      // 1. 先查 attachment 记录
+      const att = await env.DB.prepare(
+        `SELECT attachment_id, workorder_id, file_key FROM b2b_workorder_attachments WHERE attachment_id=?`
+      ).bind(attachment_id).first();
+      if (!att) return jsonpOrJson({ ok:false, error:"attachment not found" }, callback);
+
+      // 2. 校验作业单状态（仅草稿可删）
+      const wo = await env.DB.prepare(
+        `SELECT status FROM b2b_workorders WHERE workorder_id=?`
+      ).bind(att.workorder_id).first();
+      if (!wo || wo.status !== "draft")
+        return jsonpOrJson({ ok:false, error:"仅草稿状态允许删除附件" }, callback);
+
+      // 3. 先删 R2 对象
+      await env.R2_BUCKET.delete(att.file_key).catch(() => {});
+
+      // 4. 再删 D1 记录
+      await env.DB.prepare(
+        `DELETE FROM b2b_workorder_attachments WHERE attachment_id=?`
+      ).bind(attachment_id).run();
+
+      return jsonpOrJson({ ok:true }, callback);
+    }
+
+    // ===== B2B 附件文件读取（GET，用于 <img src>） =====
+    // 安全说明：第一版通过 URL query 传递口令 k，仅适用于内部试跑。
+    // 长期方案应改为签名 URL 或 cookie 认证。
+    if (action === "b2b_attachment_file") {
+      if (!isAdmin_(p, env) && !isView_(p, env))
+        return new Response("unauthorized", { status: 403, headers: CORS_HEADERS });
+
+      const attachment_id = String(p.id || p.attachment_id || "").trim();
+      if (!attachment_id)
+        return new Response("missing id", { status: 400, headers: CORS_HEADERS });
+
+      const att = await env.DB.prepare(
+        `SELECT file_key, content_type FROM b2b_workorder_attachments WHERE attachment_id=?`
+      ).bind(attachment_id).first();
+      if (!att)
+        return new Response("not found", { status: 404, headers: CORS_HEADERS });
+
+      const obj = await env.R2_BUCKET.get(att.file_key);
+      if (!obj)
+        return new Response("file not found in storage", { status: 404, headers: CORS_HEADERS });
+
+      return new Response(obj.body, {
+        headers: {
+          "Content-Type": att.content_type,
+          "Cache-Control": "private, max-age=3600",
+          ...CORS_HEADERS
+        }
+      });
     }
 
     return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);

@@ -11,6 +11,13 @@
     }
   ],
 
+  "r2_buckets": [
+    {
+      "binding": "R2_BUCKET",
+      "bucket_name": "ck-warehouse-attachments"
+    }
+  ],
+
   "durable_objects": {
     "bindings": [
       { "name": "LOCKS", "class_name": "LocksDO" }

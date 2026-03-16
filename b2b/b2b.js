@@ -775,10 +775,16 @@ function goWoDetail(id){
         ' <button onclick="printWo(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">打印</button>' +
       '</div>' +
 
+      // 附件区（动态渲染）
+      '<div id="att-section-wrap" class="no-print"></div>' +
+
       '<div style="font-size:14px;font-weight:700;margin:12px 0 6px;">明细 ('+lines.length+'行)</div>' +
       '<div style="overflow-x:auto;"><table class="line-table"><thead>'+lineHead+'</thead><tbody>'+lineRows+'</tbody>' +
       '<tfoot><tr style="font-weight:700;"><td colspan="'+(isSku?3:2)+'">合计</td><td>'+w.total_qty+'</td>' +
       '<td colspan="3"></td><td>'+w.total_weight_kg+'</td><td></td></tr></tfoot></table></div>';
+
+    // 渲染附件区
+    renderAttachmentSection(w.workorder_id, w.status, res.attachments || []);
   });
 }
 
@@ -796,6 +802,118 @@ function changeWoStatus(id, status){
       alert("状态更新失败: "+(res&&res.error||"unknown"));
     }
   });
+}
+
+// ===== 附件区 =====
+var ATT_MAX = 3;
+var ATT_ALLOWED = { "image/jpeg":1, "image/png":1, "image/webp":1 };
+var ATT_MAX_SIZE = 5 * 1024 * 1024; // 5MB
+var ATT_CAN_UPLOAD = { draft:1, issued:1 };
+var ATT_CAN_DELETE = { draft:1 };
+
+function attFileUrl(attachment_id){
+  return API_URL + "?action=b2b_attachment_file&id=" + encodeURIComponent(attachment_id) + "&k=" + encodeURIComponent(getKey());
+}
+
+function renderAttachmentSection(workorder_id, status, attachments){
+  var wrap = document.getElementById("att-section-wrap");
+  if(!wrap) return;
+
+  var canUpload = !!ATT_CAN_UPLOAD[status] && attachments.length < ATT_MAX;
+  var canDelete = !!ATT_CAN_DELETE[status];
+
+  var html = '<div class="att-section">';
+  html += '<div class="att-title">操作要求附件（' + attachments.length + '/' + ATT_MAX + ' 张）</div>';
+  html += '<div class="att-grid">';
+
+  attachments.forEach(function(att){
+    var url = attFileUrl(att.attachment_id);
+    var timeStr = new Date(att.created_at).toLocaleString();
+    html += '<div class="att-item">';
+    html += '<img class="att-thumb" src="'+esc(url)+'" onclick="showLightbox(\''+esc(url)+'\')" alt="'+esc(att.file_name)+'" />';
+    html += '<div class="att-fname" title="'+esc(att.file_name)+'">'+esc(att.file_name)+'</div>';
+    html += '<div class="att-time">'+esc(timeStr)+'</div>';
+    if(canDelete){
+      html += '<button class="att-del" onclick="deleteAttachment(\''+esc(att.attachment_id)+'\',\''+esc(workorder_id)+'\')">删除</button>';
+    }
+    html += '</div>';
+  });
+
+  if(canUpload){
+    html += '<div class="att-item">';
+    html += '<div class="att-upload-btn" onclick="document.getElementById(\'att-file-input\').click()">+ 上传图片</div>';
+    html += '<input type="file" id="att-file-input" accept="image/jpeg,image/png,image/webp" style="display:none;" ' +
+      'onchange="uploadAttachment(this,\''+esc(workorder_id)+'\')" />';
+    html += '</div>';
+  }
+
+  html += '</div>'; // att-grid
+  html += '<div id="att-msg" class="att-msg"></div>';
+  html += '</div>'; // att-section
+  wrap.innerHTML = html;
+}
+
+function uploadAttachment(input, workorder_id){
+  var msgEl = document.getElementById("att-msg");
+  if(msgEl) msgEl.innerHTML = "";
+  if(!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  input.value = ""; // 重置允许重复选同一文件
+
+  // 前端格式校验
+  if(!ATT_ALLOWED[file.type]){
+    if(msgEl) msgEl.innerHTML = '<span class="bad">不支持的格式，仅允许 jpg/png/webp</span>';
+    return;
+  }
+  // 前端大小校验
+  if(file.size > ATT_MAX_SIZE){
+    if(msgEl) msgEl.innerHTML = '<span class="bad">文件过大，单张上限 5MB</span>';
+    return;
+  }
+
+  if(msgEl) msgEl.innerHTML = '<span class="muted">上传中...</span>';
+
+  var fd = new FormData();
+  fd.append("file", file);
+  fd.append("workorder_id", workorder_id);
+  fd.append("uploaded_by", "");
+  fd.append("k", getKey());
+
+  fetch(API_URL + "?action=b2b_attachment_upload", {
+    method: "POST",
+    body: fd
+  }).then(function(r){ return r.json(); }).then(function(res){
+    if(res && res.ok){
+      // 刷新附件区
+      goWoDetail(workorder_id);
+    } else {
+      if(msgEl) msgEl.innerHTML = '<span class="bad">上传失败: '+esc(res&&res.error||"unknown")+'</span>';
+    }
+  }).catch(function(err){
+    if(msgEl) msgEl.innerHTML = '<span class="bad">网络错误: '+esc(String(err))+'</span>';
+  });
+}
+
+function deleteAttachment(attachment_id, workorder_id){
+  if(!confirm("确认删除此附件？删除后不可恢复。")) return;
+  fetchApi({ action:"b2b_attachment_delete", attachment_id:attachment_id }).then(function(res){
+    if(res && res.ok){
+      goWoDetail(workorder_id);
+    } else {
+      alert("删除失败: " + (res&&res.error||"unknown"));
+    }
+  });
+}
+
+function showLightbox(url){
+  var overlay = document.createElement("div");
+  overlay.className = "lightbox-overlay";
+  overlay.onclick = function(){ document.body.removeChild(overlay); };
+  var img = document.createElement("img");
+  img.src = url;
+  img.onclick = function(e){ e.stopPropagation(); };
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
 }
 
 // ===== 模板下载 =====
