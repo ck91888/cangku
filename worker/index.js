@@ -397,6 +397,69 @@ export default {
           // 迁移完整成功后才写标记
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v2_backfill_corr_sessions', ?)`).bind(Date.now()).run();
         }
+
+        // --- v3: B2B 计划与作业单表 ---
+        const m3 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v3_b2b_tables'`).first();
+        if (!m3) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_inbound_plans(
+            plan_id TEXT PRIMARY KEY,
+            plan_day TEXT NOT NULL,
+            customer_name TEXT NOT NULL,
+            biz_type TEXT NOT NULL DEFAULT 'other',
+            goods_summary TEXT NOT NULL DEFAULT '',
+            expected_arrival_time TEXT DEFAULT '',
+            purpose_text TEXT DEFAULT '',
+            remark TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            status_updated_by TEXT DEFAULT '',
+            status_updated_at INTEGER DEFAULT 0,
+            created_by TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL DEFAULT 0
+          )`).run();
+
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_workorders(
+            workorder_id TEXT PRIMARY KEY,
+            external_workorder_no TEXT DEFAULT '',
+            outbound_mode TEXT NOT NULL DEFAULT 'sku_based',
+            status TEXT NOT NULL DEFAULT 'draft',
+            customer_name TEXT NOT NULL DEFAULT '',
+            customer_name_kr TEXT DEFAULT '',
+            plan_day TEXT NOT NULL,
+            planned_start_at TEXT DEFAULT '',
+            planned_end_at TEXT DEFAULT '',
+            total_qty REAL DEFAULT 0,
+            total_qty_unit TEXT DEFAULT '',
+            total_weight_kg REAL DEFAULT 0,
+            total_cbm REAL DEFAULT 0,
+            instruction_text TEXT DEFAULT '',
+            remark TEXT DEFAULT '',
+            created_by TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL DEFAULT 0,
+            issued_at INTEGER DEFAULT 0,
+            completed_at INTEGER DEFAULT 0,
+            cancelled_at INTEGER DEFAULT 0
+          )`).run();
+
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_workorder_lines(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workorder_id TEXT NOT NULL,
+            line_no INTEGER NOT NULL DEFAULT 0,
+            line_type TEXT NOT NULL DEFAULT 'sku',
+            sku_code TEXT DEFAULT '',
+            product_name TEXT DEFAULT '',
+            carton_no TEXT DEFAULT '',
+            qty REAL NOT NULL DEFAULT 0,
+            length_cm REAL DEFAULT 0,
+            width_cm REAL DEFAULT 0,
+            height_cm REAL DEFAULT 0,
+            weight_kg REAL DEFAULT 0,
+            remark TEXT DEFAULT ''
+          )`).run();
+
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_b2b_wol_woid ON b2b_workorder_lines(workorder_id)`).run();
+
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v3_b2b_tables', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -1830,6 +1893,222 @@ export default {
       } catch (e) {
         return jsonpOrJson({ ok:false, error:"admin_refresh_daily failed: " + String(e && e.message || e) }, callback);
       }
+    }
+
+    // ===== B2B 入库计划 =====
+    if (action === "b2b_plan_create") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const plan_day = String(p.plan_day || "").trim();
+      const customer_name = String(p.customer_name || "").trim();
+      const biz_type = String(p.biz_type || "other").trim();
+      const goods_summary = String(p.goods_summary || "").trim();
+      const expected_arrival_time = String(p.expected_arrival_time || "").trim();
+      const purpose_text = String(p.purpose_text || "").trim();
+      const remark = String(p.remark || "").trim();
+      const created_by = String(p.created_by || "").trim();
+
+      if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
+      if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
+      if (!goods_summary) return jsonpOrJson({ ok:false, error:"missing goods_summary" }, callback);
+
+      // 生成 plan_id：IP-YYMMDD-NNN（后端原子生成，避免撞号）
+      const dayTag = plan_day.slice(2).replace(/-/g, ""); // "260316"
+      const maxRow = await env.DB.prepare(
+        `SELECT plan_id FROM b2b_inbound_plans WHERE plan_id LIKE ? ORDER BY plan_id DESC LIMIT 1`
+      ).bind("IP-" + dayTag + "-%").first();
+      let seq = 1;
+      if (maxRow && maxRow.plan_id) {
+        const parts = maxRow.plan_id.split("-");
+        seq = (parseInt(parts[2], 10) || 0) + 1;
+      }
+      const plan_id = "IP-" + dayTag + "-" + String(seq).padStart(3, "0");
+
+      await env.DB.prepare(
+        `INSERT INTO b2b_inbound_plans(plan_id,plan_day,customer_name,biz_type,goods_summary,expected_arrival_time,purpose_text,remark,status,created_by,created_at)
+         VALUES(?,?,?,?,?,?,?,?,'pending',?,?)`
+      ).bind(plan_id, plan_day, customer_name, biz_type, goods_summary, expected_arrival_time, purpose_text, remark, created_by, now).run();
+
+      return jsonpOrJson({ ok:true, plan_id }, callback);
+    }
+
+    if (action === "b2b_plan_list") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_day = String(p.start_day || "").trim();
+      const end_day = String(p.end_day || "").trim();
+      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
+
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_inbound_plans WHERE plan_day >= ? AND plan_day <= ? ORDER BY plan_day ASC, created_at ASC`
+      ).bind(start_day, end_day).all();
+      return jsonpOrJson({ ok:true, plans: rs.results || [] }, callback);
+    }
+
+    if (action === "b2b_plan_update_status") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const plan_id = String(p.plan_id || "").trim();
+      const status = String(p.status || "").trim();
+      const updated_by = String(p.updated_by || "").trim();
+
+      if (!plan_id) return jsonpOrJson({ ok:false, error:"missing plan_id" }, callback);
+      const VALID = ["pending","arrived","processing","completed","abnormal","cancelled"];
+      if (!VALID.includes(status)) return jsonpOrJson({ ok:false, error:"invalid status, must be: " + VALID.join("/") }, callback);
+
+      const existing = await env.DB.prepare(`SELECT plan_id, status FROM b2b_inbound_plans WHERE plan_id=?`).bind(plan_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"plan_id not found" }, callback);
+
+      // cancelled 是终态，不可再改
+      if (existing.status === "cancelled") return jsonpOrJson({ ok:false, error:"plan already cancelled" }, callback);
+
+      await env.DB.prepare(
+        `UPDATE b2b_inbound_plans SET status=?, status_updated_by=?, status_updated_at=? WHERE plan_id=?`
+      ).bind(status, updated_by, now, plan_id).run();
+
+      return jsonpOrJson({ ok:true, plan_id, status }, callback);
+    }
+
+    // ===== B2B 出库作业单 =====
+    if (action === "b2b_wo_create") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const outbound_mode = String(p.outbound_mode || "").trim();
+      const customer_name = String(p.customer_name || "").trim();
+      const plan_day = String(p.plan_day || "").trim();
+      const customer_name_kr = String(p.customer_name_kr || "").trim();
+      const external_workorder_no = String(p.external_workorder_no || "").trim();
+      const planned_start_at = String(p.planned_start_at || "").trim();
+      const planned_end_at = String(p.planned_end_at || "").trim();
+      const instruction_text = String(p.instruction_text || "").trim();
+      const remark = String(p.remark || "").trim();
+      const created_by = String(p.created_by || "").trim();
+      const lines = p.lines; // array of line objects
+
+      if (!outbound_mode || !["sku_based","carton_based"].includes(outbound_mode))
+        return jsonpOrJson({ ok:false, error:"invalid outbound_mode" }, callback);
+      if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
+      if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
+      if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
+
+      // 生成 workorder_id：WO-YYMMDD-NNN
+      const dayTag = plan_day.slice(2).replace(/-/g, "");
+      const maxRow = await env.DB.prepare(
+        `SELECT workorder_id FROM b2b_workorders WHERE workorder_id LIKE ? ORDER BY workorder_id DESC LIMIT 1`
+      ).bind("WO-" + dayTag + "-%").first();
+      let seq = 1;
+      if (maxRow && maxRow.workorder_id) {
+        const parts = maxRow.workorder_id.split("-");
+        seq = (parseInt(parts[2], 10) || 0) + 1;
+      }
+      const workorder_id = "WO-" + dayTag + "-" + String(seq).padStart(3, "0");
+
+      // 汇总明细
+      let total_qty = 0, total_weight_kg = 0, total_cbm = 0;
+      const line_type = outbound_mode === "carton_based" ? "carton" : "sku";
+      const total_qty_unit = outbound_mode === "carton_based" ? "箱" : "件";
+
+      for (let i = 0; i < lines.length; i++) {
+        const ln = lines[i];
+        const qty = Number(ln.qty || 0);
+        const w = Number(ln.weight_kg || 0);
+        const l = Number(ln.length_cm || 0);
+        const wd = Number(ln.width_cm || 0);
+        const h = Number(ln.height_cm || 0);
+        total_qty += qty;
+        total_weight_kg += w;
+        if (l > 0 && wd > 0 && h > 0) total_cbm += (l * wd * h) / 1000000;
+
+        await env.DB.prepare(
+          `INSERT INTO b2b_workorder_lines(workorder_id,line_no,line_type,sku_code,product_name,carton_no,qty,length_cm,width_cm,height_cm,weight_kg,remark)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(
+          workorder_id, i + 1, line_type,
+          String(ln.sku_code || ""), String(ln.product_name || ""), String(ln.carton_no || ""),
+          qty, l, wd, h, w, String(ln.remark || "")
+        ).run();
+      }
+
+      total_cbm = Math.round(total_cbm * 1000) / 1000;
+      total_weight_kg = Math.round(total_weight_kg * 1000) / 1000;
+
+      await env.DB.prepare(
+        `INSERT INTO b2b_workorders(workorder_id,external_workorder_no,outbound_mode,status,customer_name,customer_name_kr,plan_day,planned_start_at,planned_end_at,total_qty,total_qty_unit,total_weight_kg,total_cbm,instruction_text,remark,created_by,created_at)
+         VALUES(?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(
+        workorder_id, external_workorder_no, outbound_mode, customer_name, customer_name_kr,
+        plan_day, planned_start_at, planned_end_at,
+        total_qty, total_qty_unit, total_weight_kg, total_cbm,
+        instruction_text, remark, created_by, now
+      ).run();
+
+      return jsonpOrJson({ ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm }, callback);
+    }
+
+    if (action === "b2b_wo_list") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_day = String(p.start_day || "").trim();
+      const end_day = String(p.end_day || "").trim();
+      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
+
+      let where = "WHERE plan_day >= ? AND plan_day <= ?";
+      const binds = [start_day, end_day];
+      const statusFilter = String(p.status || "").trim();
+      if (statusFilter) { where += " AND status=?"; binds.push(statusFilter); }
+
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_workorders ${where} ORDER BY plan_day ASC, created_at ASC`
+      ).bind(...binds).all();
+      return jsonpOrJson({ ok:true, workorders: rs.results || [] }, callback);
+    }
+
+    if (action === "b2b_wo_detail") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const workorder_id = String(p.workorder_id || "").trim();
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+
+      const wo = await env.DB.prepare(`SELECT * FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!wo) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+
+      const linesRs = await env.DB.prepare(
+        `SELECT * FROM b2b_workorder_lines WHERE workorder_id=? ORDER BY line_no ASC`
+      ).bind(workorder_id).all();
+
+      return jsonpOrJson({ ok:true, workorder: wo, lines: linesRs.results || [] }, callback);
+    }
+
+    if (action === "b2b_wo_update_status") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const workorder_id = String(p.workorder_id || "").trim();
+      const status = String(p.status || "").trim();
+      const updated_by = String(p.updated_by || "").trim();
+
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+      const VALID = ["draft","issued","working","completed","cancelled"];
+      if (!VALID.includes(status)) return jsonpOrJson({ ok:false, error:"invalid status" }, callback);
+
+      const existing = await env.DB.prepare(`SELECT workorder_id, status FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+
+      // 状态流转校验
+      const TRANSITIONS = {
+        "draft": ["issued", "cancelled"],
+        "issued": ["working", "cancelled"],
+        "working": ["completed"],
+        "completed": [],
+        "cancelled": []
+      };
+      const allowed = TRANSITIONS[existing.status] || [];
+      if (!allowed.includes(status))
+        return jsonpOrJson({ ok:false, error:"cannot change from " + existing.status + " to " + status }, callback);
+
+      // 写入状态 + 对应时间戳
+      let tsCol = "";
+      if (status === "issued") tsCol = ", issued_at=" + now;
+      else if (status === "completed") tsCol = ", completed_at=" + now;
+      else if (status === "cancelled") tsCol = ", cancelled_at=" + now;
+
+      await env.DB.prepare(
+        `UPDATE b2b_workorders SET status=?${tsCol} WHERE workorder_id=?`
+      ).bind(status, workorder_id).run();
+
+      return jsonpOrJson({ ok:true, workorder_id, status }, callback);
     }
 
     return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);
