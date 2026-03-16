@@ -1,0 +1,186 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>B2B 计划与作业单</title>
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    body{max-width:1000px;margin:16px auto;}
+    .quadrant{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
+    @media(max-width:700px){.quadrant{grid-template-columns:1fr;}}
+    .q-card{border:1px solid #ddd;border-radius:14px;padding:12px;background:#fff;min-height:120px;}
+    .q-title{font-size:15px;font-weight:800;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
+    .q-title .count{font-size:12px;color:#666;font-weight:400;}
+    .q-empty{color:#999;font-size:13px;padding:10px 0;}
+    .plan-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;}
+    .plan-row:last-child{border-bottom:none;}
+    .plan-row .meta{color:#666;font-size:12px;margin-top:2px;}
+    .st{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;color:#fff;margin-right:4px;}
+    .st-pending{background:#999;} .st-arrived{background:#3498db;} .st-processing{background:#e67e22;}
+    .st-completed{background:#27ae60;} .st-abnormal{background:#e74c3c;} .st-cancelled{background:#bbb;}
+    .st-draft{background:#999;} .st-issued{background:#3498db;} .st-working{background:#e67e22;}
+    .status-btns{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;}
+    .status-btns button{padding:4px 10px;font-size:11px;margin:0;width:auto;min-width:0;border-radius:8px;}
+    .wo-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;cursor:pointer;}
+    .wo-row:last-child{border-bottom:none;}
+    .wo-row:hover{background:#f9f9f9;}
+    .wo-row .meta{color:#666;font-size:12px;margin-top:2px;}
+    .form-group{margin-bottom:12px;}
+    .form-group label{display:block;font-size:13px;font-weight:700;margin-bottom:4px;}
+    .form-group select,.form-group input,.form-group textarea{width:100%;box-sizing:border-box;}
+    .line-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}
+    .line-table th,.line-table td{border:1px solid #ddd;padding:6px 8px;text-align:left;}
+    .line-table th{background:#f5f5f5;font-weight:700;}
+    .line-table input{padding:4px;font-size:13px;width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:4px;}
+    .topnav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+    .topnav button{width:auto;min-width:0;padding:10px 16px;}
+    .detail-field{margin-bottom:6px;font-size:13px;}
+    .detail-field b{font-weight:700;}
+    @media print{.no-print{display:none !important;} body{margin:0;}}
+  </style>
+</head>
+<body>
+
+<div class="header no-print">
+  <div>
+    <div class="title">B2B 计划与作业单</div>
+    <div class="subtitle">入库计划 · 出库作业单 · 制单管理</div>
+  </div>
+  <div class="pill" id="todayPill">--</div>
+</div>
+
+<!-- 登录 -->
+<div id="v-login" class="card">
+  <div style="font-size:16px;font-weight:700;margin-bottom:8px;">请输入口令</div>
+  <div class="muted" style="margin-bottom:10px;">输入口令后可查看计划、新建作业单、更新状态。</div>
+  <div class="row">
+    <div><input id="loginKey" type="password" placeholder="口令" /></div>
+    <div style="display:flex;align-items:flex-end;">
+      <button class="primary" style="width:auto;min-width:120px;" onclick="doLogin()">进入</button>
+    </div>
+  </div>
+  <div id="loginErr" class="bad" style="font-size:13px;margin-top:6px;"></div>
+</div>
+
+<!-- 主内容（登录后显示） -->
+<div id="v-main" style="display:none;">
+
+  <!-- 导航 -->
+  <div class="topnav no-print">
+    <button class="primary" onclick="goHome()">首页</button>
+    <button onclick="goView('plan_create')">+ 入库计划</button>
+    <button onclick="goView('wo_create')">+ 出库作业单</button>
+    <button onclick="goView('wo_list')">作业单列表</button>
+    <button style="margin-left:auto;" onclick="doLogout()">退出</button>
+  </div>
+
+  <!-- 首页 -->
+  <div id="v-home">
+    <div class="quadrant">
+      <div class="q-card">
+        <div class="q-title">📥 今日入库计划 <span class="count" id="ip-today-count"></span></div>
+        <div id="ip-today-list"><div class="q-empty">加载中...</div></div>
+      </div>
+      <div class="q-card">
+        <div class="q-title">📥 明日入库计划 <span class="count" id="ip-tmr-count"></span></div>
+        <div id="ip-tmr-list"><div class="q-empty">加载中...</div></div>
+      </div>
+      <div class="q-card">
+        <div class="q-title">📦 今日出库作业单 <span class="count" id="wo-today-count"></span></div>
+        <div id="wo-today-list"><div class="q-empty">加载中...</div></div>
+      </div>
+      <div class="q-card">
+        <div class="q-title">📦 明日出库作业单 <span class="count" id="wo-tmr-count"></span></div>
+        <div id="wo-tmr-list"><div class="q-empty">加载中...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新建入库计划 -->
+  <div id="v-plan_create" style="display:none;">
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">新建入库计划</div>
+      <div class="form-group"><label>计划到货日</label><input id="pc-day" type="date" /></div>
+      <div class="form-group"><label>客户名</label><input id="pc-customer" placeholder="客户名称" /></div>
+      <div class="form-group">
+        <label>业务类型</label>
+        <select id="pc-biz">
+          <option value="b2c_inbound">B2C 入库</option>
+          <option value="b2b_inbound">B2B 入库</option>
+          <option value="direct_transfer">直接转发</option>
+          <option value="other">其他</option>
+        </select>
+      </div>
+      <div class="form-group"><label>货物摘要</label><input id="pc-summary" placeholder="如：服装 200箱" /></div>
+      <div class="form-group"><label>预计到达时间</label><input id="pc-arrival" placeholder="如：上午 / 14:00（选填）" /></div>
+      <div class="form-group"><label>用途说明</label><input id="pc-purpose" placeholder="如：入库上架 / 直接转发至XX（选填）" /></div>
+      <div class="form-group"><label>备注</label><textarea id="pc-remark" rows="2" placeholder="选填"></textarea></div>
+      <div class="form-group"><label>创建人</label><input id="pc-creator" placeholder="你的名字" /></div>
+      <button class="primary" onclick="submitPlan()">保存</button>
+      <div id="pc-result" style="margin-top:8px;font-size:13px;"></div>
+    </div>
+  </div>
+
+  <!-- 新建出库作业单 -->
+  <div id="v-wo_create" style="display:none;">
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">新建出库作业单</div>
+      <div class="row">
+        <div class="form-group"><label>出库模式</label>
+          <select id="wc-mode" onchange="wcModeChanged()">
+            <option value="sku_based">按 SKU / 产品</option>
+            <option value="carton_based">按 箱</option>
+          </select>
+        </div>
+        <div class="form-group"><label>计划出库日</label><input id="wc-day" type="date" /></div>
+      </div>
+      <div class="row">
+        <div class="form-group"><label>客户名</label><input id="wc-customer" placeholder="客户名称" /></div>
+        <div class="form-group"><label>客户韩文名（选填）</label><input id="wc-customer-kr" placeholder="한국어 이름" /></div>
+      </div>
+      <div class="form-group"><label>WMS 工单号（选填）</label><input id="wc-ext-no" placeholder="WMS 系统工单号" /></div>
+      <div class="form-group"><label>作业指示（选填）</label><textarea id="wc-instr" rows="2" placeholder="如：需要打托 / 轻拿轻放"></textarea></div>
+      <div class="form-group"><label>备注（选填）</label><textarea id="wc-remark" rows="2" placeholder=""></textarea></div>
+      <div class="form-group"><label>创建人</label><input id="wc-creator" placeholder="你的名字" /></div>
+
+      <div style="font-size:14px;font-weight:700;margin:12px 0 6px;">明细行</div>
+      <div style="overflow-x:auto;">
+        <table class="line-table" id="wc-lines-table">
+          <thead id="wc-lines-head"></thead>
+          <tbody id="wc-lines-body"></tbody>
+        </table>
+      </div>
+      <button style="width:auto;padding:6px 14px;font-size:12px;margin-top:6px;" onclick="wcAddLine()">+ 添加一行</button>
+      <div id="wc-summary" class="muted" style="margin-top:8px;font-size:13px;"></div>
+
+      <button class="primary" style="margin-top:12px;" onclick="submitWo()">保存（草稿）</button>
+      <div id="wc-result" style="margin-top:8px;font-size:13px;"></div>
+    </div>
+  </div>
+
+  <!-- 作业单列表 -->
+  <div id="v-wo_list" style="display:none;">
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">出库作业单列表</div>
+      <div class="row">
+        <div class="form-group"><label>开始日期</label><input id="wl-start" type="date" /></div>
+        <div class="form-group"><label>结束日期</label><input id="wl-end" type="date" /></div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="primary" style="width:auto;min-width:80px;" onclick="loadWoList()">查询</button>
+        </div>
+      </div>
+      <div id="wl-result" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <!-- 作业单详情 -->
+  <div id="v-wo_detail" style="display:none;">
+    <div class="card" id="wo-detail-card"></div>
+  </div>
+
+</div><!-- /v-main -->
+
+<script src="./b2b.js"></script>
+</body>
+</html>
