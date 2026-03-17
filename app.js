@@ -5296,7 +5296,7 @@ function dfRenderTable_(features){
 var _scCurrentBatch = null; // { batch_id, batch_name, status, ... }
 var _scBusy = false;        // 防连击
 
-function scBackToMenu(){ go("b2b_menu"); }
+function scBackToMenu(){ _scClearBatch(); back(); }
 
 function initScanCheckPage(){
   _scCurrentBatch = null;
@@ -5511,6 +5511,8 @@ function scExitScan(){
   document.getElementById("scSelectArea").style.display = "";
   document.getElementById("scWorkArea").style.display = "none";
   document.getElementById("scBarcodeInput").disabled = false;
+  document.getElementById("scLastResult").style.display = "none";
+  // 回到选择区，不离开页面
   initScanCheckPage();
 }
 
