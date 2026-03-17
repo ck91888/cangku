@@ -155,6 +155,7 @@ function renderPages(){
   if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); refreshUI(); }
   if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="b2b_field_op"){ restoreState(); renderActiveLists(); renderB2bFieldOpUI(); refreshUI(); }
   if(cur==="b2c_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="warehouse_cleanup"){ restoreState(); renderActiveLists(); refreshUI(); }
 
@@ -260,6 +261,7 @@ var PAGE_CTX = {
   "b2b_workorder": { biz:"B2B", task:"B2B工单操作" },
   "b2b_outbound":  { biz:"B2B", task:"B2B出库" },
   "b2b_inventory": { biz:"B2B", task:"B2B盘点" },
+  "b2b_field_op":  { biz:"B2B", task:"B2B现场记录" },
 
   // ===== 仓库整理 =====
   "warehouse_cleanup": { biz:"仓库", task:"仓库整理" }
@@ -286,6 +288,7 @@ var TASK_DISPLAY = {
   "B2B/B2B工单操作":    "B2B 工单 / B2B 작업지시",
   "B2B/B2B出库":        "B2B 出库 / B2B 출고",
   "B2B/B2B盘点":        "B2B 盘点 / B2B 재고조사",
+  "B2B/B2B现场记录":    "B2B 现场记录 / B2B 현장작업",
   "仓库/仓库整理": "仓库整理 / 창고정리",
 };
 function taskDisplayLabel(biz, task){
@@ -409,6 +412,7 @@ var activeB2bTally = new Set();
 var activeB2bWorkorder = new Set();
 var activeB2bOutbound = new Set();
 var activeB2bInventory = new Set();
+var activeB2bFieldOp = new Set();
 var activeB2cInventory = new Set();
 var activeWarehouseCleanup = new Set();
 var activeImportPickup = new Set();
@@ -589,6 +593,7 @@ function keyActiveB2bTally(){ return "activeB2bTally_" + (currentSessionId || "N
 function keyActiveB2bWorkorder(){ return "activeB2bWorkorder_" + (currentSessionId || "NA"); }
 function keyActiveB2bOutbound(){ return "activeB2bOutbound_" + (currentSessionId || "NA"); }
 function keyActiveB2bInventory(){ return "activeB2bInventory_" + (currentSessionId || "NA"); }
+function keyActiveB2bFieldOp(){ return "activeB2bFieldOp_" + (currentSessionId || "NA"); }
 function keyActiveB2cInventory(){ return "activeB2cInventory_" + (currentSessionId || "NA"); }
 function keyActiveWarehouseCleanup(){ return "activeWarehouseCleanup_" + (currentSessionId || "NA"); }
 function keyActiveImportPickup(){ return "activeImportPickup_" + (currentSessionId || "NA"); }
@@ -629,6 +634,7 @@ var TASK_REGISTRY = [
   { task:"B2B工单操作",  get:function(){return activeB2bWorkorder;},   set:function(s){activeB2bWorkorder=s;},   countId:"b2bWorkorderCount",      listId:"b2bWorkorderActiveList",      keyFn:keyActiveB2bWorkorder,  emptyMsg:"当前没有人在B2B工单操作作业中（无需退出）。" },
   { task:"B2B出库",      get:function(){return activeB2bOutbound;},    set:function(s){activeB2bOutbound=s;},    countId:"b2bOutboundCount",       listId:"b2bOutboundActiveList",       keyFn:keyActiveB2bOutbound,   emptyMsg:"当前没有人在B2B出库作业中（无需退出）。" },
   { task:"B2B盘点",      get:function(){return activeB2bInventory;},   set:function(s){activeB2bInventory=s;},   countId:"b2bInventoryCount",      listId:"b2bInventoryActiveList",      keyFn:keyActiveB2bInventory,  emptyMsg:"当前没有人在B2B盘点作业中（无需退出）。" },
+  { task:"B2B现场记录",  get:function(){return activeB2bFieldOp;},    set:function(s){activeB2bFieldOp=s;},    countId:"b2bFieldOpCount",        listId:"b2bFieldOpActiveList",        keyFn:keyActiveB2bFieldOp,    emptyMsg:"当前没有人在B2B现场记录作业中（无需退出）。" },
   { task:"B2C盘点",      get:function(){return activeB2cInventory;},   set:function(s){activeB2cInventory=s;},   countId:"b2cInventoryCount",      listId:"b2cInventoryActiveList",      keyFn:keyActiveB2cInventory,  emptyMsg:"当前没有人在B2C盘点作业中（无需退出）。" },
   { task:"仓库整理",      get:function(){return activeWarehouseCleanup;},set:function(s){activeWarehouseCleanup=s;},countId:"warehouseCleanupCount",listId:"warehouseCleanupActiveList",  keyFn:keyActiveWarehouseCleanup, emptyMsg:"当前没有人在仓库整理作业中（无需退出）。" },
   { task:"取/送货",        get:function(){return activeImportPickup;},   set:function(s){activeImportPickup=s;},   countId:"importPickupCount",      listId:"importPickupActiveList",      keyFn:keyActiveImportPickup,  emptyMsg:"当前没有人在取/送货作业中（无需退出）。" },
@@ -1948,6 +1954,275 @@ function renderB2bTallyUI(){
 function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); }, renderB2bWorkorderUI); }
 async function endB2bWorkorder(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
+/** ===== B2B Field Op (现场记录) ===== */
+var FO_OP_LABELS = { box_op:"箱子操作", palletize:"打托", bulk_in_out:"整进整出", unload:"卸货", other:"其他" };
+var _foSelectedRecord = null;  // { record_id, operation_type, customer_name, source_plan_id, plan_day, goods_summary }
+var FO_LOCAL_KEY = "b2bFieldOpRecord";
+function keyFoRecord(){ return FO_LOCAL_KEY + "_" + (currentSessionId || "NA"); }
+function saveFoRecord(r){ localStorage.setItem(keyFoRecord(), JSON.stringify(r)); }
+function loadFoRecord(){ try{ return JSON.parse(localStorage.getItem(keyFoRecord())); }catch(e){ return null; } }
+function clearFoRecord(){ localStorage.removeItem(keyFoRecord()); }
+
+// 页面进入时渲染
+function renderB2bFieldOpUI(){
+  var hasSession = !!currentSessionId && CUR_CTX && CUR_CTX.task === "B2B现场记录";
+  var selArea = document.getElementById("foSelectionArea");
+  var workArea = document.getElementById("foWorkingArea");
+  if(!selArea || !workArea) return;
+
+  if(hasSession){
+    selArea.style.display = "none";
+    workArea.style.display = "";
+    // 从本地恢复 FO 信息
+    var r = _foSelectedRecord || loadFoRecord();
+    if(r){
+      _foSelectedRecord = r;
+      document.getElementById("foWorkingId").textContent = r.record_id + " · " + (FO_OP_LABELS[r.operation_type] || r.operation_type);
+      document.getElementById("foWorkingDetail").textContent =
+        (r.customer_name || "") +
+        (r.source_plan_id ? " · ← " + r.source_plan_id : "") +
+        (r.plan_day ? " · " + r.plan_day : "") +
+        (r.goods_summary ? " · " + r.goods_summary : "");
+    } else {
+      document.getElementById("foWorkingId").textContent = "(FO 信息不可用)";
+      document.getElementById("foWorkingDetail").textContent = "";
+    }
+  } else {
+    selArea.style.display = "";
+    workArea.style.display = "none";
+    _foSelectedRecord = null;
+    loadFoPlans();
+  }
+}
+
+// 加载入库计划下拉
+function loadFoPlans(){
+  var sel = document.getElementById("foPlanSelect");
+  if(!sel) return;
+  sel.innerHTML = '<option value="">加载中...</option>';
+  document.getElementById("foRecordArea").style.display = "none";
+  document.getElementById("foConfirmInfo").style.display = "none";
+  document.getElementById("foStartBtn").style.display = "none";
+
+  var today = kstToday_();
+  var d30ago = new Date(Date.now() + 9*3600*1000 - 30*24*3600*1000);
+  var start30 = d30ago.getUTCFullYear() + "-" + pad2_(d30ago.getUTCMonth()+1) + "-" + pad2_(d30ago.getUTCDate());
+
+  jsonp(LOCK_URL, { action:"b2b_plan_list", start_day:start30, end_day:today, k:getFoKey_() }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){
+      sel.innerHTML = '<option value="">加载失败</option>';
+      return;
+    }
+    var plans = (res.plans||[]).filter(function(p){ return p.status === "arrived" || p.status === "processing"; });
+    if(!plans.length){
+      sel.innerHTML = '<option value="">暂无 arrived/processing 的入库计划</option>';
+      return;
+    }
+    // 按日期倒序
+    plans.sort(function(a,b){ return a.plan_day > b.plan_day ? -1 : a.plan_day < b.plan_day ? 1 : 0; });
+    var html = '<option value="">请选择入库计划...</option>';
+    plans.forEach(function(p){
+      html += '<option value="'+esc(p.plan_id)+'" data-day="'+esc(p.plan_day)+'" data-customer="'+esc(p.customer_name)+'" data-summary="'+esc(p.goods_summary||"")+'">' +
+        esc(p.plan_id) + ' · ' + esc(p.customer_name) + ' · ' + esc(p.plan_day) + ' · ' + esc(p.goods_summary||"") + '</option>';
+    });
+    sel.innerHTML = html;
+  });
+}
+
+function getFoKey_(){ try{ return localStorage.getItem("b2b_plan_k_v1")||""; }catch(e){ return ""; } }
+function kstToday_(){ var d = new Date(Date.now() + 9*3600*1000); return d.getUTCFullYear() + "-" + pad2_(d.getUTCMonth()+1) + "-" + pad2_(d.getUTCDate()); }
+function pad2_(n){ return String(n).padStart(2,"0"); }
+
+// 选择入库计划后，加载该计划下的 FO 记录
+function onFoPlanSelected(){
+  var sel = document.getElementById("foPlanSelect");
+  var planId = sel.value;
+  document.getElementById("foConfirmInfo").style.display = "none";
+  document.getElementById("foStartBtn").style.display = "none";
+  _foSelectedRecord = null;
+  if(!planId){
+    document.getElementById("foRecordArea").style.display = "none";
+    return;
+  }
+  document.getElementById("foRecordArea").style.display = "";
+  var recSel = document.getElementById("foRecordSelect");
+  recSel.innerHTML = '<option value="">加载中...</option>';
+
+  var opt = sel.options[sel.selectedIndex];
+  var planDay = opt.getAttribute("data-day") || "";
+  var customer = opt.getAttribute("data-customer") || "";
+  var summary = opt.getAttribute("data-summary") || "";
+
+  // 查 FO 记录：用该计划的 plan_day 范围查，然后 filter source_plan_id
+  jsonp(LOCK_URL, { action:"b2b_field_op_list", start_day:"2020-01-01", end_day:"2099-12-31", k:getFoKey_() }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){
+      recSel.innerHTML = '<option value="">加载失败</option>';
+      return;
+    }
+    var records = (res.records||[]).filter(function(r){
+      return r.source_plan_id === planId && (r.status === "draft" || r.status === "recording");
+    });
+    var html = '<option value="">请选择 (共'+records.length+'条)...</option>';
+    records.forEach(function(r){
+      html += '<option value="'+esc(r.record_id)+'" data-json=\''+esc(JSON.stringify(r))+'\'>' +
+        esc(r.record_id) + ' · ' + esc(FO_OP_LABELS[r.operation_type]||r.operation_type) + ' · ' + esc(r.status==="draft"?"草稿":"记录中") + '</option>';
+    });
+    recSel.innerHTML = html;
+  });
+}
+
+// 选择 FO 记录后，显示确认信息
+function onFoRecordSelected(){
+  var sel = document.getElementById("foRecordSelect");
+  var opt = sel.options[sel.selectedIndex];
+  document.getElementById("foConfirmInfo").style.display = "none";
+  document.getElementById("foStartBtn").style.display = "none";
+  _foSelectedRecord = null;
+  if(!sel.value) return;
+
+  try{
+    var r = JSON.parse(opt.getAttribute("data-json"));
+    _foSelectedRecord = r;
+    showFoConfirm(r);
+  }catch(e){}
+}
+
+function showFoConfirm(r){
+  document.getElementById("foConfirmId").textContent = r.record_id + " · " + (FO_OP_LABELS[r.operation_type]||r.operation_type);
+  document.getElementById("foConfirmDetail").textContent =
+    "客户: " + (r.customer_name||"") +
+    " | 来源: " + (r.source_plan_id||"独立新建") +
+    " | 日期: " + (r.plan_day||"") +
+    (r.goods_summary ? " | " + r.goods_summary : "");
+  document.getElementById("foConfirmInfo").style.display = "";
+  document.getElementById("foStartBtn").style.display = "";
+}
+
+// 快速新建 FO
+function foQuickCreate(){
+  var planSel = document.getElementById("foPlanSelect");
+  var planId = planSel.value;
+  if(!planId){ alert("请先选择入库计划"); return; }
+
+  var opt = planSel.options[planSel.selectedIndex];
+  var planDay = opt.getAttribute("data-day") || kstToday_();
+  var customer = opt.getAttribute("data-customer") || "";
+  var summary = opt.getAttribute("data-summary") || "";
+  var opType = document.getElementById("foQuickOpType").value;
+
+  var btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = "创建中..."; }
+
+  // Step 1: create FO as draft
+  jsonp(LOCK_URL, {
+    action:"b2b_field_op_create", k:getFoKey_(),
+    plan_day:planDay, customer_name:customer, goods_summary:summary,
+    operation_type:opType, source_plan_id:planId, created_by:getOperatorId()
+  }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){
+      alert("快速新建失败: " + (res&&res.error||"unknown"));
+      if(btn){ btn.disabled = false; btn.textContent = "快速新建"; }
+      return;
+    }
+    var recordId = res.record_id;
+
+    // Step 2: draft → recording
+    jsonp(LOCK_URL, {
+      action:"b2b_field_op_update", k:getFoKey_(),
+      record_id:recordId, sub:"status", status:"recording"
+    }, { skipBusy:true }).then(function(res2){
+      if(btn){ btn.disabled = false; btn.textContent = "快速新建"; }
+      if(!res2 || !res2.ok){
+        alert("快速新建成功（" + recordId + "）但状态切换失败: " + (res2&&res2.error||"unknown") + "\n不允许继续开工，请在 /b2b/ 页面手动处理。");
+        return;
+      }
+      // 成功：设置选中并显示确认
+      _foSelectedRecord = {
+        record_id:recordId, source_plan_id:planId, plan_day:planDay,
+        customer_name:customer, goods_summary:summary, operation_type:opType, status:"recording"
+      };
+      showFoConfirm(_foSelectedRecord);
+      setStatus("快速新建成功 ✅ " + recordId, true);
+    });
+  });
+}
+
+// 开始作业
+async function startB2bFieldOp(e){
+  if(!_foSelectedRecord || !_foSelectedRecord.record_id){
+    alert("请先选择或新建一条现场作业记录");
+    return;
+  }
+  if(!acquireBusy_()) return;
+  var btn = e && e.target ? e.target : null;
+  var origText = btn ? btn.textContent : "";
+  if(btn){ btn.disabled = true; btn.textContent = "处理中..."; }
+
+  try{
+    var r = _foSelectedRecord;
+
+    // Step 1: 如果 FO 当前是 draft，先切换到 recording
+    if(r.status === "draft"){
+      var statusRes = await jsonp(LOCK_URL, {
+        action:"b2b_field_op_update", k:getFoKey_(),
+        record_id:r.record_id, sub:"status", status:"recording"
+      }, { skipBusy:true });
+      if(!statusRes || !statusRes.ok){
+        throw new Error("FO状态切换失败: " + (statusRes&&statusRes.error||"unknown") + "\n不允许继续开工。");
+      }
+      r.status = "recording";
+    }
+
+    // Step 2: 创建 session + 写 start event
+    if(currentSessionId){
+      var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？");
+      if(!ok){ throw new Error("用户取消"); }
+      try{ await sessionCloseServer_(); }catch(e2){}
+      cleanupLocalSession_();
+    }
+
+    var newSid = makePickSessionId();
+    var evId = makeEventId({ event:"start", biz:"B2B", task:"B2B现场记录", wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id:evId, biz:"B2B", task:"B2B现场记录", pick_session_id:newSid }, true);
+    addRecent(evId);
+
+    currentSessionId = newSid;
+    CUR_CTX = { biz:"B2B", task:"B2B现场记录", page:"b2b_field_op" };
+    setSess_("B2B", "B2B现场记录", newSid);
+
+    // Step 3: 写 wave event — wave_id = FO-xxx（仅此一次）
+    var waveEvId = makeEventId({ event:"wave", biz:"B2B", task:"B2B现场记录", wave_id:r.record_id, badgeRaw:"" });
+    await submitEventSync_({ event:"wave", event_id:waveEvId, biz:"B2B", task:"B2B现场记录", pick_session_id:newSid, wave_id:r.record_id }, true);
+    addRecent(waveEvId);
+
+    // Step 4: 持久化 FO 信息到 localStorage
+    activeB2bFieldOp = new Set();
+    saveFoRecord(r);
+    persistState();
+    refreshUI();
+    renderB2bFieldOpUI();
+    setStatus("B2B现场记录开始 ✅ " + r.record_id + " 趟次: " + newSid, true);
+
+  }catch(err){
+    setStatus("开始失败 ❌ " + err, false);
+    if(String(err) !== "Error: 用户取消") alert(String(err));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = origText; }
+    releaseBusy_();
+  }
+}
+
+async function endB2bFieldOp(){
+  if(!acquireBusy_()) return;
+  try{
+    await endSessionGlobal_();
+    clearFoRecord();
+    _foSelectedRecord = null;
+  }finally{
+    releaseBusy_();
+  }
+}
+
 /** ===== 通用临时去卸货 / 返回原任务 ===== */
 
 // 根据当前 biz 决定目标卸货任务
@@ -2315,6 +2590,7 @@ async function returnFromTempUnload_(){
     // 刷新对应任务的扫码UI
     if(srcTask === "B2B工单操作") renderB2bWorkorderUI();
     if(srcTask === "B2B入库理货") renderB2bTallyUI();
+    if(srcTask === "B2B现场记录") renderB2bFieldOpUI();
     if(srcTask === "理货") renderInboundCountUI();
     if(srcTask === "批量出库") renderBulkOutUI();
     updateReturnButton_();

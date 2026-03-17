@@ -227,7 +227,7 @@ async function getSession(env, session) {
 }
 
 // ===== Task state (enforce "start before join") =====
-const REQUIRE_START_TASKS = new Set(["理货","拣货","换单","批量出库","B2B入库理货","B2B工单操作"]);
+const REQUIRE_START_TASKS = new Set(["理货","拣货","换单","批量出库","B2B入库理货","B2B工单操作","B2B现场记录"]);
 
 function requireStart_(task){
   return REQUIRE_START_TASKS.has(String(task||"").trim());
