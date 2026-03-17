@@ -530,6 +530,43 @@ export default {
           )`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v7_b2b_field_ops', ?)`).bind(Date.now()).run();
         }
+
+        // --- v8: 出库扫码核对三表 ---
+        const m8 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v8_b2b_scan_check'`).first();
+        if (!m8) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_scan_batches (
+            batch_id TEXT PRIMARY KEY,
+            check_day TEXT NOT NULL,
+            batch_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            total_barcodes INTEGER NOT NULL DEFAULT 0,
+            total_expected_boxes INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            closed_at INTEGER
+          )`).run();
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_scan_items (
+            item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            outbound_barcode TEXT NOT NULL,
+            expected_box_count INTEGER NOT NULL,
+            customer_name TEXT DEFAULT '',
+            goods_summary TEXT DEFAULT '',
+            scanned_count INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(batch_id, outbound_barcode)
+          )`).run();
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_scan_logs (
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            outbound_barcode TEXT NOT NULL,
+            is_planned INTEGER NOT NULL,
+            scanned_by TEXT NOT NULL,
+            scanned_at INTEGER NOT NULL,
+            undone INTEGER NOT NULL DEFAULT 0,
+            undone_at INTEGER
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v8_b2b_scan_check', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2615,6 +2652,280 @@ export default {
       }
 
       return jsonpOrJson({ ok:false, error:"invalid sub, must be: edit/status/bind" }, callback);
+    }
+
+    // ===== 出库扫码核对 =====
+
+    if (action === "b2b_scan_batch_create") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+
+      const check_day = String(p.check_day || "").trim();
+      const batch_name = String(p.batch_name || "").trim();
+      const created_by = String(p.created_by || "").trim();
+
+      if (!check_day || !/^\d{4}-\d{2}-\d{2}$/.test(check_day)) return jsonpOrJson({ ok:false, error:"invalid check_day" }, callback);
+      if (!batch_name) return jsonpOrJson({ ok:false, error:"missing batch_name" }, callback);
+
+      // items: JSON array of { outbound_barcode, expected_box_count, customer_name?, goods_summary? }
+      let items;
+      try {
+        items = typeof p.items === "string" ? JSON.parse(p.items) : p.items;
+      } catch(e) {
+        return jsonpOrJson({ ok:false, error:"invalid items JSON" }, callback);
+      }
+      if (!Array.isArray(items) || items.length === 0) return jsonpOrJson({ ok:false, error:"items must be non-empty array" }, callback);
+
+      // 校验每行 + 检查重复条码
+      const seenBarcodes = new Set();
+      let totalExpected = 0;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const bc = String(it.outbound_barcode || "").trim();
+        const cnt = parseInt(it.expected_box_count, 10);
+        if (!bc) return jsonpOrJson({ ok:false, error:"row " + (i+1) + ": missing outbound_barcode" }, callback);
+        if (!cnt || cnt <= 0) return jsonpOrJson({ ok:false, error:"row " + (i+1) + ": expected_box_count must be positive integer" }, callback);
+        if (seenBarcodes.has(bc)) return jsonpOrJson({ ok:false, error:"duplicate barcode: " + bc }, callback);
+        seenBarcodes.add(bc);
+        totalExpected += cnt;
+      }
+
+      // 生成 batch_id: SC-YYMMDD-NNN
+      const dayTag = check_day.slice(2).replace(/-/g, "");
+      const maxRow = await env.DB.prepare(
+        `SELECT batch_id FROM b2b_scan_batches WHERE batch_id LIKE ? ORDER BY batch_id DESC LIMIT 1`
+      ).bind("SC-" + dayTag + "-%").first();
+      let seq = 1;
+      if (maxRow && maxRow.batch_id) {
+        const parts = maxRow.batch_id.split("-");
+        seq = (parseInt(parts[2], 10) || 0) + 1;
+      }
+      const batch_id = "SC-" + dayTag + "-" + String(seq).padStart(3, "0");
+
+      // 批量写入：batch + items
+      const stmts = [];
+      stmts.push(env.DB.prepare(
+        `INSERT INTO b2b_scan_batches(batch_id,check_day,batch_name,status,total_barcodes,total_expected_boxes,created_by,created_at) VALUES(?,?,?,'open',?,?,?,?)`
+      ).bind(batch_id, check_day, batch_name, items.length, totalExpected, created_by, now));
+
+      for (const it of items) {
+        const bc = String(it.outbound_barcode || "").trim();
+        const cnt = parseInt(it.expected_box_count, 10);
+        const cust = String(it.customer_name || "").trim();
+        const summary = String(it.goods_summary || "").trim();
+        stmts.push(env.DB.prepare(
+          `INSERT INTO b2b_scan_items(batch_id,outbound_barcode,expected_box_count,customer_name,goods_summary,scanned_count) VALUES(?,?,?,?,?,0)`
+        ).bind(batch_id, bc, cnt, cust, summary));
+      }
+
+      try {
+        await env.DB.batch(stmts);
+      } catch(e) {
+        const msg = String(e && e.message || e);
+        if (msg.includes("UNIQUE")) return jsonpOrJson({ ok:false, error:"duplicate barcode in batch" }, callback);
+        return jsonpOrJson({ ok:false, error:"batch create failed: " + msg }, callback);
+      }
+
+      return jsonpOrJson({ ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected }, callback);
+    }
+
+    if (action === "b2b_scan_batch_list") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_day = String(p.start_day || "").trim();
+      const end_day = String(p.end_day || "").trim();
+      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
+
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_scan_batches WHERE check_day >= ? AND check_day <= ? ORDER BY check_day DESC, created_at DESC`
+      ).bind(start_day, end_day).all();
+      return jsonpOrJson({ ok:true, batches: rs.results || [] }, callback);
+    }
+
+    if (action === "b2b_scan_batch_detail") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const batch_id = String(p.batch_id || "").trim();
+      if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
+
+      const batch = await env.DB.prepare(`SELECT * FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
+      if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
+
+      const itemsRs = await env.DB.prepare(
+        `SELECT * FROM b2b_scan_items WHERE batch_id=? ORDER BY item_id ASC`
+      ).bind(batch_id).all();
+      const items = itemsRs.results || [];
+
+      // 计划外条码汇总
+      const unplannedRs = await env.DB.prepare(
+        `SELECT outbound_barcode, COUNT(*) as scan_times FROM b2b_scan_logs WHERE batch_id=? AND is_planned=0 AND undone=0 GROUP BY outbound_barcode ORDER BY scan_times DESC`
+      ).bind(batch_id).all();
+      const unplanned = unplannedRs.results || [];
+
+      // 进度
+      let doneBoxes = 0;
+      for (const it of items) {
+        doneBoxes += Math.min(it.scanned_count, it.expected_box_count);
+      }
+
+      return jsonpOrJson({
+        ok:true, batch, items, unplanned,
+        done_boxes: doneBoxes,
+        total_expected_boxes: batch.total_expected_boxes,
+        progress_percent: batch.total_expected_boxes > 0 ? Math.round(doneBoxes * 100 / batch.total_expected_boxes) : 0
+      }, callback);
+    }
+
+    if (action === "b2b_scan_batch_close") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const batch_id = String(p.batch_id || "").trim();
+      if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
+
+      const batch = await env.DB.prepare(`SELECT * FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
+      if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
+      if (batch.status !== "open") return jsonpOrJson({ ok:false, error:"batch is not open" }, callback);
+
+      // 统计异常情况
+      const itemsRs = await env.DB.prepare(`SELECT * FROM b2b_scan_items WHERE batch_id=?`).bind(batch_id).all();
+      const items = itemsRs.results || [];
+      let missingCount = 0, missingBoxes = 0, overCount = 0;
+      for (const it of items) {
+        if (it.scanned_count < it.expected_box_count) {
+          missingCount++;
+          missingBoxes += (it.expected_box_count - it.scanned_count);
+        }
+        if (it.scanned_count > it.expected_box_count) overCount++;
+      }
+      const unplannedRs = await env.DB.prepare(
+        `SELECT COUNT(DISTINCT outbound_barcode) as cnt FROM b2b_scan_logs WHERE batch_id=? AND is_planned=0 AND undone=0`
+      ).bind(batch_id).first();
+      const unplannedCount = unplannedRs ? unplannedRs.cnt : 0;
+
+      const confirm = String(p.confirm || "").trim();
+      if (confirm !== "true") {
+        // 返回统计，等前端二次确认
+        return jsonpOrJson({
+          ok:true, action:"confirm_needed",
+          missing_count: missingCount, missing_boxes: missingBoxes,
+          over_count: overCount, unplanned_count: unplannedCount
+        }, callback);
+      }
+
+      // 确认关闭
+      await env.DB.prepare(
+        `UPDATE b2b_scan_batches SET status='closed', closed_at=? WHERE batch_id=?`
+      ).bind(now, batch_id).run();
+
+      return jsonpOrJson({ ok:true, batch_id, status:"closed" }, callback);
+    }
+
+    if (action === "b2b_scan_do") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const batch_id = String(p.batch_id || "").trim();
+      const outbound_barcode = String(p.outbound_barcode || "").trim();
+      const scanned_by = String(p.scanned_by || "").trim();
+
+      if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
+      if (!outbound_barcode) return jsonpOrJson({ ok:false, error:"missing outbound_barcode" }, callback);
+
+      const batch = await env.DB.prepare(`SELECT status, total_expected_boxes FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
+      if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
+      if (batch.status !== "open") return jsonpOrJson({ ok:false, error:"batch is not open, cannot scan" }, callback);
+
+      // 查是否计划内
+      const item = await env.DB.prepare(
+        `SELECT item_id, expected_box_count, scanned_count FROM b2b_scan_items WHERE batch_id=? AND outbound_barcode=?`
+      ).bind(batch_id, outbound_barcode).first();
+
+      if (item) {
+        // 计划内：原子写日志 + 更新计数
+        await env.DB.batch([
+          env.DB.prepare(
+            `INSERT INTO b2b_scan_logs(batch_id,outbound_barcode,is_planned,scanned_by,scanned_at,undone) VALUES(?,?,1,?,?,0)`
+          ).bind(batch_id, outbound_barcode, scanned_by, now),
+          env.DB.prepare(
+            `UPDATE b2b_scan_items SET scanned_count=scanned_count+1 WHERE batch_id=? AND outbound_barcode=?`
+          ).bind(batch_id, outbound_barcode)
+        ]);
+
+        const newCount = item.scanned_count + 1;
+        const diff = newCount - item.expected_box_count;
+
+        // 算批次进度
+        const progressRs = await env.DB.prepare(
+          `SELECT SUM(MIN(scanned_count, expected_box_count)) as done FROM b2b_scan_items WHERE batch_id=?`
+        ).bind(batch_id).first();
+        const doneBoxes = progressRs ? (progressRs.done || 0) : 0;
+
+        return jsonpOrJson({
+          ok:true, planned:true,
+          outbound_barcode, expected: item.expected_box_count,
+          scanned_count: newCount, diff,
+          done_boxes: doneBoxes,
+          total_expected_boxes: batch.total_expected_boxes,
+          progress_percent: batch.total_expected_boxes > 0 ? Math.round(doneBoxes * 100 / batch.total_expected_boxes) : 0
+        }, callback);
+      } else {
+        // 计划外：只写日志
+        await env.DB.prepare(
+          `INSERT INTO b2b_scan_logs(batch_id,outbound_barcode,is_planned,scanned_by,scanned_at,undone) VALUES(?,?,0,?,?,0)`
+        ).bind(batch_id, outbound_barcode, scanned_by, now).run();
+
+        return jsonpOrJson({ ok:true, planned:false, outbound_barcode }, callback);
+      }
+    }
+
+    if (action === "b2b_scan_undo") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const batch_id = String(p.batch_id || "").trim();
+      if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
+
+      const batch = await env.DB.prepare(`SELECT status, total_expected_boxes FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
+      if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
+      if (batch.status !== "open") return jsonpOrJson({ ok:false, error:"batch is not open, cannot undo" }, callback);
+
+      // 找最近一条有效日志
+      const lastLog = await env.DB.prepare(
+        `SELECT * FROM b2b_scan_logs WHERE batch_id=? AND undone=0 ORDER BY log_id DESC LIMIT 1`
+      ).bind(batch_id).first();
+      if (!lastLog) return jsonpOrJson({ ok:false, error:"nothing to undo" }, callback);
+
+      if (lastLog.is_planned === 1) {
+        // 计划内：原子撤销日志 + 减计数
+        await env.DB.batch([
+          env.DB.prepare(
+            `UPDATE b2b_scan_logs SET undone=1, undone_at=? WHERE log_id=?`
+          ).bind(now, lastLog.log_id),
+          env.DB.prepare(
+            `UPDATE b2b_scan_items SET scanned_count=MAX(scanned_count-1,0) WHERE batch_id=? AND outbound_barcode=?`
+          ).bind(batch_id, lastLog.outbound_barcode)
+        ]);
+
+        // 查更新后的计数
+        const updated = await env.DB.prepare(
+          `SELECT scanned_count FROM b2b_scan_items WHERE batch_id=? AND outbound_barcode=?`
+        ).bind(batch_id, lastLog.outbound_barcode).first();
+
+        // 算批次进度
+        const progressRs = await env.DB.prepare(
+          `SELECT SUM(MIN(scanned_count, expected_box_count)) as done FROM b2b_scan_items WHERE batch_id=?`
+        ).bind(batch_id).first();
+        const doneBoxes = progressRs ? (progressRs.done || 0) : 0;
+
+        return jsonpOrJson({
+          ok:true, undone_barcode: lastLog.outbound_barcode,
+          was_planned:true, new_scanned_count: updated ? updated.scanned_count : 0,
+          done_boxes: doneBoxes,
+          total_expected_boxes: batch.total_expected_boxes,
+          progress_percent: batch.total_expected_boxes > 0 ? Math.round(doneBoxes * 100 / batch.total_expected_boxes) : 0
+        }, callback);
+      } else {
+        // 计划外：只标记撤销
+        await env.DB.prepare(
+          `UPDATE b2b_scan_logs SET undone=1, undone_at=? WHERE log_id=?`
+        ).bind(now, lastLog.log_id).run();
+
+        return jsonpOrJson({
+          ok:true, undone_barcode: lastLog.outbound_barcode, was_planned:false
+        }, callback);
+      }
     }
 
     return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);
