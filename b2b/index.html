@@ -21,6 +21,13 @@
     .st-completed{background:#27ae60;} .st-abnormal{background:#e74c3c;} .st-cancelled{background:#bbb;}
     .st-draft{background:#999;} .st-issued{background:#3498db;} .st-working{background:#e67e22;} .st-recording{background:#e67e22;}
     .bound-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;color:#fff;background:#8e24aa;margin-left:4px;}
+    .st-open{background:#3498db;} .st-closed{background:#27ae60;}
+    .sc-progress{background:#e3f2fd;border-radius:8px;padding:10px 12px;margin:10px 0;font-size:14px;font-weight:700;}
+    .sc-progress-bar{height:8px;border-radius:4px;background:#e0e0e0;margin-top:6px;overflow:hidden;}
+    .sc-progress-fill{height:100%;border-radius:4px;background:#2196f3;transition:width .3s;}
+    .sc-section{margin-top:12px;} .sc-section-title{font-size:14px;font-weight:700;padding:6px 0;border-bottom:2px solid #eee;margin-bottom:4px;}
+    .sc-item{border-bottom:1px solid #f0f0f0;padding:6px 0;font-size:13px;} .sc-item:last-child{border-bottom:none;}
+    .sc-missing{color:#e65100;} .sc-over{color:#d32f2f;} .sc-done{color:#2e7d32;} .sc-unplanned{color:#6a1b9a;}
     .status-btns{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;}
     .status-btns button{padding:4px 10px;font-size:11px;margin:0;width:auto;min-width:0;border-radius:8px;}
     .wo-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;cursor:pointer;}
@@ -99,6 +106,8 @@
     <button onclick="goCardDetail('plan','today')">计划列表</button>
     <button onclick="goView('wo_list')">作业单列表</button>
     <button onclick="goView('fo_list')">记录列表</button>
+    <button onclick="goNewSc()">+ 核对批次</button>
+    <button onclick="goView('sc_list')">核对列表</button>
     <button style="margin-left:auto;" onclick="doLogout()">退出</button>
   </div>
 
@@ -300,6 +309,56 @@
   <!-- 现场作业记录详情 -->
   <div id="v-fo_detail" style="display:none;">
     <div class="card" id="fo-detail-card"></div>
+  </div>
+
+  <!-- 新建核对批次 -->
+  <div id="v-sc_create" style="display:none;">
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">新建出库扫码核对批次</div>
+      <div class="row">
+        <div class="form-group"><label>核对日期</label><input id="sc-day" type="date" /></div>
+        <div class="form-group"><label>批次名称</label><input id="sc-name" placeholder="如：3/18下午出库" /></div>
+      </div>
+      <div class="form-group"><label>创建人</label><input id="sc-creator" placeholder="你的名字" /></div>
+      <div style="font-size:14px;font-weight:700;margin:12px 0 6px;">导入计划数据</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        <button style="width:auto;padding:6px 14px;font-size:12px;" onclick="scDownloadTemplate()">下载模板</button>
+        <button style="width:auto;padding:6px 14px;font-size:12px;" onclick="document.getElementById('sc-import-file').click()">导入 Excel</button>
+        <input type="file" id="sc-import-file" accept=".xlsx,.xls" style="display:none;" onchange="scImportExcel(this)" />
+      </div>
+      <div id="sc-import-err" style="font-size:13px;margin-bottom:6px;"></div>
+      <div id="sc-preview" style="display:none;">
+        <div style="overflow-x:auto;">
+          <table class="line-table" id="sc-preview-table">
+            <thead><tr><th>#</th><th>出库条码</th><th>计划箱数</th><th>客户名</th><th>货物摘要</th></tr></thead>
+            <tbody id="sc-preview-body"></tbody>
+          </table>
+        </div>
+        <div id="sc-preview-summary" class="muted" style="margin-top:6px;font-size:13px;"></div>
+      </div>
+      <button id="sc-submit-btn" class="primary" style="margin-top:12px;display:none;" onclick="submitSc()">确认创建批次</button>
+      <div id="sc-result" style="margin-top:8px;font-size:13px;"></div>
+    </div>
+  </div>
+
+  <!-- 核对批次列表 -->
+  <div id="v-sc_list" style="display:none;">
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:10px;">出库扫码核对列表</div>
+      <div class="row">
+        <div class="form-group"><label>开始日期</label><input id="scl-start" type="date" /></div>
+        <div class="form-group"><label>结束日期</label><input id="scl-end" type="date" /></div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="primary" style="width:auto;min-width:80px;" onclick="loadScList()">查询</button>
+        </div>
+      </div>
+      <div id="scl-result" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <!-- 核对批次详情 -->
+  <div id="v-sc_detail" style="display:none;">
+    <div class="card" id="sc-detail-card"></div>
   </div>
 
 </div><!-- /v-main -->

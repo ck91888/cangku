@@ -93,12 +93,13 @@ function showMain(){
 }
 
 // ===== 视图切换 =====
-var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail"];
+var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail","v-sc_create","v-sc_list","v-sc_detail"];
 function goView(name){
   ALL_VIEWS.forEach(function(v){ document.getElementById(v).style.display = (v === "v-" + name) ? "" : "none"; });
   if(name === "plan_list") initPlanList();
   if(name === "wo_list") initWoList();
   if(name === "fo_list") initFoList();
+  if(name === "sc_list") initScList();
 }
 function goHome(){
   goView("home");
@@ -115,6 +116,10 @@ function goNewWo(){
   _editingWoId = null;
   goView("wo_create");
   initWoCreate(null);
+}
+function goNewSc(){
+  goView("sc_create");
+  initScCreate();
 }
 function goNewFo(fromPlan){
   _editingFoId = null;
@@ -1554,6 +1559,332 @@ function doBindWo(record_id){
       goFoDetail(record_id);
     } else {
       alert("绑定失败: "+(res&&res.error||"unknown"));
+    }
+  });
+}
+
+// ===== 出库扫码核对 =====
+var SC_STATUS_LABEL = { open:"进行中", closed:"已关闭", cancelled:"已作废" };
+var _scImportedItems = []; // 导入预览数据
+
+function initScCreate(){
+  document.getElementById("sc-day").value = kstToday();
+  document.getElementById("sc-name").value = "";
+  document.getElementById("sc-creator").value = "";
+  document.getElementById("sc-import-err").innerHTML = "";
+  document.getElementById("sc-preview").style.display = "none";
+  document.getElementById("sc-submit-btn").style.display = "none";
+  document.getElementById("sc-result").textContent = "";
+  _scImportedItems = [];
+}
+
+var SC_TPL_HEADERS = ["出库条码","计划箱数","客户名","货物摘要"];
+
+function scDownloadTemplate(){
+  var ws = XLSX.utils.aoa_to_sheet([SC_TPL_HEADERS]);
+  ws["!cols"] = SC_TPL_HEADERS.map(function(){ return { wch: 16 }; });
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "核对计划");
+  XLSX.writeFile(wb, "出库核对模板.xlsx");
+}
+
+function scImportExcel(input){
+  var errEl = document.getElementById("sc-import-err");
+  errEl.innerHTML = "";
+  document.getElementById("sc-preview").style.display = "none";
+  document.getElementById("sc-submit-btn").style.display = "none";
+  _scImportedItems = [];
+  if(!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  input.value = "";
+
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try {
+      var data = new Uint8Array(e.target.result);
+      var wb = XLSX.read(data, { type:"array" });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
+    } catch(ex){
+      errEl.innerHTML = '<span class="bad">文件解析失败: '+esc(String(ex))+'</span>';
+      return;
+    }
+
+    if(!rows || rows.length < 2){
+      errEl.innerHTML = '<span class="bad">文件为空或只有表头，无数据行</span>';
+      return;
+    }
+
+    // 解析表头
+    var headerRow = rows[0];
+    var colMap = {};
+    var FIELD_MAP = {"出库条码":"barcode","计划箱数":"count","客户名":"customer","货物摘要":"summary"};
+    for(var c=0; c<headerRow.length; c++){
+      var h = String(headerRow[c]).trim();
+      if(FIELD_MAP[h]) colMap[FIELD_MAP[h]] = c;
+    }
+    if(colMap.barcode === undefined){ errEl.innerHTML = '<span class="bad">缺少"出库条码"列</span>'; return; }
+    if(colMap.count === undefined){ errEl.innerHTML = '<span class="bad">缺少"计划箱数"列</span>'; return; }
+
+    // 解析数据行 + 校验
+    var items = [];
+    var errors = [];
+    var seen = {}; // barcode -> [行号]
+    for(var r=1; r<rows.length; r++){
+      var row = rows[r];
+      var bc = String(row[colMap.barcode]||"").trim();
+      var cnt = String(row[colMap.count]||"").trim();
+      var cust = colMap.customer !== undefined ? String(row[colMap.customer]||"").trim() : "";
+      var summ = colMap.summary !== undefined ? String(row[colMap.summary]||"").trim() : "";
+
+      // 跳过全空行
+      if(!bc && !cnt) continue;
+
+      var rowNum = r + 1;
+      if(!bc){ errors.push("第"+rowNum+"行: 出库条码为空"); continue; }
+
+      var cntNum = parseInt(cnt, 10);
+      if(!cntNum || cntNum <= 0 || String(cntNum) !== cnt){
+        errors.push("第"+rowNum+"行: 计划箱数必须为正整数，当前值: "+cnt);
+        continue;
+      }
+
+      // 重复检查
+      if(!seen[bc]) seen[bc] = [];
+      seen[bc].push(rowNum);
+
+      items.push({ outbound_barcode:bc, expected_box_count:cntNum, customer_name:cust, goods_summary:summ, _row:rowNum });
+    }
+
+    // 汇总重复条码
+    var dupErrors = [];
+    for(var k in seen){
+      if(seen[k].length > 1){
+        dupErrors.push("条码 \""+k+"\" 重复出现在第 "+seen[k].join("、")+" 行");
+      }
+    }
+
+    if(dupErrors.length > 0){
+      errors = dupErrors.concat(errors);
+    }
+
+    if(errors.length > 0){
+      errEl.innerHTML = '<span class="bad">导入校验失败（整单拒绝）：<br>' + errors.map(esc).join("<br>") + '</span>';
+      return;
+    }
+
+    if(items.length === 0){
+      errEl.innerHTML = '<span class="bad">没有有效数据行</span>';
+      return;
+    }
+
+    // 预览
+    _scImportedItems = items;
+    var totalBoxes = 0;
+    var tbody = document.getElementById("sc-preview-body");
+    tbody.innerHTML = items.map(function(it, i){
+      totalBoxes += it.expected_box_count;
+      return '<tr><td>'+(i+1)+'</td><td>'+esc(it.outbound_barcode)+'</td><td>'+it.expected_box_count+'</td><td>'+esc(it.customer_name)+'</td><td>'+esc(it.goods_summary)+'</td></tr>';
+    }).join("");
+    document.getElementById("sc-preview-summary").textContent = "合计: "+items.length+" 种条码, "+totalBoxes+" 箱";
+    document.getElementById("sc-preview").style.display = "";
+    document.getElementById("sc-submit-btn").style.display = "";
+    errEl.innerHTML = '<span style="color:#2e7d32;">导入成功，请确认预览后点击"确认创建批次"</span>';
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function submitSc(){
+  var day = document.getElementById("sc-day").value;
+  var name = document.getElementById("sc-name").value.trim();
+  var creator = document.getElementById("sc-creator").value.trim();
+
+  if(!day){ alert("请选择核对日期"); return; }
+  if(!name){ alert("请输入批次名称"); return; }
+  if(!_scImportedItems.length){ alert("请先导入 Excel"); return; }
+
+  // 清理 _row 字段
+  var items = _scImportedItems.map(function(it){
+    return { outbound_barcode:it.outbound_barcode, expected_box_count:it.expected_box_count, customer_name:it.customer_name, goods_summary:it.goods_summary };
+  });
+
+  document.getElementById("sc-submit-btn").disabled = true;
+  document.getElementById("sc-submit-btn").textContent = "创建中...";
+
+  fetchApi({
+    action:"b2b_scan_batch_create",
+    check_day:day, batch_name:name, created_by:creator,
+    items:JSON.stringify(items)
+  }).then(function(res){
+    document.getElementById("sc-submit-btn").disabled = false;
+    document.getElementById("sc-submit-btn").textContent = "确认创建批次";
+    if(res && res.ok){
+      alert("创建成功！批次编号: " + res.batch_id + "\n条码: " + res.total_barcodes + " 种\n总箱数: " + res.total_expected_boxes);
+      goScDetail(res.batch_id);
+    } else {
+      document.getElementById("sc-result").innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
+    }
+  });
+}
+
+// ===== 核对批次列表 =====
+function initScList(){
+  var today = kstToday();
+  document.getElementById("scl-start").value = today;
+  document.getElementById("scl-end").value = today;
+  loadScList();
+}
+
+function loadScList(){
+  var s = document.getElementById("scl-start").value;
+  var e = document.getElementById("scl-end").value;
+  if(!s || !e){ alert("请选择日期"); return; }
+  var el = document.getElementById("scl-result");
+  el.innerHTML = '<div class="q-empty">加载中...</div>';
+  fetchApi({ action:"b2b_scan_batch_list", start_day:s, end_day:e }).then(function(res){
+    if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败</div>'; return; }
+    var batches = res.batches || [];
+    if(!batches.length){ el.innerHTML = '<div class="q-empty">暂无核对批次</div>'; return; }
+    el.innerHTML = batches.map(function(b){
+      var dimClass = (b.status==="cancelled") ? " row-dim" : "";
+      return '<div class="wo-row'+dimClass+'" onclick="goScDetail(\''+esc(b.batch_id)+'\')">' +
+        '<div><span class="st st-'+esc(b.status)+'">'+esc(SC_STATUS_LABEL[b.status]||b.status)+'</span> ' +
+        '<b>'+esc(b.batch_id)+'</b> · '+esc(b.batch_name)+'</div>' +
+        '<div class="meta">'+esc(b.check_day)+' · '+b.total_barcodes+'种条码 · '+b.total_expected_boxes+'箱 · 创建人:'+esc(b.created_by)+'</div>' +
+      '</div>';
+    }).join("");
+  });
+}
+
+// ===== 核对批次详情 =====
+function goScDetail(batch_id){
+  goView("sc_detail");
+  var card = document.getElementById("sc-detail-card");
+  card.innerHTML = '<div class="muted">加载中...</div>';
+  fetchApi({ action:"b2b_scan_batch_detail", batch_id:batch_id }).then(function(res){
+    if(!res || !res.ok){ card.innerHTML = '<div class="bad">加载失败: '+esc(res&&res.error||"")+'</div>'; return; }
+    var b = res.batch;
+    var items = res.items || [];
+    var unplanned = res.unplanned || [];
+    var doneBoxes = res.done_boxes;
+    var totalBoxes = res.total_expected_boxes;
+    var pct = res.progress_percent;
+
+    // 分类
+    var missing = [], done = [], over = [];
+    items.forEach(function(it){
+      if(it.scanned_count < it.expected_box_count) missing.push(it);
+      else if(it.scanned_count === it.expected_box_count) done.push(it);
+      else over.push(it);
+    });
+    // 未出库按差额降序
+    missing.sort(function(a,b2){ return (b2.expected_box_count - b2.scanned_count) - (a.expected_box_count - a.scanned_count); });
+
+    // 操作按钮
+    var closeBtn = (b.status === "open") ?
+      '<button onclick="closeScanBatch(\''+esc(b.batch_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;background:#e65100;color:#fff;border-color:#e65100;">关闭批次</button>' : '';
+    var refreshBtn = '<button onclick="goScDetail(\''+esc(b.batch_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">刷新</button>';
+
+    var html = '';
+
+    // 基本信息
+    html += '<div style="font-size:18px;font-weight:800;margin-bottom:6px;">' +
+      esc(b.batch_id) + ' <span class="st st-'+esc(b.status)+'">'+esc(SC_STATUS_LABEL[b.status]||b.status)+'</span></div>';
+    html += '<div class="detail-field"><b>批次名称:</b> '+esc(b.batch_name)+'</div>';
+    html += '<div class="detail-field"><b>核对日期:</b> '+esc(b.check_day)+'</div>';
+    html += '<div class="detail-field"><b>条码种类:</b> '+b.total_barcodes+' 种</div>';
+    html += '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(b.created_by)+' · 创建时间: '+new Date(b.created_at).toLocaleString() +
+      (b.closed_at ? ' · 关闭时间: '+new Date(b.closed_at).toLocaleString() : '') + '</div>';
+
+    // 进度
+    html += '<div class="sc-progress">' +
+      '进度: '+doneBoxes+' / '+totalBoxes+' 箱 ('+pct+'%)' +
+      '<div class="sc-progress-bar"><div class="sc-progress-fill" style="width:'+pct+'%;"></div></div></div>';
+
+    // 操作按钮
+    html += '<div style="margin:10px 0;">' + refreshBtn + ' ' + closeBtn + '</div>';
+
+    // 未完成清单
+    html += '<div class="sc-section"><div class="sc-section-title sc-missing">⚠ 未完成（'+missing.length+' 种）</div>';
+    if(missing.length){
+      html += missing.map(function(it){
+        var diff = it.expected_box_count - it.scanned_count;
+        return '<div class="sc-item"><b>'+esc(it.outbound_barcode)+'</b>' +
+          (it.customer_name ? ' · '+esc(it.customer_name) : '') +
+          (it.goods_summary ? ' · '+esc(it.goods_summary) : '') +
+          ' — 计划'+it.expected_box_count+'箱 已扫'+it.scanned_count+'箱 <b class="sc-missing">差'+diff+'箱</b></div>';
+      }).join("");
+    } else {
+      html += '<div class="q-empty">无（全部已扫完）</div>';
+    }
+    html += '</div>';
+
+    // 已完成清单
+    html += '<div class="sc-section"><div class="sc-section-title sc-done">✓ 已完成（'+done.length+' 种）</div>';
+    if(done.length){
+      html += done.map(function(it){
+        return '<div class="sc-item"><b>'+esc(it.outbound_barcode)+'</b>' +
+          (it.customer_name ? ' · '+esc(it.customer_name) : '') +
+          ' — '+it.expected_box_count+'箱 ✓</div>';
+      }).join("");
+    } else {
+      html += '<div class="q-empty">无</div>';
+    }
+    html += '</div>';
+
+    // 多扫清单
+    html += '<div class="sc-section"><div class="sc-section-title sc-over">⚠ 多扫（'+over.length+' 种）</div>';
+    if(over.length){
+      html += over.map(function(it){
+        var extra = it.scanned_count - it.expected_box_count;
+        return '<div class="sc-item"><b>'+esc(it.outbound_barcode)+'</b>' +
+          (it.customer_name ? ' · '+esc(it.customer_name) : '') +
+          ' — 计划'+it.expected_box_count+'箱 已扫'+it.scanned_count+'箱 <b class="sc-over">多扫'+extra+'箱</b></div>';
+      }).join("");
+    } else {
+      html += '<div class="q-empty">无</div>';
+    }
+    html += '</div>';
+
+    // 计划外条码
+    html += '<div class="sc-section"><div class="sc-section-title sc-unplanned">● 计划外条码（'+unplanned.length+' 种）</div>';
+    if(unplanned.length){
+      html += unplanned.map(function(u){
+        return '<div class="sc-item"><b class="sc-unplanned">'+esc(u.outbound_barcode)+'</b> — 扫了'+u.scan_times+'次（不在计划内）</div>';
+      }).join("");
+    } else {
+      html += '<div class="q-empty">无</div>';
+    }
+    html += '</div>';
+
+    card.innerHTML = html;
+  });
+}
+
+function closeScanBatch(batch_id){
+  // 第一步：拿统计
+  fetchApi({ action:"b2b_scan_batch_close", batch_id:batch_id }).then(function(res){
+    if(!res || !res.ok){
+      alert("关闭失败: "+(res&&res.error||"unknown"));
+      return;
+    }
+    if(res.action === "confirm_needed"){
+      var msg = "确认关闭批次 "+batch_id+"？\n\n当前状态：";
+      if(res.missing_count > 0) msg += "\n· "+res.missing_count+"种条码未扫完（差"+res.missing_boxes+"箱）";
+      if(res.over_count > 0) msg += "\n· "+res.over_count+"种条码多扫";
+      if(res.unplanned_count > 0) msg += "\n· "+res.unplanned_count+"种计划外条码";
+      if(res.missing_count===0 && res.over_count===0 && res.unplanned_count===0) msg += "\n全部正常完成。";
+      msg += "\n\n关闭后不可继续扫码。";
+      if(!confirm(msg)) return;
+      // 第二步：确认关闭
+      fetchApi({ action:"b2b_scan_batch_close", batch_id:batch_id, confirm:"true" }).then(function(res2){
+        if(res2 && res2.ok){
+          alert("批次已关闭！");
+          goScDetail(batch_id);
+        } else {
+          alert("关闭失败: "+(res2&&res2.error||"unknown"));
+        }
+      });
     }
   });
 }
