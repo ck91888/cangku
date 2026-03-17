@@ -13,7 +13,7 @@ var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
 var pages = [
   "home","badge","global_menu","b2c_menu",
   "import_menu","import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
-  "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound","b2b_inventory","b2b_field_op",
+  "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound","b2b_inventory","b2b_field_op","b2b_scan_check",
   "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_inventory","b2c_disposal","b2c_relabel",
   "warehouse_cleanup",
   "active_now",
@@ -156,6 +156,7 @@ function renderPages(){
   if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_field_op"){ restoreState(); renderActiveLists(); renderB2bFieldOpUI(); refreshUI(); }
+  if(cur==="b2b_scan_check"){ initScanCheckPage(); }
   if(cur==="b2c_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="warehouse_cleanup"){ restoreState(); renderActiveLists(); refreshUI(); }
 
@@ -5289,6 +5290,228 @@ function dfRenderTable_(features){
   });
   html += "</tbody></table>";
   el.innerHTML = html;
+}
+
+/** ===== B2B 扫码核对 (主系统) ===== */
+var _scCurrentBatch = null; // { batch_id, batch_name, status, ... }
+var _scBusy = false;        // 防连击
+
+function scBackToMenu(){ go("b2b_menu"); }
+
+function initScanCheckPage(){
+  _scCurrentBatch = null;
+  document.getElementById("scSelectArea").style.display = "";
+  document.getElementById("scWorkArea").style.display = "none";
+  document.getElementById("scStartBtn").style.display = "none";
+  document.getElementById("scLastResult").style.display = "none";
+  // 加载 open 批次
+  var sel = document.getElementById("scBatchSelect");
+  sel.innerHTML = '<option value="">加载中...</option>';
+  var today = kstToday_();
+  jsonp(LOCK_URL, { action:"b2b_scan_batch_list", start_day:"2020-01-01", end_day:"2099-12-31", k:getFoKey_() }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ sel.innerHTML = '<option value="">加载失败</option>'; return; }
+    var open = (res.batches || []).filter(function(b){ return b.status === "open"; });
+    if(!open.length){ sel.innerHTML = '<option value="">暂无进行中的批次</option>'; return; }
+    var html = '<option value="">请选择批次...</option>';
+    open.forEach(function(b){
+      html += '<option value="'+esc(b.batch_id)+'">'+esc(b.batch_id)+' · '+esc(b.batch_name)+' ('+esc(b.check_day)+')</option>';
+    });
+    sel.innerHTML = html;
+    // 恢复 localStorage
+    var saved = _scLoadBatch();
+    if(saved){
+      sel.value = saved;
+      if(sel.value === saved) onScBatchSelected();
+    }
+  });
+}
+
+function _scSaveBatch(batchId){ try{ localStorage.setItem("b2b_sc_batch_v1", batchId); }catch(e){} }
+function _scLoadBatch(){ try{ return localStorage.getItem("b2b_sc_batch_v1")||""; }catch(e){ return ""; } }
+function _scClearBatch(){ try{ localStorage.removeItem("b2b_sc_batch_v1"); }catch(e){} }
+
+function onScBatchSelected(){
+  var v = document.getElementById("scBatchSelect").value;
+  document.getElementById("scStartBtn").style.display = v ? "" : "none";
+}
+
+function scStartScan(){
+  var batchId = document.getElementById("scBatchSelect").value;
+  if(!batchId){ alert("请先选择批次"); return; }
+  _scSaveBatch(batchId);
+  // 拉取详情以获取进度和汇总
+  jsonp(LOCK_URL, { action:"b2b_scan_batch_detail", batch_id:batchId, k:getFoKey_() }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ alert("加载批次失败: "+(res&&res.error||"")); return; }
+    if(res.batch.status !== "open"){
+      alert("此批次已关闭，无法扫码");
+      return;
+    }
+    _scCurrentBatch = res.batch;
+    document.getElementById("scSelectArea").style.display = "none";
+    document.getElementById("scWorkArea").style.display = "";
+    document.getElementById("scBatchInfo").textContent = res.batch.batch_id + " · " + res.batch.batch_name;
+    // 更新进度
+    _scUpdateProgress(res.done_boxes, res.total_expected_boxes, res.progress_percent);
+    // 更新汇总
+    _scUpdateSummary(res.items, res.unplanned);
+    // 聚焦输入框
+    document.getElementById("scBarcodeInput").value = "";
+    document.getElementById("scLastResult").style.display = "none";
+    setTimeout(function(){ document.getElementById("scBarcodeInput").focus(); }, 100);
+  });
+}
+
+function _scUpdateProgress(doneBoxes, totalBoxes, pct){
+  document.getElementById("scProgressText").textContent = doneBoxes + " / " + totalBoxes + " 箱 (" + pct + "%)";
+  document.getElementById("scProgressFill").style.width = pct + "%";
+}
+
+function _scUpdateSummary(items, unplanned){
+  var done=0, missing=0, over=0;
+  (items||[]).forEach(function(it){
+    if(it.scanned_count >= it.expected_box_count) done++;
+    else missing++;
+    if(it.scanned_count > it.expected_box_count) over++;
+  });
+  // scanned == expected 算 done 但不算 over；scanned > expected 同时算 done 和 over
+  // 重新算：missing = scanned < expected, done(完成) = scanned == expected, over = scanned > expected
+  done=0; missing=0; over=0;
+  (items||[]).forEach(function(it){
+    if(it.scanned_count < it.expected_box_count) missing++;
+    else if(it.scanned_count === it.expected_box_count) done++;
+    else over++;
+  });
+  var unplannedCount = (unplanned||[]).length;
+  var html = '<span style="color:#388e3c;font-weight:700;">已完成: '+done+'种</span>';
+  html += ' &nbsp; <span style="color:#d32f2f;font-weight:700;">未完成: '+missing+'种</span>';
+  html += ' &nbsp; <span style="color:#e65100;font-weight:700;">多扫: '+over+'种</span>';
+  html += ' &nbsp; <span style="color:#616161;font-weight:700;">计划外: '+unplannedCount+'种</span>';
+  document.getElementById("scSummaryContent").innerHTML = html;
+}
+
+function scDoScan(){
+  if(_scBusy) return;
+  var input = document.getElementById("scBarcodeInput");
+  var bc = input.value.trim();
+  if(!bc){ return; }
+  if(!_scCurrentBatch){ alert("请先选择批次"); return; }
+
+  _scBusy = true;
+  var opId = getOperatorId() || "";
+  jsonp(LOCK_URL, {
+    action:"b2b_scan_do",
+    batch_id: _scCurrentBatch.batch_id,
+    outbound_barcode: bc,
+    scanned_by: opId,
+    k: getFoKey_()
+  }, { skipBusy:true }).then(function(res){
+    _scBusy = false;
+    if(!res || !res.ok){
+      var err = (res && res.error) || "unknown";
+      if(err.indexOf("not open") >= 0){
+        _scShowResult("❌ 批次已关闭，无法继续扫码", "#d32f2f", "#ffebee", bc, "");
+        return;
+      }
+      _scShowResult("❌ 扫码失败: " + err, "#d32f2f", "#ffebee", bc, "");
+      return;
+    }
+    // 清空+聚焦
+    input.value = "";
+    input.focus();
+
+    if(res.planned){
+      // 更新进度
+      _scUpdateProgress(res.done_boxes, res.total_expected_boxes, res.progress_percent);
+      var diff = res.diff;
+      if(diff < 0){
+        // 还差
+        _scShowResult("✅ " + bc + "  " + res.scanned_count + "/" + res.expected + "  还差" + Math.abs(diff) + "箱",
+          "#1b5e20", "#e8f5e9", bc, "ok");
+      } else if(diff === 0){
+        // 刚好完成
+        _scShowResult("🎉 " + bc + "  " + res.scanned_count + "/" + res.expected + "  已完成！",
+          "#e65100", "#fff3e0", bc, "done");
+      } else {
+        // 多扫
+        _scShowResult("⚠ " + bc + "  " + res.scanned_count + "/" + res.expected + "  多扫" + diff + "箱",
+          "#d32f2f", "#ffebee", bc, "over");
+      }
+    } else {
+      // 计划外
+      _scShowResult("❌ " + bc + "  计划外条码", "#616161", "#f5f5f5", bc, "unplanned");
+    }
+    // 延迟刷新汇总（不阻塞扫码）
+    _scRefreshSummary();
+  });
+}
+
+function _scShowResult(text, color, bgColor, barcode, type){
+  var el = document.getElementById("scLastResult");
+  el.style.display = "";
+  el.style.background = bgColor;
+  el.style.color = color;
+  el.style.border = "2px solid " + color;
+  el.style.fontSize = "24px";
+  el.style.fontWeight = "800";
+  el.style.lineHeight = "1.4";
+  el.innerHTML = text;
+}
+
+function _scRefreshSummary(){
+  if(!_scCurrentBatch) return;
+  jsonp(LOCK_URL, { action:"b2b_scan_batch_detail", batch_id:_scCurrentBatch.batch_id, k:getFoKey_() }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok) return;
+    if(res.batch.status !== "open"){
+      _scShowResult("❌ 批次已被关闭", "#d32f2f", "#ffebee", "", "");
+      document.getElementById("scBarcodeInput").disabled = true;
+    }
+    _scUpdateSummary(res.items, res.unplanned);
+  });
+}
+
+function scUndoLast(){
+  if(_scBusy) return;
+  if(!_scCurrentBatch){ alert("请先选择批次"); return; }
+  if(!confirm("确认撤销上一扫？")) return;
+
+  _scBusy = true;
+  jsonp(LOCK_URL, {
+    action:"b2b_scan_undo",
+    batch_id: _scCurrentBatch.batch_id,
+    k: getFoKey_()
+  }, { skipBusy:true }).then(function(res){
+    _scBusy = false;
+    if(!res || !res.ok){
+      var err = (res && res.error) || "unknown";
+      if(err.indexOf("nothing to undo") >= 0){
+        alert("没有可撤销的扫码记录");
+      } else if(err.indexOf("not open") >= 0){
+        alert("批次已关闭，无法撤销");
+      } else {
+        alert("撤销失败: " + err);
+      }
+      return;
+    }
+    if(res.was_planned){
+      _scUpdateProgress(res.done_boxes, res.total_expected_boxes, res.progress_percent);
+      _scShowResult("↩ 已撤销: " + res.undone_barcode + "  当前 " + res.new_scanned_count + " 箱",
+        "#e65100", "#fff3e0", res.undone_barcode, "undo");
+    } else {
+      _scShowResult("↩ 已撤销计划外条码: " + res.undone_barcode,
+        "#616161", "#f5f5f5", res.undone_barcode, "undo");
+    }
+    _scRefreshSummary();
+    document.getElementById("scBarcodeInput").focus();
+  });
+}
+
+function scExitScan(){
+  _scCurrentBatch = null;
+  _scClearBatch();
+  document.getElementById("scSelectArea").style.display = "";
+  document.getElementById("scWorkArea").style.display = "none";
+  document.getElementById("scBarcodeInput").disabled = false;
+  initScanCheckPage();
 }
 
 /** ===== init ===== */

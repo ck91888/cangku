@@ -698,6 +698,7 @@
       <button class="primary" onclick="go('b2b_outbound')">出库 / 출고</button>
       <button class="primary" onclick="go('b2b_inventory')">盘点 / 재고조사</button>
       <button class="primary" onclick="go('b2b_field_op')" style="background:#8e24aa;border-color:#8e24aa;">现场记录 / 현장작업</button>
+      <button class="primary" onclick="go('b2b_scan_check')" style="background:#00838f;border-color:#00838f;">扫码核对 / 스캔체크</button>
     </div>
   </div>
 
@@ -868,6 +869,57 @@
           <div id="b2bFieldOpActiveList" class="muted">无 / 없음</div>
         </div>
         <button class="primary" onclick="endB2bFieldOp()">结束作业 / 종료</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- B2B SCAN CHECK -->
+  <div id="page-b2b_scan_check" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="scBackToMenu()">返回 / 뒤로</button>
+      <div class="grow pill">B2B 扫码核对 / 스캔체크</div>
+    </div>
+    <div class="card">
+      <!-- 批次选择区 -->
+      <div id="scSelectArea">
+        <label style="font-size:13px;font-weight:700;">选择核对批次（仅 open）</label>
+        <select id="scBatchSelect" onchange="onScBatchSelected()" style="width:100%;margin-top:4px;">
+          <option value="">加载中...</option>
+        </select>
+        <button class="primary" onclick="scStartScan()" id="scStartBtn" style="margin-top:8px;display:none;background:#00838f;border-color:#00838f;">开始扫码 / 스캔시작</button>
+      </div>
+      <!-- 扫码作业区（选中批次后显示） -->
+      <div id="scWorkArea" style="display:none;">
+        <!-- 批次信息 -->
+        <div style="background:#e0f7fa;border:1px solid #80deea;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+          <div style="font-size:15px;font-weight:800;" id="scBatchInfo"></div>
+          <div id="scProgressBar" style="margin-top:6px;">
+            <div style="font-size:22px;font-weight:800;" id="scProgressText">0 / 0 箱 (0%)</div>
+            <div style="background:#e0e0e0;border-radius:6px;height:12px;margin-top:4px;overflow:hidden;">
+              <div id="scProgressFill" style="background:#00838f;height:100%;width:0%;border-radius:6px;transition:width 0.3s;"></div>
+            </div>
+          </div>
+        </div>
+        <!-- 扫码输入 -->
+        <div style="margin-bottom:10px;">
+          <div class="row" style="gap:6px;">
+            <input type="text" id="scBarcodeInput" placeholder="扫码或输入条码..." style="flex:1;font-size:18px;padding:12px;border:2px solid #00838f;border-radius:8px;" onkeydown="if(event.key==='Enter'){scDoScan();}" autocomplete="off">
+            <button onclick="scDoScan()" style="width:auto;min-width:70px;background:#00838f;border-color:#00838f;color:#fff;font-size:16px;padding:12px 16px;">确认</button>
+          </div>
+        </div>
+        <!-- 最近结果 -->
+        <div id="scLastResult" style="display:none;border-radius:10px;padding:16px;margin-bottom:10px;text-align:center;"></div>
+        <!-- 撤销 -->
+        <div style="margin-bottom:10px;">
+          <button onclick="scUndoLast()" style="width:auto;padding:8px 16px;font-size:13px;background:#e65100;color:#fff;border-color:#e65100;border-radius:6px;">撤销上一扫 / 마지막 취소</button>
+        </div>
+        <!-- 汇总 -->
+        <div id="scSummaryArea" style="background:#f5f5f5;border-radius:8px;padding:10px 12px;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:6px;">汇总 / 요약</div>
+          <div id="scSummaryContent" class="muted">加载中...</div>
+        </div>
+        <!-- 切换/退出 -->
+        <button class="primary" onclick="scExitScan()" style="margin-top:10px;">退出扫码 / 스캔종료</button>
       </div>
     </div>
   </div>
