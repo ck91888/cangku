@@ -13,7 +13,7 @@ var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
 var pages = [
   "home","badge","global_menu","b2c_menu",
   "import_menu","import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
-  "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound","b2b_inventory",
+  "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_outbound","b2b_inventory","b2b_field_op",
   "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_inventory","b2c_disposal","b2c_relabel",
   "warehouse_cleanup",
   "active_now",
@@ -185,7 +185,7 @@ function renderPages(){
   var taskPages = ["b2c_tally","b2c_bulkout","b2c_pick","b2c_pack","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
     "import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
     "b2b_unload","b2b_tally","b2b_workorder","b2b_outbound",
-    "b2b_inventory","b2c_inventory","warehouse_cleanup"];
+    "b2b_inventory","b2b_field_op","b2c_inventory","warehouse_cleanup"];
   if(taskPages.indexOf(cur) >= 0 && currentSessionId){
     syncActiveFromServer_();
   }
