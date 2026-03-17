@@ -93,11 +93,12 @@ function showMain(){
 }
 
 // ===== 视图切换 =====
-var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-wo_list","v-wo_detail"];
+var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail"];
 function goView(name){
   ALL_VIEWS.forEach(function(v){ document.getElementById(v).style.display = (v === "v-" + name) ? "" : "none"; });
   if(name === "plan_list") initPlanList();
   if(name === "wo_list") initWoList();
+  if(name === "fo_list") initFoList();
 }
 function goHome(){
   goView("home");
@@ -114,6 +115,12 @@ function goNewWo(){
   _editingWoId = null;
   goView("wo_create");
   initWoCreate(null);
+}
+function goNewFo(fromPlan){
+  _editingFoId = null;
+  _foSourcePlanId = null;
+  goView("fo_create");
+  initFoForm(null, fromPlan||null);
 }
 
 // ===== 首页 =====
@@ -299,6 +306,7 @@ function renderPlanRow(p){
     return '<button onclick="event.stopPropagation();changePlanStatus(\''+esc(p.plan_id)+'\',\''+s+'\')">'+esc(PLAN_STATUS_LABEL[s]||s)+'</button>';
   }).join("");
   var editBtn = PLAN_EDITABLE[p.status] ? '<button onclick="event.stopPropagation();goEditPlan(\''+esc(p.plan_id)+'\')">编辑</button>' : '';
+  var foBtn = (p.status==="arrived"||p.status==="processing") ? '<button onclick="event.stopPropagation();goNewFoFromPlan(\''+esc(p.plan_id)+'\',\''+esc(p.plan_day)+'\',\''+esc(p.customer_name)+'\',\''+esc(p.goods_summary||"")+'\',\''+esc(p.purpose_text||"")+'\')" style="background:#8e24aa;color:#fff;">+ 现场记录</button>' : '';
   return '<div class="plan-row'+dimClass+'">' +
     '<div><span class="st st-'+esc(p.status)+'">'+esc(PLAN_STATUS_LABEL[p.status]||p.status)+'</span> ' +
     '<b>'+esc(p.customer_name)+'</b> <span class="muted" style="font-size:11px;">'+esc(BIZ_TYPE_LABEL[p.biz_type]||p.biz_type)+'</span>' +
@@ -306,7 +314,7 @@ function renderPlanRow(p){
     '<div class="meta">'+esc(p.goods_summary) + (p.expected_arrival_time ? ' · 预计'+esc(p.expected_arrival_time) : '') + '</div>' +
     (p.purpose_text ? '<div class="meta">用途: '+esc(p.purpose_text)+'</div>' : '') +
     (p.remark ? '<div class="meta">备注: '+esc(p.remark)+'</div>' : '') +
-    '<div class="status-btns">' + btns + editBtn + '</div>' +
+    '<div class="status-btns">' + btns + editBtn + foBtn + '</div>' +
   '</div>';
 }
 
@@ -1230,6 +1238,323 @@ function printWo(id){
     var win = window.open("","_blank");
     win.document.write(html);
     win.document.close();
+  });
+}
+
+// ===== 现场作业记录 =====
+var FO_STATUS_LABEL = {
+  draft: "草稿", recording: "记录中", completed: "已完成", cancelled: "已作废"
+};
+var FO_OP_TYPE_LABEL = {
+  box_op: "箱子操作", palletize: "打托", bulk_in_out: "整进整出", unload: "卸货", other: "其他"
+};
+var FO_NEXT_STATUS = {
+  draft: ["recording","cancelled"],
+  recording: ["completed","cancelled"],
+  completed: [],
+  cancelled: []
+};
+var FO_EDITABLE = { draft:1, recording:1 };
+var FO_INCOMPLETE_STATUS = { draft:1, recording:1 };
+var FO_STATUS_PRIORITY = { recording:0, draft:1, completed:2, cancelled:3 };
+
+var _editingFoId = null;
+var _foSourcePlanId = null;
+
+function goNewFoFromPlan(plan_id, plan_day, customer_name, goods_summary, purpose_text){
+  _editingFoId = null;
+  _foSourcePlanId = plan_id;
+  goView("fo_create");
+  initFoForm(null, { plan_id:plan_id, plan_day:plan_day, customer_name:customer_name, goods_summary:goods_summary, purpose_text:purpose_text });
+}
+
+function initFoForm(data, fromPlan){
+  var isEdit = !!data;
+  document.getElementById("fo-title").textContent = isEdit ? "编辑现场作业记录" : "新建现场作业记录";
+  document.getElementById("fo-id-bar").style.display = isEdit ? "" : "none";
+  document.getElementById("fo-id-bar").textContent = isEdit ? ("编号: " + data.record_id + "（不可修改）") : "";
+  document.getElementById("fo-submit-btn").textContent = isEdit ? "保存修改" : "保存";
+  document.getElementById("fo-creator-group").style.display = isEdit ? "none" : "";
+
+  // source plan bar
+  var srcBar = document.getElementById("fo-src-bar");
+  if(isEdit && data.source_plan_id){
+    srcBar.style.display = "";
+    srcBar.textContent = "来源入库计划: " + data.source_plan_id;
+  } else if(!isEdit && fromPlan && fromPlan.plan_id){
+    srcBar.style.display = "";
+    srcBar.textContent = "来源入库计划: " + fromPlan.plan_id;
+  } else {
+    srcBar.style.display = "none";
+  }
+
+  if(isEdit){
+    _foSourcePlanId = data.source_plan_id || null;
+    document.getElementById("fo-day").value = data.plan_day;
+    document.getElementById("fo-optype").value = data.operation_type;
+    document.getElementById("fo-customer").value = data.customer_name;
+    document.getElementById("fo-summary").value = data.goods_summary || "";
+    document.getElementById("fo-input-box").value = data.input_box_count || 0;
+    document.getElementById("fo-output-box").value = data.output_box_count || 0;
+    document.getElementById("fo-output-pallet").value = data.output_pallet_count || 0;
+    document.getElementById("fo-instr").value = data.instruction_text || "";
+    document.getElementById("fo-creator").value = "";
+  } else if(fromPlan){
+    _foSourcePlanId = fromPlan.plan_id || null;
+    document.getElementById("fo-day").value = fromPlan.plan_day || kstToday();
+    document.getElementById("fo-optype").value = "other";
+    document.getElementById("fo-customer").value = fromPlan.customer_name || "";
+    document.getElementById("fo-summary").value = fromPlan.goods_summary || "";
+    document.getElementById("fo-input-box").value = 0;
+    document.getElementById("fo-output-box").value = 0;
+    document.getElementById("fo-output-pallet").value = 0;
+    document.getElementById("fo-instr").value = fromPlan.purpose_text || "";
+    document.getElementById("fo-creator").value = "";
+  } else {
+    _foSourcePlanId = null;
+    document.getElementById("fo-day").value = kstToday();
+    document.getElementById("fo-optype").value = "other";
+    document.getElementById("fo-customer").value = "";
+    document.getElementById("fo-summary").value = "";
+    document.getElementById("fo-input-box").value = 0;
+    document.getElementById("fo-output-box").value = 0;
+    document.getElementById("fo-output-pallet").value = 0;
+    document.getElementById("fo-instr").value = "";
+    document.getElementById("fo-creator").value = "";
+  }
+  document.getElementById("fo-result").textContent = "";
+}
+
+function submitFo(){
+  var day = document.getElementById("fo-day").value;
+  var optype = document.getElementById("fo-optype").value;
+  var customer = document.getElementById("fo-customer").value.trim();
+  var summary = document.getElementById("fo-summary").value.trim();
+  var inputBox = Number(document.getElementById("fo-input-box").value) || 0;
+  var outputBox = Number(document.getElementById("fo-output-box").value) || 0;
+  var outputPallet = Number(document.getElementById("fo-output-pallet").value) || 0;
+  var instr = document.getElementById("fo-instr").value.trim();
+  var creator = document.getElementById("fo-creator").value.trim();
+
+  if(!day){ alert("请选择作业日期"); return; }
+  if(!customer){ alert("请输入客户名"); return; }
+
+  if(_editingFoId){
+    // 编辑模式 — 全量提交
+    fetchApi({
+      action:"b2b_field_op_update", record_id:_editingFoId, sub:"edit",
+      plan_day:day, customer_name:customer, goods_summary:summary,
+      operation_type:optype, input_box_count:inputBox, output_box_count:outputBox,
+      output_pallet_count:outputPallet, instruction_text:instr
+    }).then(function(res){
+      if(res && res.ok){
+        alert("修改成功！");
+        goFoDetail(_editingFoId);
+      } else {
+        document.getElementById("fo-result").innerHTML = '<span class="bad">修改失败: '+esc(res&&res.error||"unknown")+'</span>';
+      }
+    });
+  } else {
+    // 新建模式
+    var params = {
+      action:"b2b_field_op_create", plan_day:day, customer_name:customer,
+      goods_summary:summary, operation_type:optype,
+      input_box_count:inputBox, output_box_count:outputBox,
+      output_pallet_count:outputPallet, instruction_text:instr, created_by:creator
+    };
+    if(_foSourcePlanId) params.source_plan_id = _foSourcePlanId;
+    fetchApi(params).then(function(res){
+      if(res && res.ok){
+        alert("创建成功！编号: " + res.record_id);
+        goFoDetail(res.record_id);
+      } else {
+        document.getElementById("fo-result").innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
+      }
+    });
+  }
+}
+
+function goEditFo(record_id){
+  fetchApi({ action:"b2b_field_op_detail", record_id:record_id }).then(function(res){
+    if(!res || !res.ok){ alert("加载失败"); return; }
+    var r = res.record;
+    if(!FO_EDITABLE[r.status]){ alert("当前状态不允许编辑"); return; }
+    _editingFoId = record_id;
+    goView("fo_create");
+    initFoForm(r, null);
+  });
+}
+
+// ===== 现场作业记录列表 =====
+function initFoList(){
+  var today = kstToday();
+  document.getElementById("fl-start").value = today;
+  document.getElementById("fl-end").value = today;
+  loadFoList();
+}
+
+function loadFoList(){
+  var s = document.getElementById("fl-start").value;
+  var e = document.getElementById("fl-end").value;
+  if(!s || !e){ alert("请选择日期"); return; }
+  var el = document.getElementById("fl-result");
+  el.innerHTML = '<div class="q-empty">加载中...</div>';
+  fetchApi({ action:"b2b_field_op_list", start_day:s, end_day:e }).then(function(res){
+    if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败</div>'; return; }
+    renderFoList(el, res.records||[]);
+  });
+}
+
+function renderFoList(container, records){
+  if(!records.length){
+    container.innerHTML = '<div class="q-empty">暂无记录</div>';
+    return;
+  }
+
+  // 分区：未完成在前
+  var incomplete = records.filter(function(r){ return FO_INCOMPLETE_STATUS[r.status]; });
+  var done = records.filter(function(r){ return !FO_INCOMPLETE_STATUS[r.status]; });
+
+  incomplete.sort(function(a,b){ return (FO_STATUS_PRIORITY[a.status]||9) - (FO_STATUS_PRIORITY[b.status]||9); });
+  done.sort(function(a,b){ return (FO_STATUS_PRIORITY[a.status]||9) - (FO_STATUS_PRIORITY[b.status]||9); });
+
+  var html = '';
+  if(incomplete.length > 0){
+    html += '<div class="list-section-title">进行中（'+incomplete.length+' 条）</div>';
+    html += incomplete.map(renderFoRow).join("");
+  }
+  if(done.length > 0){
+    if(incomplete.length > 0) html += '<div class="list-section-title" style="margin-top:12px;">已结束（'+done.length+' 条）</div>';
+    html += done.map(renderFoRow).join("");
+  }
+  container.innerHTML = html;
+}
+
+function renderFoRow(r){
+  var dimClass = (r.status==="cancelled") ? " row-dim" : "";
+  var boundTag = r.bound_workorder_id ? ' <span class="bound-badge">已绑定 '+esc(r.bound_workorder_id)+'</span>' : '';
+  var srcTag = r.source_plan_id ? ' <span class="muted" style="font-size:11px;">← '+esc(r.source_plan_id)+'</span>' : '';
+  return '<div class="wo-row'+dimClass+'" onclick="goFoDetail(\''+esc(r.record_id)+'\')">' +
+    '<div><span class="st st-'+esc(r.status)+'">'+esc(FO_STATUS_LABEL[r.status]||r.status)+'</span>'+boundTag+' ' +
+    '<b>'+esc(r.record_id)+'</b> · '+esc(r.customer_name)+srcTag+'</div>' +
+    '<div class="meta">'+esc(r.plan_day)+' · '+esc(FO_OP_TYPE_LABEL[r.operation_type]||r.operation_type) +
+    ' · 入'+r.input_box_count+'箱 → 出'+r.output_box_count+'箱 / '+r.output_pallet_count+'托</div>' +
+  '</div>';
+}
+
+// ===== 现场作业记录详情 =====
+function goFoDetail(id){
+  goView("fo_detail");
+  var card = document.getElementById("fo-detail-card");
+  card.innerHTML = '<div class="muted">加载中...</div>';
+  fetchApi({ action:"b2b_field_op_detail", record_id:id }).then(function(res){
+    if(!res || !res.ok){ card.innerHTML = '<div class="bad">加载失败: '+esc(res&&res.error||"")+'</div>'; return; }
+    var r = res.record;
+
+    // 状态按钮
+    var statusBtns = (FO_NEXT_STATUS[r.status]||[]).map(function(s){
+      return '<button onclick="changeFoStatus(\''+esc(r.record_id)+'\',\''+s+'\')" class="'+(s==="cancelled"?"bad":"primary")+'" style="width:auto;padding:8px 16px;font-size:13px;">'+esc(FO_STATUS_LABEL[s]||s)+'</button>';
+    }).join(" ");
+
+    // 编辑按钮
+    var editBtn = FO_EDITABLE[r.status] ?
+      ' <button onclick="goEditFo(\''+esc(r.record_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">编辑</button>' : '';
+
+    // 绑定按钮：仅 completed 且未绑定
+    var bindBtn = (r.status === "completed" && !r.bound_workorder_id) ?
+      ' <button onclick="showBindWo(\''+esc(r.record_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;background:#8e24aa;color:#fff;">绑定作业单</button>' : '';
+
+    // 绑定信息
+    var boundInfo = r.bound_workorder_id ?
+      '<div class="detail-field" style="background:#f3e5f5;padding:8px 12px;border-radius:8px;margin:8px 0;">' +
+      '<b>已绑定作业单:</b> <span style="color:#8e24aa;font-weight:700;">'+esc(r.bound_workorder_id)+'</span>' +
+      (r.bound_at ? ' · 绑定时间: '+new Date(r.bound_at).toLocaleString() : '') +
+      ' <button onclick="goWoDetail(\''+esc(r.bound_workorder_id)+'\')" style="width:auto;padding:4px 12px;font-size:12px;margin-left:8px;">查看作业单</button></div>' : '';
+
+    card.innerHTML =
+      '<div style="font-size:18px;font-weight:800;margin-bottom:10px;">' +
+        esc(r.record_id) + ' <span class="st st-'+esc(r.status)+'">'+esc(FO_STATUS_LABEL[r.status]||r.status)+'</span>' +
+        (r.bound_workorder_id ? ' <span class="bound-badge">已绑定</span>' : '') +
+      '</div>' +
+      (r.source_plan_id ? '<div class="detail-field" style="color:#2e7d32;"><b>来源入库计划:</b> '+esc(r.source_plan_id)+'</div>' : '<div class="detail-field muted"><b>来源:</b> 独立新建</div>') +
+      '<div class="detail-field"><b>客户:</b> '+esc(r.customer_name)+'</div>' +
+      '<div class="detail-field"><b>作业日期:</b> '+esc(r.plan_day)+'</div>' +
+      '<div class="detail-field"><b>操作类型:</b> '+esc(FO_OP_TYPE_LABEL[r.operation_type]||r.operation_type)+'</div>' +
+      '<div class="detail-field"><b>货物摘要:</b> '+esc(r.goods_summary||"(无)")+'</div>' +
+      '<div class="detail-field"><b>输入箱数:</b> '+r.input_box_count+'</div>' +
+      '<div class="detail-field"><b>产出箱数:</b> '+r.output_box_count+'</div>' +
+      '<div class="detail-field"><b>产出托盘数:</b> '+r.output_pallet_count+'</div>' +
+      (r.instruction_text ? '<div class="detail-field"><b>作业说明:</b> '+esc(r.instruction_text)+'</div>' : '') +
+      '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(r.created_by)+' · 创建时间: '+new Date(r.created_at).toLocaleString() +
+      (r.completed_at ? ' · 完成时间: '+new Date(r.completed_at).toLocaleString() : '') + '</div>' +
+      boundInfo +
+      '<div style="margin:12px 0;">' + statusBtns + editBtn + bindBtn + '</div>' +
+      '<div id="fo-bind-area"></div>';
+  });
+}
+
+function changeFoStatus(id, status){
+  var label = FO_STATUS_LABEL[status] || status;
+  if(status === "cancelled"){
+    if(!confirm("确认作废记录 "+id+"？")) return;
+  } else {
+    if(!confirm("确认将 "+id+" 状态改为「"+label+"」？")) return;
+  }
+  fetchApi({ action:"b2b_field_op_update", record_id:id, sub:"status", status:status }).then(function(res){
+    if(res && res.ok){
+      goFoDetail(id);
+    } else {
+      alert("状态更新失败: "+(res&&res.error||"unknown"));
+    }
+  });
+}
+
+// ===== 绑定作业单 =====
+function showBindWo(record_id){
+  var area = document.getElementById("fo-bind-area");
+  area.innerHTML = '<div class="muted">加载作业单列表...</div>';
+
+  // 加载最近 30 天的作业单供选择
+  var today = kstToday();
+  var d30 = new Date(Date.now() + 9*3600*1000 - 30*24*3600*1000);
+  var start30 = d30.getUTCFullYear() + "-" + pad2(d30.getUTCMonth()+1) + "-" + pad2(d30.getUTCDate());
+
+  fetchApi({ action:"b2b_wo_list", start_day:start30, end_day:today }).then(function(res){
+    if(!res || !res.ok){ area.innerHTML = '<div class="bad">加载失败</div>'; return; }
+    var wos = (res.workorders||[]).filter(function(w){ return w.status !== "cancelled"; });
+    if(!wos.length){
+      area.innerHTML = '<div class="muted">最近30天没有可绑定的作业单</div>';
+      return;
+    }
+
+    var html = '<div style="border:1px solid #ce93d8;border-radius:10px;padding:12px;margin-top:8px;background:#fce4ec;">';
+    html += '<div style="font-size:14px;font-weight:700;margin-bottom:8px;">选择要绑定的正式作业单</div>';
+    html += '<select id="fo-bind-select" style="width:100%;margin-bottom:8px;">';
+    wos.forEach(function(w){
+      html += '<option value="'+esc(w.workorder_id)+'">'+esc(w.workorder_id)+' · '+esc(w.customer_name)+' · '+esc(w.plan_day)+' · '+esc(WO_STATUS_LABEL[w.status]||w.status)+'</option>';
+    });
+    html += '</select>';
+    html += '<button class="primary" style="width:auto;padding:8px 16px;font-size:13px;" onclick="doBindWo(\''+esc(record_id)+'\')">确认绑定</button>';
+    html += ' <button style="width:auto;padding:8px 16px;font-size:13px;" onclick="document.getElementById(\'fo-bind-area\').innerHTML=\'\'">取消</button>';
+    html += '</div>';
+    area.innerHTML = html;
+  });
+}
+
+function doBindWo(record_id){
+  var sel = document.getElementById("fo-bind-select");
+  if(!sel) return;
+  var workorder_id = sel.value;
+  if(!workorder_id){ alert("请选择作业单"); return; }
+  if(!confirm("确认将 "+record_id+" 绑定到 "+workorder_id+"？\n绑定后不可更改。")) return;
+
+  fetchApi({ action:"b2b_field_op_update", record_id:record_id, sub:"bind", workorder_id:workorder_id }).then(function(res){
+    if(res && res.ok){
+      alert("绑定成功！");
+      goFoDetail(record_id);
+    } else {
+      alert("绑定失败: "+(res&&res.error||"unknown"));
+    }
   });
 }
 

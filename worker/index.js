@@ -506,6 +506,30 @@ export default {
           await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN outbound_pallet_count REAL NOT NULL DEFAULT 0`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v6_b2b_wo_extra_fields', ?)`).bind(Date.now()).run();
         }
+
+        // --- v7: 现场作业记录表 ---
+        const m7 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v7_b2b_field_ops'`).first();
+        if (!m7) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_field_ops (
+            record_id TEXT PRIMARY KEY,
+            source_plan_id TEXT,
+            plan_day TEXT NOT NULL,
+            customer_name TEXT NOT NULL,
+            goods_summary TEXT DEFAULT '',
+            operation_type TEXT NOT NULL DEFAULT 'other',
+            input_box_count REAL DEFAULT 0,
+            output_box_count REAL DEFAULT 0,
+            output_pallet_count REAL DEFAULT 0,
+            instruction_text TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'draft',
+            created_by TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            completed_at INTEGER,
+            bound_workorder_id TEXT,
+            bound_at INTEGER
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v7_b2b_field_ops', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2434,6 +2458,163 @@ export default {
           ...CORS_HEADERS
         }
       });
+    }
+
+    // ===== B2B 现场作业记录 =====
+
+    if (action === "b2b_field_op_create") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+
+      const plan_day = String(p.plan_day || "").trim();
+      const customer_name = String(p.customer_name || "").trim();
+      const goods_summary = String(p.goods_summary || "").trim();
+      const source_plan_id = String(p.source_plan_id || "").trim() || null;
+      const operation_type = String(p.operation_type || "other").trim();
+      const input_box_count = Number(p.input_box_count) || 0;
+      const output_box_count = Number(p.output_box_count) || 0;
+      const output_pallet_count = Number(p.output_pallet_count) || 0;
+      const instruction_text = String(p.instruction_text || "").trim();
+      const created_by = String(p.created_by || "").trim();
+
+      if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
+      if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
+
+      const VALID_OP = ["box_op","palletize","bulk_in_out","unload","other"];
+      if (!VALID_OP.includes(operation_type)) return jsonpOrJson({ ok:false, error:"invalid operation_type, must be: " + VALID_OP.join("/") }, callback);
+
+      // 如果指定了 source_plan_id，校验存在性
+      if (source_plan_id) {
+        const srcPlan = await env.DB.prepare(`SELECT plan_id FROM b2b_inbound_plans WHERE plan_id=?`).bind(source_plan_id).first();
+        if (!srcPlan) return jsonpOrJson({ ok:false, error:"source_plan_id not found: " + source_plan_id }, callback);
+      }
+
+      // 生成 record_id：FO-YYMMDD-NNN
+      const dayTag = plan_day.slice(2).replace(/-/g, "");
+      const maxRow = await env.DB.prepare(
+        `SELECT record_id FROM b2b_field_ops WHERE record_id LIKE ? ORDER BY record_id DESC LIMIT 1`
+      ).bind("FO-" + dayTag + "-%").first();
+      let seq = 1;
+      if (maxRow && maxRow.record_id) {
+        const parts = maxRow.record_id.split("-");
+        seq = (parseInt(parts[2], 10) || 0) + 1;
+      }
+      const record_id = "FO-" + dayTag + "-" + String(seq).padStart(3, "0");
+
+      await env.DB.prepare(
+        `INSERT INTO b2b_field_ops(record_id,source_plan_id,plan_day,customer_name,goods_summary,operation_type,input_box_count,output_box_count,output_pallet_count,instruction_text,status,created_by,created_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,'draft',?,?)`
+      ).bind(record_id, source_plan_id, plan_day, customer_name, goods_summary, operation_type, input_box_count, output_box_count, output_pallet_count, instruction_text, created_by, now).run();
+
+      return jsonpOrJson({ ok:true, record_id }, callback);
+    }
+
+    if (action === "b2b_field_op_list") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_day = String(p.start_day || "").trim();
+      const end_day = String(p.end_day || "").trim();
+      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
+
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_field_ops WHERE plan_day >= ? AND plan_day <= ? ORDER BY plan_day ASC, created_at ASC`
+      ).bind(start_day, end_day).all();
+      return jsonpOrJson({ ok:true, records: rs.results || [] }, callback);
+    }
+
+    if (action === "b2b_field_op_detail") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const record_id = String(p.record_id || "").trim();
+      if (!record_id) return jsonpOrJson({ ok:false, error:"missing record_id" }, callback);
+
+      const row = await env.DB.prepare(`SELECT * FROM b2b_field_ops WHERE record_id=?`).bind(record_id).first();
+      if (!row) return jsonpOrJson({ ok:false, error:"record_id not found" }, callback);
+      return jsonpOrJson({ ok:true, record: row }, callback);
+    }
+
+    if (action === "b2b_field_op_update") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const record_id = String(p.record_id || "").trim();
+      if (!record_id) return jsonpOrJson({ ok:false, error:"missing record_id" }, callback);
+
+      const existing = await env.DB.prepare(`SELECT * FROM b2b_field_ops WHERE record_id=?`).bind(record_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"record_id not found" }, callback);
+
+      const sub = String(p.sub || "").trim(); // "edit" | "status" | "bind"
+
+      // --- 编辑字段：只允许 draft / recording，全量提交，source_plan_id 不可改 ---
+      if (sub === "edit") {
+        if (existing.status !== "draft" && existing.status !== "recording") {
+          return jsonpOrJson({ ok:false, error:"only draft/recording can be edited" }, callback);
+        }
+        const plan_day = String(p.plan_day || "").trim();
+        const customer_name = String(p.customer_name || "").trim();
+        const goods_summary = String(p.goods_summary || "").trim();
+        const operation_type = String(p.operation_type || "").trim();
+        const input_box_count = Number(p.input_box_count) || 0;
+        const output_box_count = Number(p.output_box_count) || 0;
+        const output_pallet_count = Number(p.output_pallet_count) || 0;
+        const instruction_text = String(p.instruction_text || "").trim();
+
+        if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
+        if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
+        if (!operation_type) return jsonpOrJson({ ok:false, error:"missing operation_type" }, callback);
+
+        const VALID_OP = ["box_op","palletize","bulk_in_out","unload","other"];
+        if (!VALID_OP.includes(operation_type)) return jsonpOrJson({ ok:false, error:"invalid operation_type" }, callback);
+
+        await env.DB.prepare(
+          `UPDATE b2b_field_ops SET plan_day=?, customer_name=?, goods_summary=?, operation_type=?, input_box_count=?, output_box_count=?, output_pallet_count=?, instruction_text=? WHERE record_id=?`
+        ).bind(plan_day, customer_name, goods_summary, operation_type, input_box_count, output_box_count, output_pallet_count, instruction_text, record_id).run();
+
+        return jsonpOrJson({ ok:true, record_id }, callback);
+      }
+
+      // --- 状态变更：按状态机走 ---
+      if (sub === "status") {
+        const new_status = String(p.status || "").trim();
+        const FO_NEXT = {
+          draft: ["recording","cancelled"],
+          recording: ["completed","cancelled"],
+          completed: [],
+          cancelled: []
+        };
+        const allowed = FO_NEXT[existing.status];
+        if (!allowed || !allowed.includes(new_status)) {
+          return jsonpOrJson({ ok:false, error:"cannot change from " + existing.status + " to " + new_status }, callback);
+        }
+
+        let completedAt = existing.completed_at;
+        if (new_status === "completed") completedAt = now;
+
+        await env.DB.prepare(
+          `UPDATE b2b_field_ops SET status=?, completed_at=? WHERE record_id=?`
+        ).bind(new_status, completedAt, record_id).run();
+
+        return jsonpOrJson({ ok:true, record_id, status: new_status }, callback);
+      }
+
+      // --- 绑定作业单：只允许 completed 且当前未绑定 ---
+      if (sub === "bind") {
+        if (existing.status !== "completed") {
+          return jsonpOrJson({ ok:false, error:"only completed records can be bound" }, callback);
+        }
+        if (existing.bound_workorder_id) {
+          return jsonpOrJson({ ok:false, error:"already bound to " + existing.bound_workorder_id + ", cannot rebind" }, callback);
+        }
+        const workorder_id = String(p.workorder_id || "").trim();
+        if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+
+        // 校验作业单存在
+        const wo = await env.DB.prepare(`SELECT workorder_id FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+        if (!wo) return jsonpOrJson({ ok:false, error:"workorder_id not found: " + workorder_id }, callback);
+
+        await env.DB.prepare(
+          `UPDATE b2b_field_ops SET bound_workorder_id=?, bound_at=? WHERE record_id=?`
+        ).bind(workorder_id, now, record_id).run();
+
+        return jsonpOrJson({ ok:true, record_id, bound_workorder_id: workorder_id }, callback);
+      }
+
+      return jsonpOrJson({ ok:false, error:"invalid sub, must be: edit/status/bind" }, callback);
     }
 
     return jsonpOrJson({ ok:false, error:"unknown action: " + action }, callback);

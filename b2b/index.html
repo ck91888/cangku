@@ -19,7 +19,8 @@
     .st{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;color:#fff;margin-right:4px;}
     .st-pending{background:#999;} .st-arrived{background:#3498db;} .st-processing{background:#e67e22;}
     .st-completed{background:#27ae60;} .st-abnormal{background:#e74c3c;} .st-cancelled{background:#bbb;}
-    .st-draft{background:#999;} .st-issued{background:#3498db;} .st-working{background:#e67e22;}
+    .st-draft{background:#999;} .st-issued{background:#3498db;} .st-working{background:#e67e22;} .st-recording{background:#e67e22;}
+    .bound-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;color:#fff;background:#8e24aa;margin-left:4px;}
     .status-btns{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;}
     .status-btns button{padding:4px 10px;font-size:11px;margin:0;width:auto;min-width:0;border-radius:8px;}
     .wo-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;cursor:pointer;}
@@ -94,8 +95,10 @@
     <button class="primary" onclick="goHome()">首页</button>
     <button onclick="goNewPlan()">+ 入库计划</button>
     <button onclick="goNewWo()">+ 出库作业单</button>
+    <button onclick="goNewFo()">+ 现场记录</button>
     <button onclick="goCardDetail('plan','today')">计划列表</button>
     <button onclick="goView('wo_list')">作业单列表</button>
+    <button onclick="goView('fo_list')">记录列表</button>
     <button style="margin-left:auto;" onclick="doLogout()">退出</button>
   </div>
 
@@ -243,6 +246,60 @@
   <!-- 作业单详情 -->
   <div id="v-wo_detail" style="display:none;">
     <div class="card" id="wo-detail-card"></div>
+  </div>
+
+  <!-- 新建/编辑现场作业记录 -->
+  <div id="v-fo_create" style="display:none;">
+    <div class="card">
+      <div id="fo-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">新建现场作业记录</div>
+      <div id="fo-id-bar" class="edit-id-bar" style="display:none;"></div>
+      <div id="fo-src-bar" style="display:none;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:13px;color:#2e7d32;"></div>
+      <div class="row">
+        <div class="form-group"><label>作业日期</label><input id="fo-day" type="date" /></div>
+        <div class="form-group"><label>操作类型</label>
+          <select id="fo-optype">
+            <option value="box_op">箱子操作</option>
+            <option value="palletize">打托</option>
+            <option value="bulk_in_out">整进整出</option>
+            <option value="unload">卸货</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="form-group"><label>客户名</label><input id="fo-customer" placeholder="客户名称" /></div>
+        <div class="form-group"><label>货物摘要</label><input id="fo-summary" placeholder="如：服装 300箱" /></div>
+      </div>
+      <div class="row">
+        <div class="form-group"><label>输入箱数</label><input id="fo-input-box" type="number" min="0" step="1" placeholder="0" /></div>
+        <div class="form-group"><label>产出箱数</label><input id="fo-output-box" type="number" min="0" step="1" placeholder="0" /></div>
+        <div class="form-group"><label>产出托盘数</label><input id="fo-output-pallet" type="number" min="0" step="0.5" placeholder="0" /></div>
+      </div>
+      <div class="form-group"><label>作业说明（选填）</label><textarea id="fo-instr" rows="2" placeholder="现场操作说明"></textarea></div>
+      <div id="fo-creator-group" class="form-group"><label>创建人</label><input id="fo-creator" placeholder="你的名字" /></div>
+      <button id="fo-submit-btn" class="primary" onclick="submitFo()">保存</button>
+      <div id="fo-result" style="margin-top:8px;font-size:13px;"></div>
+    </div>
+  </div>
+
+  <!-- 现场作业记录列表 -->
+  <div id="v-fo_list" style="display:none;">
+    <div class="card">
+      <div id="fl-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">现场作业记录列表</div>
+      <div class="row">
+        <div class="form-group"><label>开始日期</label><input id="fl-start" type="date" /></div>
+        <div class="form-group"><label>结束日期</label><input id="fl-end" type="date" /></div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="primary" style="width:auto;min-width:80px;" onclick="loadFoList()">查询</button>
+        </div>
+      </div>
+      <div id="fl-result" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <!-- 现场作业记录详情 -->
+  <div id="v-fo_detail" style="display:none;">
+    <div class="card" id="fo-detail-card"></div>
   </div>
 
 </div><!-- /v-main -->
