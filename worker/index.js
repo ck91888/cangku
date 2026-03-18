@@ -589,6 +589,37 @@ export default {
           )`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v9_b2b_operation_bindings', ?)`).bind(Date.now()).run();
         }
+
+        // v10: b2b_operation_results — 现场结果单（工单级，非session级）
+        const m10 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v10_b2b_operation_results'`).first();
+        if (!m10) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_operation_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_kst TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_order_no TEXT NOT NULL,
+            internal_workorder_id TEXT,
+            customer_name TEXT NOT NULL DEFAULT '',
+            operation_mode TEXT NOT NULL DEFAULT 'pack_outbound',
+            sku_kind_count REAL NOT NULL DEFAULT 0,
+            box_count REAL NOT NULL DEFAULT 0,
+            pallet_count REAL NOT NULL DEFAULT 0,
+            needs_forklift_pick INTEGER NOT NULL DEFAULT 0,
+            forklift_pallet_count REAL NOT NULL DEFAULT 0,
+            rack_pick_location_count REAL NOT NULL DEFAULT 0,
+            remark TEXT NOT NULL DEFAULT '',
+            photo_urls_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'draft',
+            created_by TEXT NOT NULL DEFAULT '',
+            confirmed_by TEXT NOT NULL DEFAULT '',
+            first_session_id TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            completed_at INTEGER,
+            UNIQUE(day_kst, source_type, source_order_no)
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v10_b2b_operation_results', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2890,6 +2921,128 @@ export default {
       }
 
       return jsonpOrJson({ ok:true, bindings }, callback);
+    }
+
+    // ===== 现场结果单 =====
+
+    if (action === "b2b_op_result_get") {
+      const day_kst = String(p.day_kst || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      if (!day_kst || !source_order_no) return jsonpOrJson({ ok:false, error:"missing day_kst or source_order_no" }, callback);
+
+      // 必须当日绑定过（按 day_kst + source_order_no 校验）
+      const bind = await env.DB.prepare(
+        `SELECT source_type, internal_workorder_id FROM b2b_operation_bindings WHERE day_kst=? AND source_order_no=? LIMIT 1`
+      ).bind(day_kst, source_order_no).first();
+      if (!bind) return jsonpOrJson({ ok:false, error:"workorder not bound today" }, callback);
+
+      const row = await env.DB.prepare(
+        `SELECT * FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+      ).bind(day_kst, bind.source_type, source_order_no).first();
+
+      // 参与信息（当日 + 同来源 + 同工单）
+      const partRs = await env.DB.prepare(
+        `SELECT COUNT(DISTINCT session_id) as session_count, COUNT(DISTINCT badge) as badge_count FROM b2b_operation_bindings WHERE day_kst=? AND source_type=? AND source_order_no=? AND badge != ''`
+      ).bind(day_kst, bind.source_type, source_order_no).all();
+      const badgeRs = await env.DB.prepare(
+        `SELECT DISTINCT badge FROM b2b_operation_bindings WHERE day_kst=? AND source_type=? AND source_order_no=? AND badge != ''`
+      ).bind(day_kst, bind.source_type, source_order_no).all();
+      const part = (partRs.results || [])[0] || { session_count:0, badge_count:0 };
+      const badges = (badgeRs.results || []).map(r => r.badge);
+
+      // 自动带入客户名
+      let customer_name = "";
+      if (bind.internal_workorder_id) {
+        const wo = await env.DB.prepare(`SELECT customer_name FROM b2b_workorders WHERE workorder_id=?`).bind(bind.internal_workorder_id).first();
+        if (wo) customer_name = wo.customer_name || "";
+      }
+
+      return jsonpOrJson({
+        ok:true, result: row || null,
+        source_type: bind.source_type,
+        internal_workorder_id: bind.internal_workorder_id || null,
+        customer_name,
+        participation: { session_count: part.session_count, badge_count: part.badge_count, badges }
+      }, callback);
+    }
+
+    if (action === "b2b_op_result_upsert") {
+      const day_kst = String(p.day_kst || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      const session_id = String(p.session_id || "").trim();
+      if (!day_kst || !source_order_no) return jsonpOrJson({ ok:false, error:"missing day_kst or source_order_no" }, callback);
+
+      // 必须当日绑定过
+      const bind = await env.DB.prepare(
+        `SELECT source_type, internal_workorder_id FROM b2b_operation_bindings WHERE day_kst=? AND source_order_no=? LIMIT 1`
+      ).bind(day_kst, source_order_no).first();
+      if (!bind) return jsonpOrJson({ ok:false, error:"workorder not bound today" }, callback);
+
+      const operation_mode = String(p.operation_mode || "pack_outbound").trim();
+      if (operation_mode !== "pack_outbound" && operation_mode !== "move_and_palletize")
+        return jsonpOrJson({ ok:false, error:"invalid operation_mode" }, callback);
+
+      const sku_kind_count = Math.max(0, Number(p.sku_kind_count || 0));
+      const box_count = Math.max(0, Number(p.box_count || 0));
+      const pallet_count = Math.max(0, Number(p.pallet_count || 0));
+      const needs_forklift_pick = p.needs_forklift_pick ? 1 : 0;
+      const forklift_pallet_count = needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
+      const rack_pick_location_count = needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
+      const remark = String(p.remark || "").trim();
+      const new_status = String(p.status || "draft").trim();
+      if (new_status !== "draft" && new_status !== "completed")
+        return jsonpOrJson({ ok:false, error:"invalid status" }, callback);
+      const confirmed_by = String(p.confirmed_by || "").trim();
+
+      // 客户名
+      let customer_name = String(p.customer_name || "").trim();
+      if (!customer_name && bind.internal_workorder_id) {
+        const wo = await env.DB.prepare(`SELECT customer_name FROM b2b_workorders WHERE workorder_id=?`).bind(bind.internal_workorder_id).first();
+        if (wo) customer_name = wo.customer_name || "";
+      }
+
+      const existing = await env.DB.prepare(
+        `SELECT id, status FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+      ).bind(day_kst, bind.source_type, source_order_no).first();
+
+      if (existing) {
+        // 更新
+        const completed_at = new_status === "completed" ? now : null;
+        await env.DB.prepare(
+          `UPDATE b2b_operation_results SET operation_mode=?, sku_kind_count=?, box_count=?, pallet_count=?,
+           needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?,
+           remark=?, status=?, confirmed_by=?, customer_name=?, updated_at=?, completed_at=?
+           WHERE id=?`
+        ).bind(operation_mode, sku_kind_count, box_count, pallet_count,
+          needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
+          remark, new_status, confirmed_by, customer_name, now, completed_at, existing.id).run();
+        return jsonpOrJson({ ok:true, id: existing.id, created: false }, callback);
+      } else {
+        // 新建
+        const completed_at = new_status === "completed" ? now : null;
+        const ins = await env.DB.prepare(
+          `INSERT INTO b2b_operation_results(day_kst, source_type, source_order_no, internal_workorder_id,
+           customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
+           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
+           remark, photo_urls_json, status, created_by, confirmed_by, first_session_id,
+           created_at, updated_at, completed_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?)`
+        ).bind(day_kst, bind.source_type, source_order_no, bind.internal_workorder_id || null,
+          customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
+          needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
+          remark, new_status, String(p.created_by || "").trim(), confirmed_by, session_id,
+          now, now, completed_at).run();
+        return jsonpOrJson({ ok:true, id: ins.meta && ins.meta.last_row_id, created: true }, callback);
+      }
+    }
+
+    if (action === "b2b_op_result_list") {
+      const day_kst = String(p.day_kst || "").trim();
+      if (!day_kst) return jsonpOrJson({ ok:false, error:"missing day_kst" }, callback);
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_operation_results WHERE day_kst=? ORDER BY created_at ASC`
+      ).bind(day_kst).all();
+      return jsonpOrJson({ ok:true, results: rs.results || [] }, callback);
     }
 
     // ===== 出库扫码核对 =====

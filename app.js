@@ -152,7 +152,7 @@ function renderPages(){
   if(cur==="b2b_menu"){ refreshUI(); }
   if(cur==="b2b_unload"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
   if(cur==="b2b_tally"){ restoreState(); renderActiveLists(); renderB2bTallyUI(); refreshUI(); }
-  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); refreshUI(); }
+  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); loadB2bResults(); refreshUI(); }
   if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_field_op"){ restoreState(); renderActiveLists(); renderB2bFieldOpUI(); refreshUI(); }
@@ -366,6 +366,7 @@ var scannedBulkOutOrders = new Set();
 var scannedB2bTallyOrders = new Set();
 var scannedB2bWorkorders = new Set();
 var b2bWorkorderBindings = {}; // { orderNo: { source_type, match_status, wo_summary } }
+var b2bWorkorderResults = {};  // { orderNo: { operation_mode, box_count, pallet_count, ... } }
 
 var lastScanAt = 0;
 var scanBusy = false;
@@ -1953,7 +1954,7 @@ function renderB2bTallyUI(){
 }
 
 /** ===== B2B Workorder (like B2C BulkOut) ===== */
-function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); b2bWorkorderBindings = {}; }, renderB2bWorkorderUI); }
+function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); b2bWorkorderBindings = {}; b2bWorkorderResults = {}; }, renderB2bWorkorderUI); }
 async function endB2bWorkorder(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 function callB2bOpBind(orderNo){
@@ -2010,6 +2011,142 @@ function loadB2bBindings(){
     persistState();
     renderB2bWorkorderUI();
   }).catch(function(e){ console.error("b2b_op_bind_list error", e); });
+}
+
+// ===== B2B 现场结果单 =====
+var B2B_OP_MODE_LABELS = { pack_outbound:"打包出库", move_and_palletize:"纯搬箱打托" };
+
+function fmtResultSummary(r){
+  if(!r) return "";
+  var parts = [B2B_OP_MODE_LABELS[r.operation_mode] || r.operation_mode];
+  if(r.operation_mode === "pack_outbound" && r.sku_kind_count) parts.push(r.sku_kind_count + "品");
+  if(r.box_count) parts.push(r.box_count + "箱");
+  if(r.pallet_count) parts.push(r.pallet_count + "托");
+  if(r.needs_forklift_pick){
+    var fp = ["含叉车找货"];
+    if(r.forklift_pallet_count) fp.push(r.forklift_pallet_count + "托");
+    if(r.rack_pick_location_count) fp.push(r.rack_pick_location_count + "货位");
+    parts.push(fp.join(" · "));
+  }
+  return parts.join(" · ");
+}
+
+function loadB2bResults(){
+  var kstDay = kstDayKey_(Date.now());
+  jsonp(LOCK_URL, { action:"b2b_op_result_list", day_kst: kstDay }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok) return;
+    b2bWorkorderResults = {};
+    (res.results || []).forEach(function(r){ b2bWorkorderResults[r.source_order_no] = r; });
+    renderB2bWorkorderUI();
+  }).catch(function(){});
+}
+
+function openResultForm(orderNo){
+  var kstDay = kstDayKey_(Date.now());
+  var modal = document.getElementById("b2bResultModal");
+  var body = document.getElementById("b2bResultBody");
+  if(!modal || !body) return;
+  modal.style.display = "flex";
+  body.innerHTML = '<div class="muted">加载中...</div>';
+
+  jsonp(LOCK_URL, { action:"b2b_op_result_get", day_kst: kstDay, source_order_no: orderNo }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ body.innerHTML = '<div style="color:red;">'+esc(res&&res.error||"加载失败")+'</div>'; return; }
+    var r = res.result || {};
+    var cust = res.customer_name || r.customer_name || "";
+    var pt = res.participation || {};
+    var isNew = !res.result;
+    var om = r.operation_mode || "pack_outbound";
+    var nfp = r.needs_forklift_pick ? 1 : 0;
+
+    var html = '<div style="font-size:16px;font-weight:800;margin-bottom:6px;">现场结果单</div>';
+    html += '<div style="font-size:13px;color:#555;margin-bottom:4px;">工单: <b>'+esc(orderNo)+'</b>'+(cust ? ' · '+esc(cust) : '')+'</div>';
+    html += '<div style="font-size:12px;color:#999;margin-bottom:10px;padding:6px 8px;background:#f5f5f5;border-radius:6px;">' +
+      '工单共用结果单 · 参与 session: '+pt.session_count+' · 参与人: '+pt.badge_count +
+      (pt.badges && pt.badges.length > 0 ? '<br>'+pt.badges.map(function(b){ var p=b.split("|"); return esc(p[1]||p[0]); }).join(", ") : '') +
+    '</div>';
+    if(r.status === "completed") html += '<div style="color:#2e7d32;font-weight:700;margin-bottom:8px;">✅ 已完成提交</div>';
+
+    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">作业类型</label>' +
+      '<select id="rf-mode" style="width:100%;margin-top:2px;" onchange="rfToggleMode()">' +
+        '<option value="pack_outbound"'+(om==="pack_outbound"?' selected':'')+'>打包出库</option>' +
+        '<option value="move_and_palletize"'+(om==="move_and_palletize"?' selected':'')+'>纯搬箱打托</option>' +
+      '</select></div>';
+
+    html += '<div id="rf-sku-row" style="margin-bottom:8px;'+(om==="move_and_palletize"?"display:none;":"")+'"><label style="font-size:13px;font-weight:700;">品项数</label>' +
+      '<input id="rf-sku" type="number" min="0" step="1" value="'+(r.sku_kind_count||0)+'" style="width:100%;margin-top:2px;" /></div>';
+
+    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">箱数</label>' +
+      '<input id="rf-box" type="number" min="0" step="0.5" value="'+(r.box_count||0)+'" style="width:100%;margin-top:2px;" /></div>';
+
+    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">托数</label>' +
+      '<input id="rf-pallet" type="number" min="0" step="0.5" value="'+(r.pallet_count||0)+'" style="width:100%;margin-top:2px;" /></div>';
+
+    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;"><input id="rf-fork" type="checkbox" '+(nfp?'checked':'')+' onchange="rfToggleFork()" /> 需要叉车找货</label></div>';
+
+    html += '<div id="rf-fork-fields" style="'+(nfp?"":"display:none;")+'padding-left:12px;border-left:3px solid #ff9800;margin-bottom:8px;">' +
+      '<div style="margin-bottom:6px;"><label style="font-size:12px;font-weight:700;">叉车取货托数</label>' +
+        '<input id="rf-fork-pallet" type="number" min="0" step="0.5" value="'+(r.forklift_pallet_count||0)+'" style="width:100%;margin-top:2px;" /></div>' +
+      '<div><label style="font-size:12px;font-weight:700;">涉及货位数</label>' +
+        '<input id="rf-fork-loc" type="number" min="0" step="1" value="'+(r.rack_pick_location_count||0)+'" style="width:100%;margin-top:2px;" /></div>' +
+    '</div>';
+
+    html += '<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:700;">备注</label>' +
+      '<textarea id="rf-remark" rows="2" style="width:100%;margin-top:2px;">'+ esc(r.remark||"") +'</textarea></div>';
+
+    html += '<input type="hidden" id="rf-order-no" value="'+esc(orderNo)+'" />';
+    html += '<div style="display:flex;gap:8px;">' +
+      '<button onclick="submitResult(\'draft\')" style="flex:1;padding:10px;font-size:14px;">保存草稿</button>' +
+      '<button onclick="submitResult(\'completed\')" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">完成提交</button>' +
+    '</div>';
+
+    body.innerHTML = html;
+  }).catch(function(e){ body.innerHTML = '<div style="color:red;">网络错误</div>'; });
+}
+
+function rfToggleMode(){
+  var m = document.getElementById("rf-mode");
+  var row = document.getElementById("rf-sku-row");
+  if(m && row) row.style.display = m.value === "move_and_palletize" ? "none" : "";
+}
+function rfToggleFork(){
+  var cb = document.getElementById("rf-fork");
+  var fields = document.getElementById("rf-fork-fields");
+  if(cb && fields) fields.style.display = cb.checked ? "" : "none";
+}
+
+function submitResult(st){
+  var orderNo = (document.getElementById("rf-order-no") || {}).value || "";
+  if(!orderNo) return;
+  var kstDay = kstDayKey_(Date.now());
+  var payload = {
+    action: "b2b_op_result_upsert",
+    day_kst: kstDay,
+    source_order_no: orderNo,
+    session_id: currentSessionId || "",
+    operation_mode: (document.getElementById("rf-mode") || {}).value || "pack_outbound",
+    sku_kind_count: Number((document.getElementById("rf-sku") || {}).value) || 0,
+    box_count: Number((document.getElementById("rf-box") || {}).value) || 0,
+    pallet_count: Number((document.getElementById("rf-pallet") || {}).value) || 0,
+    needs_forklift_pick: (document.getElementById("rf-fork") || {}).checked ? 1 : 0,
+    forklift_pallet_count: Number((document.getElementById("rf-fork-pallet") || {}).value) || 0,
+    rack_pick_location_count: Number((document.getElementById("rf-fork-loc") || {}).value) || 0,
+    remark: (document.getElementById("rf-remark") || {}).value || "",
+    status: st,
+    created_by: getOperatorId() || "",
+    confirmed_by: st === "completed" ? (getOperatorId() || "") : ""
+  };
+
+  jsonp(LOCK_URL, payload, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ alert("保存失败: " + (res&&res.error||"unknown")); return; }
+    closeResultForm();
+    loadB2bResults();
+    setStatus(st === "completed" ? "结果已提交 ✅" : "草稿已保存 ✅", true);
+  }).catch(function(){ alert("网络错误，请重试"); });
+}
+
+function closeResultForm(){
+  var modal = document.getElementById("b2bResultModal");
+  if(modal) modal.style.display = "none";
 }
 
 /** ===== B2B Field Op (现场记录) ===== */
@@ -2788,14 +2925,28 @@ function renderB2bWorkorderUI(){
       var show = arr.slice(Math.max(0, arr.length - 30));
       l.innerHTML = show.map(function(x){
         var b = b2bWorkorderBindings[x];
-        if(!b) return '<span class="tag">'+esc(String(x))+'</span>';
-        if(b.source_type === "internal_b2b_workorder"){
-          var detail = b.wo_summary ? " · " + esc(b.wo_summary.qty_text || "") : "";
-          return '<span class="tag" style="background:#c8e6c9;">🏠 '+esc(String(x))+detail+'</span>';
-        } else {
-          return '<span class="tag" style="background:#fff3e0;">📦 '+esc(String(x))+' · 待WMS匹配</span>';
+        var r = b2bWorkorderResults[x];
+        var srcIcon = ""; var srcStyle = "";
+        if(b){
+          if(b.source_type === "internal_b2b_workorder"){ srcIcon = "🏠 "; srcStyle = "background:#c8e6c9;"; }
+          else { srcIcon = "📦 "; srcStyle = "background:#fff3e0;"; }
         }
-      }).join(" ");
+        var label = srcIcon + esc(String(x));
+        if(b && b.source_type === "internal_b2b_workorder" && b.wo_summary && b.wo_summary.qty_text){
+          label += " · " + esc(b.wo_summary.qty_text);
+        }
+        if(b && b.source_type === "external_wms_workorder" && !r) label += " · 待WMS匹配";
+
+        var resultLine = "";
+        if(r){
+          var statusTag = r.status === "completed" ? '<span style="color:#2e7d32;">✅</span> ' : '<span style="color:#f57c00;">📝</span> ';
+          resultLine = '<div style="font-size:11px;margin-top:2px;">' + statusTag + esc(fmtResultSummary(r)) + '</div>';
+        }
+        var btn = b ? ' <button onclick="openResultForm(\''+esc(x)+'\')" style="font-size:10px;padding:1px 5px;cursor:pointer;vertical-align:middle;">'+(r?'编辑':'录入')+'</button>' : '';
+
+        return '<div style="display:inline-block;margin:2px 4px 2px 0;padding:4px 8px;border-radius:6px;'+srcStyle+'font-size:13px;vertical-align:top;">' +
+          label + btn + resultLine + '</div>';
+      }).join("");
     }
   }
 }
