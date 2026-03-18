@@ -152,7 +152,7 @@ function renderPages(){
   if(cur==="b2b_menu"){ refreshUI(); }
   if(cur==="b2b_unload"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
   if(cur==="b2b_tally"){ restoreState(); renderActiveLists(); renderB2bTallyUI(); refreshUI(); }
-  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); refreshUI(); }
+  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); refreshUI(); }
   if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_field_op"){ restoreState(); renderActiveLists(); renderB2bFieldOpUI(); refreshUI(); }
@@ -365,6 +365,7 @@ var scannedInbounds = new Set();
 var scannedBulkOutOrders = new Set();
 var scannedB2bTallyOrders = new Set();
 var scannedB2bWorkorders = new Set();
+var b2bWorkorderBindings = {}; // { orderNo: { source_type, match_status, wo_summary } }
 
 var lastScanAt = 0;
 var scanBusy = false;
@@ -1952,8 +1953,64 @@ function renderB2bTallyUI(){
 }
 
 /** ===== B2B Workorder (like B2C BulkOut) ===== */
-function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); }, renderB2bWorkorderUI); }
+function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); b2bWorkorderBindings = {}; }, renderB2bWorkorderUI); }
 async function endB2bWorkorder(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
+
+function callB2bOpBind(orderNo){
+  if(!currentSessionId) return;
+  jsonp(LOCK_URL, {
+    action:"b2b_op_bind",
+    session_id: currentSessionId,
+    badge: getOperatorId() || "",
+    bound_task: "B2B工单操作",
+    source_order_no: orderNo
+  }, { skipBusy: true }).then(function(res){
+    if(!res || !res.ok){
+      // 服务端失败：回滚本地去重，允许重试
+      scannedB2bWorkorders.delete(orderNo);
+      delete b2bWorkorderBindings[orderNo];
+      persistState(); renderB2bWorkorderUI();
+      setStatus("⚠️ 绑定失败，请重试: " + orderNo, false);
+      return;
+    }
+    if(res.duplicate){
+      b2bWorkorderBindings[orderNo] = b2bWorkorderBindings[orderNo] || { source_type: res.source_type, match_status: res.match_status };
+      showScanFeedback_("该工单已绑定: " + orderNo, "#fffbe6", "#b8860b", 1500);
+    } else {
+      b2bWorkorderBindings[orderNo] = { source_type: res.source_type, match_status: res.match_status, wo_summary: res.wo_summary || null };
+      if(res.source_type === "internal_b2b_workorder"){
+        var qt = (res.wo_summary && res.wo_summary.qty_text) ? " · " + res.wo_summary.qty_text : "";
+        showScanFeedback_("已绑定本系统工单 " + orderNo + qt, "#e6ffe6", "#006400", 2000);
+      } else {
+        showScanFeedback_("已记录外部工单 " + orderNo + "，待WMS匹配", "#fff3e0", "#e65100", 2000);
+      }
+    }
+    renderB2bWorkorderUI();
+  }).catch(function(e){
+    console.error("b2b_op_bind error", e);
+    // 网络失败：回滚本地去重，允许重试
+    scannedB2bWorkorders.delete(orderNo);
+    delete b2bWorkorderBindings[orderNo];
+    persistState(); renderB2bWorkorderUI();
+    setStatus("⚠️ 绑定失败（网络错误），请重试: " + orderNo, false);
+  });
+}
+
+function loadB2bBindings(){
+  if(!currentSessionId) return;
+  jsonp(LOCK_URL, { action:"b2b_op_bind_list", session_id: currentSessionId }).then(function(res){
+    if(!res || !res.ok) return;
+    var bindings = res.bindings || [];
+    b2bWorkorderBindings = {};
+    for(var i=0; i<bindings.length; i++){
+      var b = bindings[i];
+      b2bWorkorderBindings[b.source_order_no] = { source_type: b.source_type, match_status: b.match_status, wo_summary: b.wo_summary || null };
+      scannedB2bWorkorders.add(b.source_order_no);
+    }
+    persistState();
+    renderB2bWorkorderUI();
+  }).catch(function(e){ console.error("b2b_op_bind_list error", e); });
+}
 
 /** ===== B2B Field Op (现场记录) ===== */
 var FO_OP_LABELS = { box_op:"箱子操作", palletize:"打托", bulk_in_out:"整进整出", unload:"卸货", other:"其他" };
@@ -2704,7 +2761,7 @@ function manualAddB2bWorkorder(){
   if(!val){ alert("请输入工单号"); return; }
   if(!currentSessionId){ alert("请先点【开始操作】"); return; }
   if(scannedB2bWorkorders.has(val)){
-    alert("已记录（去重）✅\n" + val);
+    alert("该工单已绑定\n" + val);
     renderB2bWorkorderUI(); inp.value = ""; return;
   }
   scannedB2bWorkorders.add(val);
@@ -2714,7 +2771,8 @@ function manualAddB2bWorkorder(){
     submitEvent({ event:"wave", event_id: evId, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: val });
     addRecent(evId);
   }
-  setStatus("已记录工单（待上传）✅ " + val, true);
+  callB2bOpBind(val);
+  setStatus("绑定中... " + val, true);
   inp.value = "";
 }
 
@@ -2728,7 +2786,16 @@ function renderB2bWorkorderUI(){
     }else{
       var arr = Array.from(scannedB2bWorkorders);
       var show = arr.slice(Math.max(0, arr.length - 30));
-      l.innerHTML = show.map(function(x){ return '<span class="tag">'+esc(String(x))+'</span>'; }).join(" ");
+      l.innerHTML = show.map(function(x){
+        var b = b2bWorkorderBindings[x];
+        if(!b) return '<span class="tag">'+esc(String(x))+'</span>';
+        if(b.source_type === "internal_b2b_workorder"){
+          var detail = b.wo_summary ? " · " + esc(b.wo_summary.qty_text || "") : "";
+          return '<span class="tag" style="background:#c8e6c9;">🏠 '+esc(String(x))+detail+'</span>';
+        } else {
+          return '<span class="tag" style="background:#fff3e0;">📦 '+esc(String(x))+' · 待WMS匹配</span>';
+        }
+      }).join(" ");
     }
   }
 }
@@ -3265,8 +3332,8 @@ async function openScannerCommon(){
 
       // 已记录去重（不关闭扫码器，继续扫）
       if(scannedB2bWorkorders.has(codeW)){
-        showScanFeedback_("已记录（去重）" + codeW, "#fffbe6", "#b8860b", 1200);
-        setStatus("已记录（去重）✅ " + codeW, true);
+        showScanFeedback_("该工单已绑定: " + codeW, "#fffbe6", "#b8860b", 1200);
+        setStatus("该工单已绑定 ✅ " + codeW, true);
         return;
       }
 
@@ -3292,8 +3359,9 @@ async function openScannerCommon(){
         submitEvent({ event:"wave", event_id: evIdW, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: codeW });
         addRecent(evIdW);
       }
-      showScanFeedback_("✅ 已记录 " + codeW + " | 累计: " + scannedB2bWorkorders.size, "#e6ffe6", "#006400", 1500);
-      setStatus("已记录工单 ✅ " + codeW + " | 累计：" + scannedB2bWorkorders.size, true);
+      callB2bOpBind(codeW);
+      showScanFeedback_("⏳ 绑定中 " + codeW + "...", "#e3f2fd", "#1565c0", 1500);
+      setStatus("绑定中... " + codeW, true);
       updateScanRecentList_();
       try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
       // 连续扫码：不关闭扫码器

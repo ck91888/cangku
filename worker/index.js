@@ -567,6 +567,28 @@ export default {
           )`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v8_b2b_scan_check', ?)`).bind(Date.now()).run();
         }
+
+        // v9: b2b_operation_bindings — 扫码绑定作业对象（兼容本系统+外部WMS工单）
+        const m9 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v9_b2b_operation_bindings'`).first();
+        if (!m9) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_operation_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            badge TEXT NOT NULL DEFAULT '',
+            bound_task TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL,
+            source_order_no TEXT NOT NULL,
+            internal_workorder_id TEXT,
+            day_kst TEXT NOT NULL,
+            match_status TEXT NOT NULL DEFAULT '',
+            matched_wms_ref TEXT NOT NULL DEFAULT '',
+            bound_at INTEGER NOT NULL,
+            resolved_at INTEGER,
+            created_at INTEGER NOT NULL,
+            UNIQUE(session_id, source_type, source_order_no)
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v9_b2b_operation_bindings', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -1387,6 +1409,96 @@ export default {
       return jsonpOrJson({ ok:true, features: rs.results || [] }, callback);
     }
 
+    // ===== B2B工单操作 日报追溯明细 =====
+    if (action === "admin_daily_b2b_wo_detail") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const day_kst = String(p.day_kst || "").trim();
+      if (!day_kst || !/^\d{4}-\d{2}-\d{2}$/.test(day_kst)) return jsonpOrJson({ ok:false, error:"invalid day_kst" }, callback);
+
+      // 口径与 admin_refresh_daily Step9 完全一致：
+      // source_type='internal_b2b_workorder', match_status='direct_internal', GROUP BY internal_workorder_id, MIN(bound_at)
+      // 首次绑定日 = day_kst 的工单才计入
+
+      // 1) included: 首次绑定日=day_kst 且 status != cancelled
+      const inclRs = await env.DB.prepare(
+        `SELECT sub.internal_workorder_id, sub.first_day_kst, sub.first_bound_at, sub.binding_count,
+                w.customer_name, w.status, w.outbound_box_count, w.outbound_pallet_count,
+                w.total_weight_kg, w.total_cbm, w.detail_mode
+         FROM (
+           SELECT internal_workorder_id,
+                  day_kst as first_day_kst,
+                  MIN(bound_at) as first_bound_at,
+                  COUNT(*) as binding_count
+           FROM b2b_operation_bindings
+           WHERE source_type='internal_b2b_workorder'
+             AND match_status='direct_internal'
+             AND internal_workorder_id IS NOT NULL
+           GROUP BY internal_workorder_id
+         ) sub
+         JOIN b2b_workorders w ON w.workorder_id = sub.internal_workorder_id
+         WHERE w.status != 'cancelled'
+           AND sub.first_day_kst = ?
+         ORDER BY sub.first_bound_at ASC`
+      ).bind(day_kst).all();
+
+      const included = (inclRs.results || []).map(r => ({
+        workorder_id: r.internal_workorder_id,
+        customer_name: r.customer_name || "",
+        status: r.status,
+        detail_mode: r.detail_mode,
+        outbound_box_count: r.outbound_box_count || 0,
+        outbound_pallet_count: r.outbound_pallet_count || 0,
+        total_weight_kg: r.total_weight_kg || 0,
+        total_cbm: r.total_cbm || 0,
+        first_bound_at: r.first_bound_at,
+        first_day_kst: r.first_day_kst,
+        binding_count: r.binding_count
+      }));
+
+      // 2) summary
+      let sum_box = 0, sum_pallet = 0, sum_weight = 0, sum_volume = 0;
+      for (const w of included) {
+        sum_box += w.outbound_box_count;
+        sum_pallet += w.outbound_pallet_count;
+        sum_weight += w.total_weight_kg;
+        sum_volume += w.total_cbm;
+      }
+      const summary = {
+        order_count: included.length,
+        box_count: sum_box,
+        pallet_count: sum_pallet,
+        weight: Math.round(sum_weight * 100) / 100,
+        volume: Math.round(sum_volume * 10000) / 10000
+      };
+
+      // 3) excluded_cancelled: 首次绑定日=day_kst 但 status=cancelled
+      const exclRs = await env.DB.prepare(
+        `SELECT sub.internal_workorder_id, sub.first_bound_at,
+                w.customer_name, w.status
+         FROM (
+           SELECT internal_workorder_id,
+                  day_kst as first_day_kst,
+                  MIN(bound_at) as first_bound_at
+           FROM b2b_operation_bindings
+           WHERE source_type='internal_b2b_workorder'
+             AND match_status='direct_internal'
+             AND internal_workorder_id IS NOT NULL
+           GROUP BY internal_workorder_id
+         ) sub
+         JOIN b2b_workorders w ON w.workorder_id = sub.internal_workorder_id
+         WHERE w.status = 'cancelled'
+           AND sub.first_day_kst = ?`
+      ).bind(day_kst).all();
+
+      const excluded_cancelled = (exclRs.results || []).map(r => ({
+        workorder_id: r.internal_workorder_id,
+        customer_name: r.customer_name || "",
+        first_bound_at: r.first_bound_at
+      }));
+
+      return jsonpOrJson({ ok:true, day_kst, included, summary, excluded_cancelled }, callback);
+    }
+
     // ===== 刷新前依赖检查 =====
     if (action === "admin_refresh_precheck") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
@@ -1774,6 +1886,38 @@ export default {
         f.source_summary = "return_qc_export";
       }
 
+      // Step9: B2B工单操作 — 本系统内部工单产出（b2b_operation_bindings + b2b_workorders）
+      // 口径：source_type='internal_b2b_workorder', match_status='direct_internal', 排除 cancelled
+      // 去重：每张工单只计一次，归属到"首次绑定日"（MIN(bound_at) 对应的 day_kst）
+      {
+        const b2bWoBindRs = await env.DB.prepare(
+          `SELECT sub.internal_workorder_id, sub.first_day_kst,
+                  w.outbound_box_count, w.outbound_pallet_count, w.total_weight_kg, w.total_cbm
+           FROM (
+             SELECT internal_workorder_id, day_kst as first_day_kst, MIN(bound_at)
+             FROM b2b_operation_bindings
+             WHERE source_type='internal_b2b_workorder'
+               AND match_status='direct_internal'
+               AND internal_workorder_id IS NOT NULL
+             GROUP BY internal_workorder_id
+           ) sub
+           JOIN b2b_workorders w ON w.workorder_id = sub.internal_workorder_id
+           WHERE w.status != 'cancelled'
+             AND sub.first_day_kst >= ? AND sub.first_day_kst <= ?`
+        ).bind(start_date, end_date).all();
+
+        for (const r of (b2bWoBindRs.results || [])) {
+          const f = getOrCreate(r.first_day_kst, "B2B", "B2B工单操作");
+          f.wms_order_count_direct += 1;
+          f.wms_box_count += (r.outbound_box_count || 0);
+          f.wms_pallet_count += (r.outbound_pallet_count || 0);
+          f.wms_weight += (r.total_weight_kg || 0);
+          f.wms_volume += (r.total_cbm || 0);
+          // wms_qty 置 0：carton_based / sku_based 单位不同（箱/件），不强行混合汇总
+          f.source_summary = "b2b_internal_bindings";
+        }
+      }
+
       // 货位影响因子
       {
         // 辅助函数：解析储位号串，返回所有有效货位编码
@@ -2136,7 +2280,13 @@ export default {
 
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
-      if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
+      if (outbound_box_count < 0 || outbound_pallet_count < 0) return jsonpOrJson({ ok:false, error:"outbound counts cannot be negative" }, callback);
+      if (detail_mode === "carton_based") {
+        if (outbound_box_count <= 0 && outbound_pallet_count <= 0) return jsonpOrJson({ ok:false, error:"carton_based requires outbound_box_count or outbound_pallet_count > 0" }, callback);
+        if (!Array.isArray(lines)) return jsonpOrJson({ ok:false, error:"lines must be array" }, callback);
+      } else {
+        if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
+      }
 
       // 生成 workorder_id：WO-YYMMDD-NNN
       const dayTag = plan_day.slice(2).replace(/-/g, "");
@@ -2267,7 +2417,13 @@ export default {
 
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
-      if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
+      if (outbound_box_count < 0 || outbound_pallet_count < 0) return jsonpOrJson({ ok:false, error:"outbound counts cannot be negative" }, callback);
+      if (detail_mode === "carton_based") {
+        if (outbound_box_count <= 0 && outbound_pallet_count <= 0) return jsonpOrJson({ ok:false, error:"carton_based requires outbound_box_count or outbound_pallet_count > 0" }, callback);
+        if (!Array.isArray(lines)) return jsonpOrJson({ ok:false, error:"lines must be array" }, callback);
+      } else {
+        if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
+      }
 
       // 构造原子 batch：删旧明细 → 插新明细 → 更新主表
       const batchStmts = [];
@@ -2652,6 +2808,88 @@ export default {
       }
 
       return jsonpOrJson({ ok:false, error:"invalid sub, must be: edit/status/bind" }, callback);
+    }
+
+    // ===== 扫码绑定作业对象 =====
+
+    if (action === "b2b_op_bind") {
+      const session_id = String(p.session_id || "").trim();
+      const badge = String(p.badge || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      const bound_task = String(p.bound_task || "").trim();
+
+      if (!session_id) return jsonpOrJson({ ok:false, error:"missing session_id" }, callback);
+      if (!source_order_no) return jsonpOrJson({ ok:false, error:"missing source_order_no" }, callback);
+
+      // KST 日期
+      const kstOffset = 9 * 60 * 60 * 1000;
+      const day_kst = new Date(now + kstOffset).toISOString().slice(0, 10);
+
+      // 检查是否已绑定
+      const existing = await env.DB.prepare(
+        `SELECT id, source_type, match_status FROM b2b_operation_bindings WHERE session_id=? AND source_order_no=?`
+      ).bind(session_id, source_order_no).first();
+      if (existing) {
+        return jsonpOrJson({ ok:true, duplicate:true, source_type: existing.source_type, match_status: existing.match_status, msg:"该工单已绑定" }, callback);
+      }
+
+      // 查本系统工单
+      const wo = await env.DB.prepare(
+        `SELECT workorder_id, customer_name, outbound_box_count, outbound_pallet_count, total_qty, total_qty_unit, status FROM b2b_workorders WHERE workorder_id=?`
+      ).bind(source_order_no).first();
+
+      let source_type, match_status, internal_workorder_id = null;
+      let wo_summary = null;
+
+      if (wo) {
+        source_type = "internal_b2b_workorder";
+        match_status = "direct_internal";
+        internal_workorder_id = wo.workorder_id;
+        // 产出摘要
+        const parts = [];
+        if (wo.outbound_box_count) parts.push(wo.outbound_box_count + "箱");
+        if (wo.outbound_pallet_count) parts.push(wo.outbound_pallet_count + "托");
+        if (parts.length === 0 && wo.total_qty) parts.push(wo.total_qty + (wo.total_qty_unit || ""));
+        wo_summary = { customer_name: wo.customer_name, qty_text: parts.join(" / "), status: wo.status };
+      } else {
+        source_type = "external_wms_workorder";
+        match_status = "pending_wms_match";
+      }
+
+      await env.DB.prepare(
+        `INSERT INTO b2b_operation_bindings(session_id, badge, bound_task, source_type, source_order_no, internal_workorder_id, day_kst, match_status, matched_wms_ref, bound_at, created_at)
+         VALUES(?,?,?,?,?,?,?,?,'',?,?)`
+      ).bind(session_id, badge, bound_task, source_type, source_order_no, internal_workorder_id, day_kst, match_status, now, now).run();
+
+      return jsonpOrJson({ ok:true, source_type, match_status, source_order_no, wo_summary }, callback);
+    }
+
+    if (action === "b2b_op_bind_list") {
+      const session_id = String(p.session_id || "").trim();
+      if (!session_id) return jsonpOrJson({ ok:false, error:"missing session_id" }, callback);
+
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_operation_bindings WHERE session_id=? ORDER BY bound_at ASC`
+      ).bind(session_id).all();
+
+      // 对 internal 类型补充工单摘要
+      const bindings = rs.results || [];
+      for (let i = 0; i < bindings.length; i++) {
+        if (bindings[i].source_type === "internal_b2b_workorder" && bindings[i].internal_workorder_id) {
+          const wo = await env.DB.prepare(
+            `SELECT customer_name, outbound_box_count, outbound_pallet_count, total_qty, total_qty_unit, status FROM b2b_workorders WHERE workorder_id=?`
+          ).bind(bindings[i].internal_workorder_id).first();
+          if (wo) {
+            const parts = [];
+            if (wo.outbound_box_count) parts.push(wo.outbound_box_count + "箱");
+            if (wo.outbound_pallet_count) parts.push(wo.outbound_pallet_count + "托");
+            if (parts.length === 0 && wo.total_qty) parts.push(wo.total_qty + (wo.total_qty_unit || ""));
+            bindings[i].wo_summary = { customer_name: wo.customer_name, qty_text: parts.join(" / "), status: wo.status };
+          }
+        }
+      }
+
+      return jsonpOrJson({ ok:true, bindings }, callback);
     }
 
     // ===== 出库扫码核对 =====

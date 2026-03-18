@@ -104,6 +104,14 @@
     <div id="effResult" style="margin-top:10px;"></div>
   </div>
 
+  <!-- B2B 工单明细弹窗 -->
+  <div id="b2bWoDetailModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:999;justify-content:center;align-items:center;">
+    <div style="background:#fff;border-radius:12px;padding:20px;max-width:700px;width:90%;max-height:80vh;overflow:auto;position:relative;">
+      <button onclick="closeB2bWoDetail()" style="position:absolute;top:10px;right:14px;background:none;border:none;font-size:20px;cursor:pointer;">&times;</button>
+      <div id="b2bWoDetailBody"></div>
+    </div>
+  </div>
+
   <script src="./leader.js"></script>
 </body>
 </html>

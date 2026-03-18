@@ -694,7 +694,8 @@ var EFF_KEY_TASKS = [
   { biz:"进口", task:"过机扫描码托", label:"过机扫描码托" },
   { biz:"B2C", task:"换单", label:"换单" },
   { biz:"B2C", task:"退件入库", label:"退件入库" },
-  { biz:"B2C", task:"质检", label:"质检" }
+  { biz:"B2C", task:"质检", label:"质检" },
+  { biz:"B2B", task:"B2B工单操作", label:"B2B工单操作", hasDetail:true }
 ];
 
 async function loadEfficiency(){
@@ -751,8 +752,21 @@ async function loadEfficiency(){
       var workers = f ? f.unique_workers : "—";
       var eff = f ? (f.efficiency_per_person_hour > 0 ? f.efficiency_per_person_hour : "0") : "—";
 
+      // B2B工单操作：件量列改为显示箱/托
+      if(kt.hasDetail && f){
+        var parts = [];
+        if(f.wms_box_count) parts.push(f.wms_box_count + "箱");
+        if(f.wms_pallet_count) parts.push(f.wms_pallet_count + "托");
+        qty = parts.length > 0 ? parts.join("/") : "—";
+      }
+
+      var detailBtn = "";
+      if(kt.hasDetail && f && f.wms_order_count > 0){
+        detailBtn = ' <button onclick="loadB2bWoDetail(\''+esc(day)+'\')" style="font-size:11px;padding:2px 6px;cursor:pointer;">明细</button>';
+      }
+
       html += '<tr style="'+rowStyle+'">' +
-        '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;font-weight:700;">' + esc(kt.label) + (f ? '' : ' <span style="font-weight:400;font-size:11px;">(缺失)</span>') + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;font-size:13px;font-weight:700;">' + esc(kt.label) + (f ? '' : ' <span style="font-weight:400;font-size:11px;">(缺失)</span>') + detailBtn + '</td>' +
         '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;">' + orderCount + '</td>' +
         '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;">' + qty + '</td>' +
         '<td style="padding:8px 10px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;">' + workers + '</td>' +
@@ -766,6 +780,86 @@ async function loadEfficiency(){
   }catch(e){
     if(meta) meta.textContent = "异常：" + String(e && e.message ? e.message : e);
   }
+}
+
+// ===== B2B工单操作 日报追溯明细 =====
+async function loadB2bWoDetail(day){
+  var k = getKey_();
+  if(!k){ alert("请先输入口令"); return; }
+
+  var modal = document.getElementById("b2bWoDetailModal");
+  var body = document.getElementById("b2bWoDetailBody");
+  if(!modal || !body) return;
+  modal.style.display = "flex";
+  body.innerHTML = '<div class="muted">加载中...</div>';
+
+  try{
+    var res = await fetchApi({ action:"admin_daily_b2b_wo_detail", k:k, day_kst:day });
+    if(!res || !res.ok){
+      body.innerHTML = '<div style="color:red;">查询失败：' + esc(res && res.error || "unknown") + '</div>';
+      return;
+    }
+
+    var s = res.summary || {};
+    var html = '<div style="font-size:15px;font-weight:800;margin-bottom:8px;">B2B工单操作 · ' + esc(day) + '</div>';
+
+    // 汇总
+    html += '<div style="font-size:13px;margin-bottom:10px;color:#555;">计入汇总：<b>' + s.order_count + '</b> 单 · ' +
+      (s.box_count ? s.box_count + '箱 ' : '') +
+      (s.pallet_count ? s.pallet_count + '托 ' : '') +
+      (s.weight ? s.weight + 'kg ' : '') +
+      (s.volume ? s.volume + 'm³' : '') +
+    '</div>';
+
+    // included 明细表
+    var rows = res.included || [];
+    if(rows.length > 0){
+      html += '<table style="border-collapse:collapse;width:100%;font-size:12px;">';
+      html += '<tr style="background:#f5f5f5;">' +
+        '<th style="padding:6px 8px;text-align:left;">工单号</th>' +
+        '<th style="padding:6px 8px;text-align:left;">客户</th>' +
+        '<th style="padding:6px 8px;text-align:right;">箱数</th>' +
+        '<th style="padding:6px 8px;text-align:right;">托数</th>' +
+        '<th style="padding:6px 8px;text-align:right;">重量kg</th>' +
+        '<th style="padding:6px 8px;text-align:right;">绑定次数</th>' +
+        '<th style="padding:6px 8px;text-align:left;">首次绑定</th>' +
+      '</tr>';
+      rows.forEach(function(r){
+        var boundTime = r.first_bound_at ? new Date(r.first_bound_at).toLocaleString() : "";
+        html += '<tr style="border-bottom:1px solid #eee;">' +
+          '<td style="padding:6px 8px;font-weight:700;">' + esc(r.workorder_id) + '</td>' +
+          '<td style="padding:6px 8px;">' + esc(r.customer_name) + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;">' + (r.outbound_box_count || "—") + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;">' + (r.outbound_pallet_count || "—") + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;">' + (r.total_weight_kg || "—") + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;">' + r.binding_count + '</td>' +
+          '<td style="padding:6px 8px;font-size:11px;">' + esc(boundTime) + '</td>' +
+        '</tr>';
+      });
+      html += '</table>';
+    } else {
+      html += '<div class="muted">该日无本系统内部工单计入汇总</div>';
+    }
+
+    // excluded_cancelled
+    var excl = res.excluded_cancelled || [];
+    if(excl.length > 0){
+      html += '<div style="margin-top:12px;font-size:12px;color:#999;">已排除（cancelled）：';
+      excl.forEach(function(r){
+        html += '<span style="text-decoration:line-through;margin-right:8px;">' + esc(r.workorder_id) + '</span>';
+      });
+      html += '</div>';
+    }
+
+    body.innerHTML = html;
+  }catch(e){
+    body.innerHTML = '<div style="color:red;">异常：' + String(e && e.message ? e.message : e) + '</div>';
+  }
+}
+
+function closeB2bWoDetail(){
+  var modal = document.getElementById("b2bWoDetailModal");
+  if(modal) modal.style.display = "none";
 }
 
 // ===== 一键刷新 + 自动刷新 =====

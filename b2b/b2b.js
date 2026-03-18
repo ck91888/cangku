@@ -586,7 +586,12 @@ function submitWo(){
 
   if(!day){ alert("请选择计划出库日"); return; }
   if(!customer){ alert("请输入客户名"); return; }
-  if(lines.length === 0){ alert("请至少录入一行明细（数量>0）"); return; }
+  if(boxCount < 0 || palletCount < 0){ alert("出库箱数和托盘数不能为负数"); return; }
+  if(detailMode === "carton_based"){
+    if(boxCount <= 0 && palletCount <= 0){ alert("按箱模式下，出库箱数或出库托盘数至少填一项"); return; }
+  } else {
+    if(lines.length === 0){ alert("请至少录入一行明细（数量>0）"); return; }
+  }
 
   if(_editingWoId){
     // 编辑模式
@@ -727,8 +732,9 @@ function renderWoRow(w){
     '<div><span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
     '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name)+'</div>' +
     '<div class="meta">'+esc(w.plan_day)+' · '+esc(opLabel)+' · '+esc(obLabel) +
-    ' · '+w.total_qty+(w.total_qty_unit||"")+
-    (w.total_weight_kg ? ' · '+w.total_weight_kg+'kg' : '') +
+    ' · '+(isCartonNoLine(w,[]) && fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
+      ? fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
+      : w.total_qty+(w.total_qty_unit||"")+(w.total_weight_kg ? ' · '+w.total_weight_kg+'kg' : '')) +
     (w.external_workorder_no ? ' · WMS:'+esc(w.external_workorder_no) : '') + '</div>' +
   '</div>';
 }
@@ -789,7 +795,7 @@ function goWoDetail(id){
       (w.outbound_destination ? '<div class="detail-field"><b>出库目的地:</b> '+esc(w.outbound_destination)+'</div>' : '') +
       (w.order_ref_no ? '<div class="detail-field"><b>발주번호:</b> '+esc(w.order_ref_no)+'</div>' : '') +
       (fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count) ? '<div class="detail-field"><b>出库量:</b> '+esc(fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count))+'</div>' : '') +
-      '<div class="detail-field"><b>汇总:</b> '+w.total_qty+(w.total_qty_unit||"")+' · '+w.total_weight_kg+'kg' + (w.total_cbm ? ' · '+w.total_cbm+'m³' : '') + '</div>' +
+      '<div class="detail-field"><b>汇总:</b> '+(isCartonNoLine(w,lines) ? '未录入逐箱汇总' : w.total_qty+(w.total_qty_unit||"")+' · '+w.total_weight_kg+'kg' + (w.total_cbm ? ' · '+w.total_cbm+'m³' : '')) + '</div>' +
       (w.external_workorder_no ? '<div class="detail-field"><b>WMS工单号:</b> '+esc(w.external_workorder_no)+'</div>' : '') +
       (w.instruction_text ? '<div class="detail-field"><b>作业指示:</b> '+esc(w.instruction_text)+'</div>' : '') +
       '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(w.created_by)+' · 创建时间: '+new Date(w.created_at).toLocaleString()+'</div>' +
@@ -802,9 +808,11 @@ function goWoDetail(id){
       '<div id="att-section-wrap" class="no-print"></div>' +
 
       '<div style="font-size:14px;font-weight:700;margin:12px 0 6px;">明细 ('+lines.length+'行)</div>' +
-      '<div style="overflow-x:auto;"><table class="line-table"><thead>'+lineHead+'</thead><tbody>'+lineRows+'</tbody>' +
-      '<tfoot><tr style="font-weight:700;"><td colspan="'+(isSku?3:2)+'">合计</td><td>'+w.total_qty+'</td>' +
-      '<td colspan="3"></td><td>'+w.total_weight_kg+'</td><td></td></tr></tfoot></table></div>';
+      (lines.length === 0 && !isSku
+        ? '<div style="color:#888;font-size:13px;margin:8px 0;">未录入逐箱明细（以顶部出库量为准）</div>'
+        : '<div style="overflow-x:auto;"><table class="line-table"><thead>'+lineHead+'</thead><tbody>'+lineRows+'</tbody>' +
+          '<tfoot><tr style="font-weight:700;"><td colspan="'+(isSku?3:2)+'">合计</td><td>'+w.total_qty+'</td>' +
+          '<td colspan="3"></td><td>'+w.total_weight_kg+'</td><td></td></tr></tfoot></table></div>');
 
     // 渲染附件区
     renderAttachmentSection(w.workorder_id, w.status, res.attachments || []);
@@ -1116,6 +1124,14 @@ function fmtOutboundQty(box, pallet){
   return parts.join(" / ");
 }
 
+// carton_based 且无逐箱明细汇总（lines空或汇总全为0）
+function isCartonNoLine(w, lines){
+  var isSku = (w.detail_mode || w.outbound_mode) !== "carton_based";
+  if(isSku) return false;
+  if(lines && lines.length > 0) return false;
+  return (!w.total_qty && !w.total_weight_kg && !w.total_cbm);
+}
+
 // ===== 打印 =====
 function printWo(id){
   fetchApi({ action:"b2b_wo_detail", workorder_id:id }).then(function(res){
@@ -1207,13 +1223,15 @@ function printWo(id){
         (w.outbound_destination ? '<div><span class="label">出库目的地：</span>'+esc(w.outbound_destination)+'</div>' : '') +
         (w.order_ref_no ? '<div><span class="label">발주번호：</span>'+esc(w.order_ref_no)+'</div>' : '') +
         (fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count) ? '<div><span class="label">出库量：</span>'+fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)+'</div>' : '') +
-        '<div><span class="label">汇总：</span>'+w.total_qty+(w.total_qty_unit||"")+' · '+w.total_weight_kg+'kg'+(w.total_cbm?' · '+w.total_cbm+'m³':'')+'</div>' +
+        '<div><span class="label">汇总：</span>'+(isCartonNoLine(w,lines) ? '未录入逐箱汇总' : w.total_qty+(w.total_qty_unit||"")+' · '+w.total_weight_kg+'kg'+(w.total_cbm?' · '+w.total_cbm+'m³':''))+'</div>' +
         (w.external_workorder_no ? '<div><span class="label">WMS工单号：</span>'+esc(w.external_workorder_no)+'</div>' : '') +
         (w.instruction_text ? '<div style="grid-column:1/-1;"><span class="label">作业指示：</span>'+esc(w.instruction_text)+'</div>' : '') +
       '</div>' +
 
-      '<table><thead>'+thead+'</thead><tbody>'+tbody+'</tbody>' +
-      '<tfoot><tr><td colspan="'+footColspan+'">合计</td><td>'+w.total_qty+'</td><td colspan="3"></td><td>'+w.total_weight_kg+'</td><td></td></tr></tfoot></table>' +
+      (lines.length === 0 && !isSku
+        ? '<div style="color:#888;font-size:13px;margin:12px 0;">无逐箱明细（以顶部出库量为准）</div>'
+        : '<table><thead>'+thead+'</thead><tbody>'+tbody+'</tbody>' +
+          '<tfoot><tr><td colspan="'+footColspan+'">合计</td><td>'+w.total_qty+'</td><td colspan="3"></td><td>'+w.total_weight_kg+'</td><td></td></tr></tfoot></table>') +
 
       '<div class="sig-row">' +
         '<div class="sig-item"><span class="label">制单人：</span>'+esc(w.created_by)+'<div class="sig-line"></div></div>' +
