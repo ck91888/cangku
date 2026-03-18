@@ -51,7 +51,11 @@ function bizBadge(bt){
   return '<span class="'+cls+'">'+esc(label)+'</span>';
 }
 var WO_STATUS_LABEL = {
-  draft: "草稿", issued: "已下发", working: "作业中", completed: "已完成", cancelled: "已取消"
+  draft: "草稿", issued: "操作中", working: "操作中", completed: "已完成", cancelled: "已取消"
+};
+// 状态流转按钮文案（区别于显示文案）
+var WO_STATUS_BTN_LABEL = {
+  issued: "下发", completed: "完成", cancelled: "取消"
 };
 var DETAIL_MODE_LABEL = { sku_based: "按SKU", carton_based: "按箱" };
 // operation_mode / outbound_mode 直接存中文，显示时兜底
@@ -388,6 +392,7 @@ function submitPlan(){
   if(!day){ alert("请选择计划到货日"); return; }
   if(!customer){ alert("请输入客户名"); return; }
   if(!summary){ alert("请输入货物摘要"); return; }
+  if(!_editingPlanId && !creator){ alert("请输入创建人"); return; }
 
   if(_editingPlanId){
     // 编辑模式
@@ -433,12 +438,20 @@ function initWoCreate(data){
   _wcLineCount = 0;
   _wcPrevDetailMode = isEdit ? (data.detail_mode || "sku_based") : "sku_based";
 
-  document.getElementById("wc-title").textContent = isEdit ? "编辑草稿作业单" : "新建出库作业单";
+  var editTitle = isEdit ? ("编辑作业单" + (data.status === "draft" ? "（草稿）" : "")) : "新建出库作业单";
+  document.getElementById("wc-title").textContent = editTitle;
   document.getElementById("wc-id-bar").style.display = isEdit ? "" : "none";
   document.getElementById("wc-id-bar").textContent = isEdit ? ("作业单号: " + data.workorder_id + "（不可修改）") : "";
   document.getElementById("wc-submit-btn").textContent = isEdit ? "保存修改" : "保存（草稿）";
-  // 编辑模式隐藏创建人
-  document.getElementById("wc-creator-group").style.display = isEdit ? "none" : "";
+  // 新建显示创建人，编辑显示编辑人
+  document.getElementById("wc-creator-group").style.display = "";
+  if(isEdit){
+    document.getElementById("wc-creator-label").textContent = "编辑人";
+    document.getElementById("wc-creator").placeholder = "你的名字（必填）";
+  } else {
+    document.getElementById("wc-creator-label").textContent = "创建人";
+    document.getElementById("wc-creator").placeholder = "你的名字（必填）";
+  }
 
   document.getElementById("wc-detail-mode").value = isEdit ? (data.detail_mode || "sku_based") : "sku_based";
   document.getElementById("wc-day").value = isEdit ? data.plan_day : kstToday();
@@ -576,7 +589,8 @@ function goEditWo(workorder_id){
   fetchApi({ action:"b2b_wo_detail", workorder_id:workorder_id }).then(function(res){
     if(!res || !res.ok){ alert("加载失败"); return; }
     var w = res.workorder;
-    if(w.status !== "draft"){ alert("只有草稿状态允许编辑"); return; }
+    var editable = ["draft","issued","working"];
+    if(editable.indexOf(w.status) < 0){ alert("当前状态不允许编辑"); return; }
     _editingWoId = workorder_id;
     w._lines = res.lines || [];
     goView("wo_create");
@@ -601,6 +615,7 @@ function submitWo(){
 
   if(!day){ alert("请选择计划出库日"); return; }
   if(!customer){ alert("请输入客户名"); return; }
+  if(!creator){ alert(_editingWoId ? "请输入编辑人" : "请输入创建人"); return; }
   if(boxCount < 0 || palletCount < 0){ alert("出库箱数和托盘数不能为负数"); return; }
   if(detailMode === "carton_based"){
     if(boxCount <= 0 && palletCount <= 0){ alert("按箱模式下，出库箱数或出库托盘数至少填一项"); return; }
@@ -617,7 +632,7 @@ function submitWo(){
       external_workorder_no:extNo, instruction_text:instr,
       outbound_destination:destination, order_ref_no:orderRef,
       outbound_box_count:boxCount, outbound_pallet_count:palletCount,
-      lines:lines
+      edited_by:creator, lines:lines
     }).then(function(res){
       if(res && res.ok){
         var id = _editingWoId;
@@ -743,9 +758,16 @@ function renderWoRow(w){
   var dimClass = (w.status==="cancelled") ? " row-dim" : "";
   var opLabel = modeDisplay(w.operation_mode);
   var obLabel = modeDisplay(w.outbound_mode);
+  var noticeTag = '';
+  if(w.has_update_notice){
+    noticeTag = ' <span class="notice-tag">⚠ 要求已更新</span>' +
+      ' <button onclick="event.stopPropagation();ackWoNotice(\''+esc(w.workorder_id)+'\')" class="ack-btn">已确认查看</button>';
+  } else if(w.update_ack_at){
+    noticeTag = ' <span class="ack-tag">已确认变更</span>';
+  }
   return '<div class="wo-row'+dimClass+'" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
     '<div><span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
-    '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name)+'</div>' +
+    '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name) + noticeTag + '</div>' +
     '<div class="meta">'+esc(w.plan_day)+' · '+esc(opLabel)+' · '+esc(obLabel) +
     ' · '+(isCartonNoLine(w,[]) && fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
       ? fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
@@ -767,16 +789,17 @@ function goWoDetail(id){
 
     // 状态流转按钮
     var WO_TRANSITIONS = {
-      draft: ["issued","cancelled"], issued: ["working","cancelled"],
+      draft: ["issued","cancelled"], issued: ["completed","cancelled"],
       working: ["completed"], completed: [], cancelled: []
     };
     var statusBtns = (WO_TRANSITIONS[w.status]||[]).map(function(s){
-      return '<button onclick="changeWoStatus(\''+esc(w.workorder_id)+'\',\''+s+'\')" class="'+(s==="cancelled"?"bad":"primary")+'" style="width:auto;padding:8px 16px;font-size:13px;">'+esc(WO_STATUS_LABEL[s]||s)+'</button>';
+      return '<button onclick="changeWoStatus(\''+esc(w.workorder_id)+'\',\''+s+'\')" class="'+(s==="cancelled"?"bad":"primary")+'" style="width:auto;padding:8px 16px;font-size:13px;">'+esc(WO_STATUS_BTN_LABEL[s]||WO_STATUS_LABEL[s]||s)+'</button>';
     }).join(" ");
 
-    // 编辑草稿按钮
-    var editBtn = (w.status === "draft") ?
-      ' <button onclick="goEditWo(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">编辑草稿</button>' : '';
+    // 编辑按钮（draft/issued/working 都可编辑）
+    var WO_EDITABLE = ["draft","issued","working"];
+    var editBtn = (WO_EDITABLE.indexOf(w.status) >= 0) ?
+      ' <button onclick="goEditWo(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">编辑</button>' : '';
 
     // 模式显示
     var opLabel = modeDisplay(w.operation_mode);
@@ -799,10 +822,26 @@ function goWoDetail(id){
       }).join("");
     }
 
+    // 变更提醒条
+    var noticeHtml = '';
+    if(w.has_update_notice){
+      noticeHtml = '<div style="background:#fff3e0;border:2px solid #e65100;border-radius:8px;padding:10px 14px;margin-bottom:10px;">' +
+        '<div style="font-size:15px;font-weight:800;color:#e65100;">⚠ 该工单在操作中已被编辑，请按最新要求执行</div>' +
+        '<div style="font-size:12px;color:#bf360c;margin-top:4px;">最近编辑时间: ' + (w.last_edited_at ? new Date(w.last_edited_at).toLocaleString() : '未知') +
+        (w.last_edited_by ? ' · 编辑人: '+esc(w.last_edited_by) : '') + '</div>' +
+        '<button onclick="ackWoNotice(\''+esc(w.workorder_id)+'\')" style="margin-top:8px;width:auto;padding:6px 16px;font-size:13px;background:#e65100;color:#fff;border:none;border-radius:6px;cursor:pointer;">已确认查看变更</button>' +
+        '</div>';
+    } else if(w.update_ack_at){
+      noticeHtml = '<div style="background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#888;">' +
+        '已确认变更 · ' + new Date(w.update_ack_at).toLocaleString() +
+        (w.update_ack_by ? ' · 确认人: '+esc(w.update_ack_by) : '') + '</div>';
+    }
+
     card.innerHTML =
       '<div style="font-size:18px;font-weight:800;margin-bottom:10px;">' +
         esc(w.workorder_id) + ' <span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span>' +
       '</div>' +
+      noticeHtml +
       '<div class="detail-field"><b>客户:</b> '+esc(w.customer_name)+'</div>' +
       '<div class="detail-field"><b>计划出库日:</b> '+esc(w.plan_day)+'</div>' +
       '<div class="detail-field"><b>操作模式:</b> '+esc(opLabel)+'</div>' +
@@ -835,7 +874,7 @@ function goWoDetail(id){
 }
 
 function changeWoStatus(id, status){
-  var label = WO_STATUS_LABEL[status] || status;
+  var label = WO_STATUS_BTN_LABEL[status] || WO_STATUS_LABEL[status] || status;
   if(status === "cancelled"){
     if(!confirm("确认取消作业单 "+id+"？")) return;
   } else {
@@ -846,6 +885,25 @@ function changeWoStatus(id, status){
       goWoDetail(id);
     } else {
       alert("状态更新失败: "+(res&&res.error||"unknown"));
+    }
+  });
+}
+
+function ackWoNotice(id){
+  var ackBy = prompt("请输入你的名字（确认人）：");
+  if(ackBy === null) return; // 取消
+  ackBy = ackBy.trim();
+  if(!ackBy){ alert("确认人不能为空"); return; }
+  fetchApi({ action:"b2b_wo_ack_notice", workorder_id:id, ack_by:ackBy }).then(function(res){
+    if(res && res.ok){
+      // 刷新当前视图
+      if(document.getElementById("wo-detail-card").innerHTML.indexOf(id) >= 0){
+        goWoDetail(id);
+      } else {
+        loadWoList();
+      }
+    } else {
+      alert("确认失败: "+(res&&res.error||"unknown"));
     }
   });
 }
@@ -1376,6 +1434,7 @@ function submitFo(){
 
   if(!day){ alert("请选择作业日期"); return; }
   if(!customer){ alert("请输入客户名"); return; }
+  if(!_editingFoId && !creator){ alert("请输入创建人"); return; }
 
   if(_editingFoId){
     // 编辑模式 — 全量提交
@@ -1734,6 +1793,7 @@ function submitSc(){
 
   if(!day){ alert("请选择核对日期"); return; }
   if(!name){ alert("请输入批次名称"); return; }
+  if(!creator){ alert("请输入创建人"); return; }
   if(!_scImportedItems.length){ alert("请先导入 Excel"); return; }
 
   // 清理 _row 字段

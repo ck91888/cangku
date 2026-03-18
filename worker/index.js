@@ -627,6 +627,23 @@ export default {
           await env.DB.prepare(`ALTER TABLE b2b_scan_logs ADD COLUMN pallet_no TEXT NOT NULL DEFAULT ''`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v11_scan_log_pallet', ?)`).bind(Date.now()).run();
         }
+
+        // v12: b2b_workorders 增加变更提醒字段
+        const m12 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v12_wo_update_notice'`).first();
+        if (!m12) {
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN has_update_notice INTEGER NOT NULL DEFAULT 0`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN last_edited_at INTEGER`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN last_edited_by TEXT NOT NULL DEFAULT ''`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v12_wo_update_notice', ?)`).bind(Date.now()).run();
+        }
+
+        // v13: b2b_workorders 增加变更确认字段
+        const m13 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v13_wo_update_ack'`).first();
+        if (!m13) {
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN update_ack_at INTEGER`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN update_ack_by TEXT NOT NULL DEFAULT ''`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v13_wo_update_ack', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2201,6 +2218,7 @@ export default {
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!goods_summary) return jsonpOrJson({ ok:false, error:"missing goods_summary" }, callback);
       if (!BIZ_NEW.includes(biz_type)) return jsonpOrJson({ ok:false, error:"invalid biz_type, must be: " + BIZ_NEW.join("/") }, callback);
+      if (!created_by) return jsonpOrJson({ ok:false, error:"missing created_by" }, callback);
 
       // 生成 plan_id：IP-YYMMDD-NNN（后端原子生成，避免撞号）
       const dayTag = plan_day.slice(2).replace(/-/g, ""); // "260316"
@@ -2322,6 +2340,7 @@ export default {
 
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
+      if (!created_by) return jsonpOrJson({ ok:false, error:"missing created_by" }, callback);
       if (outbound_box_count < 0 || outbound_pallet_count < 0) return jsonpOrJson({ ok:false, error:"outbound counts cannot be negative" }, callback);
       if (detail_mode === "carton_based") {
         if (outbound_box_count <= 0 && outbound_pallet_count <= 0) return jsonpOrJson({ ok:false, error:"carton_based requires outbound_box_count or outbound_pallet_count > 0" }, callback);
@@ -2438,7 +2457,10 @@ export default {
 
       const existing = await env.DB.prepare(`SELECT workorder_id, status FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
       if (!existing) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
-      if (existing.status !== "draft") return jsonpOrJson({ ok:false, error:"only draft workorders can be edited, current status: " + existing.status }, callback);
+      const WO_EDITABLE = ["draft","issued","working"];
+      if (!WO_EDITABLE.includes(existing.status)) return jsonpOrJson({ ok:false, error:"current status (" + existing.status + ") cannot be edited" }, callback);
+
+      const edited_by = String(p.edited_by || "").trim();
 
       // 三模式字段
       const detail_mode = String(p.detail_mode || "").trim();
@@ -2507,15 +2529,23 @@ export default {
       total_weight_kg = Math.round(total_weight_kg * 1000) / 1000;
 
       // 3. 更新主表（不改 status / workorder_id / created_by / created_at）
+      // 操作中（issued/working）被编辑时打提醒标记并清空旧确认
+      const isActiveEdit = (existing.status === "issued" || existing.status === "working");
+      if (isActiveEdit && !edited_by) return jsonpOrJson({ ok:false, error:"missing edited_by" }, callback);
+      const noticeSql = isActiveEdit ? ", has_update_notice=1, last_edited_at=" + now + ", last_edited_by=?, update_ack_at=NULL, update_ack_by=''" : "";
+      const updateBinds = [
+        detail_mode, operation_mode, outbound_mode, customer_name,
+        plan_day, external_workorder_no, instruction_text,
+        outbound_destination, order_ref_no, outbound_box_count, outbound_pallet_count,
+        total_qty, total_qty_unit, total_weight_kg, total_cbm
+      ];
+      if (isActiveEdit) updateBinds.push(edited_by);
+      updateBinds.push(workorder_id);
+
       batchStmts.push(
         env.DB.prepare(
-          `UPDATE b2b_workorders SET detail_mode=?, operation_mode=?, outbound_mode=?, customer_name=?, plan_day=?, external_workorder_no=?, instruction_text=?, outbound_destination=?, order_ref_no=?, outbound_box_count=?, outbound_pallet_count=?, total_qty=?, total_qty_unit=?, total_weight_kg=?, total_cbm=? WHERE workorder_id=?`
-        ).bind(
-          detail_mode, operation_mode, outbound_mode, customer_name,
-          plan_day, external_workorder_no, instruction_text,
-          outbound_destination, order_ref_no, outbound_box_count, outbound_pallet_count,
-          total_qty, total_qty_unit, total_weight_kg, total_cbm, workorder_id
-        )
+          `UPDATE b2b_workorders SET detail_mode=?, operation_mode=?, outbound_mode=?, customer_name=?, plan_day=?, external_workorder_no=?, instruction_text=?, outbound_destination=?, order_ref_no=?, outbound_box_count=?, outbound_pallet_count=?, total_qty=?, total_qty_unit=?, total_weight_kg=?, total_cbm=?${noticeSql} WHERE workorder_id=?`
+        ).bind(...updateBinds)
       );
 
       // 原子执行
@@ -2540,7 +2570,7 @@ export default {
       // 状态流转校验
       const TRANSITIONS = {
         "draft": ["issued", "cancelled"],
-        "issued": ["working", "cancelled"],
+        "issued": ["completed", "cancelled"],
         "working": ["completed"],
         "completed": [],
         "cancelled": []
@@ -2560,6 +2590,25 @@ export default {
       ).bind(status, workorder_id).run();
 
       return jsonpOrJson({ ok:true, workorder_id, status }, callback);
+    }
+
+    // ===== B2B 出库作业单 — 确认查看变更 =====
+    if (action === "b2b_wo_ack_notice") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const workorder_id = String(p.workorder_id || "").trim();
+      const ack_by = String(p.ack_by || "").trim();
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+      if (!ack_by) return jsonpOrJson({ ok:false, error:"missing ack_by" }, callback);
+
+      const existing = await env.DB.prepare(`SELECT workorder_id, has_update_notice FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!existing) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+      if (!existing.has_update_notice) return jsonpOrJson({ ok:true, workorder_id, msg:"no notice to ack" }, callback);
+
+      await env.DB.prepare(
+        `UPDATE b2b_workorders SET has_update_notice=0, update_ack_at=?, update_ack_by=? WHERE workorder_id=?`
+      ).bind(now, ack_by, workorder_id).run();
+
+      return jsonpOrJson({ ok:true, workorder_id, acked:true }, callback);
     }
 
     // ===== B2B 附件上传（multipart/form-data） =====
@@ -2713,6 +2762,7 @@ export default {
 
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
+      if (!created_by) return jsonpOrJson({ ok:false, error:"missing created_by" }, callback);
 
       const VALID_OP = ["box_op","palletize","bulk_in_out","unload","other"];
       if (!VALID_OP.includes(operation_type)) return jsonpOrJson({ ok:false, error:"invalid operation_type, must be: " + VALID_OP.join("/") }, callback);
@@ -3067,6 +3117,7 @@ export default {
 
       if (!check_day || !/^\d{4}-\d{2}-\d{2}$/.test(check_day)) return jsonpOrJson({ ok:false, error:"invalid check_day" }, callback);
       if (!batch_name) return jsonpOrJson({ ok:false, error:"missing batch_name" }, callback);
+      if (!created_by) return jsonpOrJson({ ok:false, error:"missing created_by" }, callback);
 
       // items: JSON array of { outbound_barcode, expected_box_count, customer_name?, goods_summary? }
       let items;
