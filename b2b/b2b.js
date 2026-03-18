@@ -759,11 +759,19 @@ function renderWoRow(w){
   var opLabel = modeDisplay(w.operation_mode);
   var obLabel = modeDisplay(w.outbound_mode);
   var noticeTag = '';
-  if(w.has_update_notice){
+  // 优先级：取消强提醒 > 变更强提醒 > 弱标签
+  if(w.has_cancel_notice){
+    noticeTag = ' <span class="cancel-notice-tag">❌ 已取消，禁止发出</span>' +
+      ' <button onclick="event.stopPropagation();woNoticeAction(\''+esc(w.workorder_id)+'\',\'cancelled\',\'ack\')" class="ack-btn">已确认取消</button>';
+  } else if(w.status==="cancelled" && w.cancel_ack_at){
+    noticeTag = ' <span class="ack-tag">已确认取消</span>' +
+      ' <button onclick="event.stopPropagation();woNoticeAction(\''+esc(w.workorder_id)+'\',\'cancelled\',\'unack\')" class="unack-btn">取消确认</button>';
+  } else if(w.has_update_notice){
     noticeTag = ' <span class="notice-tag">⚠ 要求已更新</span>' +
-      ' <button onclick="event.stopPropagation();ackWoNotice(\''+esc(w.workorder_id)+'\')" class="ack-btn">已确认查看</button>';
+      ' <button onclick="event.stopPropagation();woNoticeAction(\''+esc(w.workorder_id)+'\',\'updated\',\'ack\')" class="ack-btn">已确认查看</button>';
   } else if(w.update_ack_at){
-    noticeTag = ' <span class="ack-tag">已确认变更</span>';
+    noticeTag = ' <span class="ack-tag">已确认变更</span>' +
+      ' <button onclick="event.stopPropagation();woNoticeAction(\''+esc(w.workorder_id)+'\',\'updated\',\'unack\')" class="unack-btn">取消确认</button>';
   }
   return '<div class="wo-row'+dimClass+'" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
     '<div><span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
@@ -822,19 +830,31 @@ function goWoDetail(id){
       }).join("");
     }
 
-    // 变更提醒条
+    // 提醒条（优先级：取消强提醒 > 变更强提醒 > 弱标签）
     var noticeHtml = '';
-    if(w.has_update_notice){
-      noticeHtml = '<div style="background:#fff3e0;border:2px solid #e65100;border-radius:8px;padding:10px 14px;margin-bottom:10px;">' +
+    if(w.has_cancel_notice){
+      noticeHtml = '<div style="background:#ffebee;border:2px solid #d32f2f;border-radius:8px;padding:10px 14px;margin-bottom:10px;">' +
+        '<div style="font-size:16px;font-weight:800;color:#d32f2f;">❌ 该工单已取消，禁止发出</div>' +
+        '<button onclick="woNoticeAction(\''+esc(w.workorder_id)+'\',\'cancelled\',\'ack\')" style="margin-top:8px;width:auto;padding:6px 16px;font-size:13px;background:#d32f2f;color:#fff;border:none;border-radius:6px;cursor:pointer;">已确认取消</button>' +
+        '</div>';
+    } else if(w.status==="cancelled" && w.cancel_ack_at){
+      noticeHtml = '<div style="background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#888;">' +
+        '已确认取消 · ' + new Date(w.cancel_ack_at).toLocaleString() +
+        (w.cancel_ack_by ? ' · 确认人: '+esc(w.cancel_ack_by) : '') +
+        ' <button onclick="woNoticeAction(\''+esc(w.workorder_id)+'\',\'cancelled\',\'unack\')" style="margin-left:8px;padding:2px 10px;font-size:11px;background:#eee;color:#666;border:1px solid #ccc;border-radius:4px;cursor:pointer;">取消确认</button></div>';
+    }
+    if(w.has_update_notice && !w.has_cancel_notice){
+      noticeHtml += '<div style="background:#fff3e0;border:2px solid #e65100;border-radius:8px;padding:10px 14px;margin-bottom:10px;">' +
         '<div style="font-size:15px;font-weight:800;color:#e65100;">⚠ 该工单在操作中已被编辑，请按最新要求执行</div>' +
         '<div style="font-size:12px;color:#bf360c;margin-top:4px;">最近编辑时间: ' + (w.last_edited_at ? new Date(w.last_edited_at).toLocaleString() : '未知') +
         (w.last_edited_by ? ' · 编辑人: '+esc(w.last_edited_by) : '') + '</div>' +
-        '<button onclick="ackWoNotice(\''+esc(w.workorder_id)+'\')" style="margin-top:8px;width:auto;padding:6px 16px;font-size:13px;background:#e65100;color:#fff;border:none;border-radius:6px;cursor:pointer;">已确认查看变更</button>' +
+        '<button onclick="woNoticeAction(\''+esc(w.workorder_id)+'\',\'updated\',\'ack\')" style="margin-top:8px;width:auto;padding:6px 16px;font-size:13px;background:#e65100;color:#fff;border:none;border-radius:6px;cursor:pointer;">已确认查看变更</button>' +
         '</div>';
-    } else if(w.update_ack_at){
-      noticeHtml = '<div style="background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#888;">' +
+    } else if(w.update_ack_at && !w.has_update_notice && !w.has_cancel_notice){
+      noticeHtml += '<div style="background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#888;">' +
         '已确认变更 · ' + new Date(w.update_ack_at).toLocaleString() +
-        (w.update_ack_by ? ' · 确认人: '+esc(w.update_ack_by) : '') + '</div>';
+        (w.update_ack_by ? ' · 确认人: '+esc(w.update_ack_by) : '') +
+        ' <button onclick="woNoticeAction(\''+esc(w.workorder_id)+'\',\'updated\',\'unack\')" style="margin-left:8px;padding:2px 10px;font-size:11px;background:#eee;color:#666;border:1px solid #ccc;border-radius:4px;cursor:pointer;">取消确认</button></div>';
     }
 
     card.innerHTML =
@@ -889,21 +909,25 @@ function changeWoStatus(id, status){
   });
 }
 
-function ackWoNotice(id){
-  var ackBy = prompt("请输入你的名字（确认人）：");
-  if(ackBy === null) return; // 取消
-  ackBy = ackBy.trim();
-  if(!ackBy){ alert("确认人不能为空"); return; }
-  fetchApi({ action:"b2b_wo_ack_notice", workorder_id:id, ack_by:ackBy }).then(function(res){
+function woNoticeAction(id, kind, op){
+  var ackBy = "";
+  if(op === "ack"){
+    ackBy = prompt("请输入你的名字（确认人）：");
+    if(ackBy === null) return;
+    ackBy = ackBy.trim();
+    if(!ackBy){ alert("确认人不能为空"); return; }
+  } else {
+    if(!confirm("确认取消确认？提醒将重新出现。")) return;
+  }
+  fetchApi({ action:"b2b_wo_ack_notice", workorder_id:id, kind:kind, op:op, ack_by:ackBy }).then(function(res){
     if(res && res.ok){
-      // 刷新当前视图
       if(document.getElementById("wo-detail-card").innerHTML.indexOf(id) >= 0){
         goWoDetail(id);
       } else {
         loadWoList();
       }
     } else {
-      alert("确认失败: "+(res&&res.error||"unknown"));
+      alert("操作失败: "+(res&&res.error||"unknown"));
     }
   });
 }

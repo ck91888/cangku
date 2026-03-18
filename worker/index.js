@@ -644,6 +644,15 @@ export default {
           await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN update_ack_by TEXT NOT NULL DEFAULT ''`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v13_wo_update_ack', ?)`).bind(Date.now()).run();
         }
+
+        // v14: b2b_workorders 增加取消提醒字段
+        const m14 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v14_wo_cancel_notice'`).first();
+        if (!m14) {
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN has_cancel_notice INTEGER NOT NULL DEFAULT 0`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN cancel_ack_at INTEGER`).run();
+          await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN cancel_ack_by TEXT NOT NULL DEFAULT ''`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v14_wo_cancel_notice', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2583,7 +2592,7 @@ export default {
       let tsCol = "";
       if (status === "issued") tsCol = ", issued_at=" + now;
       else if (status === "completed") tsCol = ", completed_at=" + now;
-      else if (status === "cancelled") tsCol = ", cancelled_at=" + now;
+      else if (status === "cancelled") tsCol = ", cancelled_at=" + now + ", has_cancel_notice=1, cancel_ack_at=NULL, cancel_ack_by=''";
 
       await env.DB.prepare(
         `UPDATE b2b_workorders SET status=?${tsCol} WHERE workorder_id=?`
@@ -2592,23 +2601,44 @@ export default {
       return jsonpOrJson({ ok:true, workorder_id, status }, callback);
     }
 
-    // ===== B2B 出库作业单 — 确认查看变更 =====
+    // ===== B2B 出库作业单 — 提醒确认/取消确认（通用） =====
     if (action === "b2b_wo_ack_notice") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const workorder_id = String(p.workorder_id || "").trim();
       const ack_by = String(p.ack_by || "").trim();
+      const kind = String(p.kind || "updated").trim();   // "updated" | "cancelled"
+      const op = String(p.op || "ack").trim();            // "ack" | "unack"
       if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
-      if (!ack_by) return jsonpOrJson({ ok:false, error:"missing ack_by" }, callback);
+      if (op === "ack" && !ack_by) return jsonpOrJson({ ok:false, error:"missing ack_by" }, callback);
 
-      const existing = await env.DB.prepare(`SELECT workorder_id, has_update_notice FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      const existing = await env.DB.prepare(`SELECT workorder_id, has_update_notice, has_cancel_notice FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
       if (!existing) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
-      if (!existing.has_update_notice) return jsonpOrJson({ ok:true, workorder_id, msg:"no notice to ack" }, callback);
 
-      await env.DB.prepare(
-        `UPDATE b2b_workorders SET has_update_notice=0, update_ack_at=?, update_ack_by=? WHERE workorder_id=?`
-      ).bind(now, ack_by, workorder_id).run();
+      if (kind === "updated") {
+        if (op === "ack") {
+          await env.DB.prepare(
+            `UPDATE b2b_workorders SET has_update_notice=0, update_ack_at=?, update_ack_by=? WHERE workorder_id=?`
+          ).bind(now, ack_by, workorder_id).run();
+        } else {
+          await env.DB.prepare(
+            `UPDATE b2b_workorders SET has_update_notice=1, update_ack_at=NULL, update_ack_by='' WHERE workorder_id=?`
+          ).bind(workorder_id).run();
+        }
+      } else if (kind === "cancelled") {
+        if (op === "ack") {
+          await env.DB.prepare(
+            `UPDATE b2b_workorders SET has_cancel_notice=0, cancel_ack_at=?, cancel_ack_by=? WHERE workorder_id=?`
+          ).bind(now, ack_by, workorder_id).run();
+        } else {
+          await env.DB.prepare(
+            `UPDATE b2b_workorders SET has_cancel_notice=1, cancel_ack_at=NULL, cancel_ack_by='' WHERE workorder_id=?`
+          ).bind(workorder_id).run();
+        }
+      } else {
+        return jsonpOrJson({ ok:false, error:"invalid kind, must be: updated/cancelled" }, callback);
+      }
 
-      return jsonpOrJson({ ok:true, workorder_id, acked:true }, callback);
+      return jsonpOrJson({ ok:true, workorder_id, kind, op }, callback);
     }
 
     // ===== B2B 附件上传（multipart/form-data） =====
