@@ -909,6 +909,15 @@
             </div>
           </div>
         </div>
+        <!-- 当前托盘号 -->
+        <div style="background:#fff8e1;border:2px solid #ffb300;border-radius:8px;padding:8px 12px;margin-bottom:10px;">
+          <div style="font-size:12px;font-weight:700;color:#e65100;margin-bottom:4px;">当前托盘号 / 현재 팔레트</div>
+          <div class="row" style="gap:6px;align-items:center;">
+            <input type="text" id="scPalletInput" placeholder="输入托盘号（如：1号托盘）" style="flex:1;font-size:15px;padding:8px;border:2px solid #ffb300;border-radius:6px;" autocomplete="off">
+            <button onclick="scSetPallet()" style="width:auto;min-width:60px;background:#ffb300;border-color:#ffb300;color:#fff;font-size:14px;padding:8px 12px;">设定</button>
+          </div>
+          <div id="scPalletDisplay" style="margin-top:4px;font-size:14px;font-weight:800;color:#e65100;"></div>
+        </div>
         <!-- 扫码输入 -->
         <div style="margin-bottom:10px;">
           <div class="row" style="gap:6px;">

@@ -41,8 +41,15 @@ var PLAN_STATUS_LABEL = {
   completed: "已完成", abnormal: "异常", cancelled: "已作废"
 };
 var BIZ_TYPE_LABEL = {
+  b2c: "B2C", b2b: "B2B", inventory_op: "库存操作", return_op: "退件操作",
   b2c_inbound: "B2C入库", b2b_inbound: "B2B入库", direct_transfer: "直接转发", other: "其他"
 };
+var BIZ_TYPE_NEW_KEYS = ["b2c","b2b","inventory_op","return_op"];
+function bizBadge(bt){
+  var label = BIZ_TYPE_LABEL[bt] || bt || "未知";
+  var cls = BIZ_TYPE_NEW_KEYS.indexOf(bt) >= 0 ? "biz biz-" + bt : "biz biz-legacy";
+  return '<span class="'+cls+'">'+esc(label)+'</span>';
+}
 var WO_STATUS_LABEL = {
   draft: "草稿", issued: "已下发", working: "作业中", completed: "已完成", cancelled: "已取消"
 };
@@ -314,7 +321,7 @@ function renderPlanRow(p){
   var foBtn = (p.status==="arrived"||p.status==="processing") ? '<button onclick="event.stopPropagation();goNewFoFromPlan(\''+esc(p.plan_id)+'\',\''+esc(p.plan_day)+'\',\''+esc(p.customer_name)+'\',\''+esc(p.goods_summary||"")+'\',\''+esc(p.purpose_text||"")+'\')" style="background:#8e24aa;color:#fff;">+ 现场记录</button>' : '';
   return '<div class="plan-row'+dimClass+'">' +
     '<div><span class="st st-'+esc(p.status)+'">'+esc(PLAN_STATUS_LABEL[p.status]||p.status)+'</span> ' +
-    '<b>'+esc(p.customer_name)+'</b> <span class="muted" style="font-size:11px;">'+esc(BIZ_TYPE_LABEL[p.biz_type]||p.biz_type)+'</span>' +
+    '<b>'+esc(p.customer_name)+'</b> ' + bizBadge(p.biz_type) +
     ' <span class="muted" style="font-size:11px;">'+esc(p.plan_day)+'</span></div>' +
     '<div class="meta">'+esc(p.goods_summary) + (p.expected_arrival_time ? ' · 预计'+esc(p.expected_arrival_time) : '') + '</div>' +
     (p.purpose_text ? '<div class="meta">用途: '+esc(p.purpose_text)+'</div>' : '') +
@@ -337,7 +344,15 @@ function initPlanForm(data){
 
   document.getElementById("pc-day").value = isEdit ? data.plan_day : kstToday();
   document.getElementById("pc-customer").value = isEdit ? data.customer_name : "";
-  document.getElementById("pc-biz").value = isEdit ? data.biz_type : "b2c_inbound";
+  var bizSel = document.getElementById("pc-biz");
+  if(isEdit && BIZ_TYPE_NEW_KEYS.indexOf(data.biz_type) < 0){
+    // 旧值不在新选项中，临时追加让回填生效
+    var opt = document.createElement("option");
+    opt.value = data.biz_type;
+    opt.textContent = BIZ_TYPE_LABEL[data.biz_type] || data.biz_type;
+    bizSel.appendChild(opt);
+  }
+  bizSel.value = isEdit ? data.biz_type : "b2c";
   document.getElementById("pc-summary").value = isEdit ? data.goods_summary : "";
   document.getElementById("pc-arrival").value = isEdit ? (data.expected_arrival_time||"") : "";
   document.getElementById("pc-purpose").value = isEdit ? (data.purpose_text||"") : "";
@@ -1851,13 +1866,15 @@ function goScDetail(batch_id){
     html += '</div>';
 
     // 多扫清单
+    var overPallets = res.over_pallets || {};
     html += '<div class="sc-section"><div class="sc-section-title sc-over">⚠ 多扫（'+over.length+' 种）</div>';
     if(over.length){
       html += over.map(function(it){
         var extra = it.scanned_count - it.expected_box_count;
+        var palletTag = overPallets[it.outbound_barcode] ? ' <span class="pallet-tag">托盘: '+esc(overPallets[it.outbound_barcode])+'</span>' : '';
         return '<div class="sc-item"><b>'+esc(it.outbound_barcode)+'</b>' +
           (it.customer_name ? ' · '+esc(it.customer_name) : '') +
-          ' — 计划'+it.expected_box_count+'箱 已扫'+it.scanned_count+'箱 <b class="sc-over">多扫'+extra+'箱</b></div>';
+          ' — 计划'+it.expected_box_count+'箱 已扫'+it.scanned_count+'箱 <b class="sc-over">多扫'+extra+'箱</b>' + palletTag + '</div>';
       }).join("");
     } else {
       html += '<div class="q-empty">无</div>';
@@ -1868,7 +1885,8 @@ function goScDetail(batch_id){
     html += '<div class="sc-section"><div class="sc-section-title sc-unplanned">● 计划外条码（'+unplanned.length+' 种）</div>';
     if(unplanned.length){
       html += unplanned.map(function(u){
-        return '<div class="sc-item"><b class="sc-unplanned">'+esc(u.outbound_barcode)+'</b> — 扫了'+u.scan_times+'次（不在计划内）</div>';
+        var palletTag = u.pallets ? ' <span class="pallet-tag">托盘: '+esc(u.pallets)+'</span>' : '';
+        return '<div class="sc-item"><b class="sc-unplanned">'+esc(u.outbound_barcode)+'</b> — 扫了'+u.scan_times+'次（不在计划内）' + palletTag + '</div>';
       }).join("");
     } else {
       html += '<div class="q-empty">无</div>';

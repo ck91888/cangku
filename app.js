@@ -5514,6 +5514,7 @@ function dfRenderTable_(features){
 /** ===== B2B 扫码核对 (主系统) ===== */
 var _scCurrentBatch = null; // { batch_id, batch_name, status, ... }
 var _scBusy = false;        // 防连击
+var _scCurrentPallet = "";  // 当前托盘号
 
 function scBackToMenu(){ _scClearBatch(); back(); }
 
@@ -5554,10 +5555,30 @@ function onScBatchSelected(){
   document.getElementById("scStartBtn").style.display = v ? "" : "none";
 }
 
+function scSetPallet(){
+  var v = document.getElementById("scPalletInput").value.trim();
+  _scCurrentPallet = v;
+  try{ localStorage.setItem("b2b_sc_pallet_v1", v); }catch(e){}
+  _scUpdatePalletDisplay();
+  document.getElementById("scBarcodeInput").focus();
+}
+function _scUpdatePalletDisplay(){
+  var el = document.getElementById("scPalletDisplay");
+  if(_scCurrentPallet){
+    el.textContent = "当前托盘：" + _scCurrentPallet;
+  } else {
+    el.textContent = "未设置托盘号（扫码将不记录托盘）";
+  }
+}
+
 function scStartScan(){
   var batchId = document.getElementById("scBatchSelect").value;
   if(!batchId){ alert("请先选择批次"); return; }
   _scSaveBatch(batchId);
+  // 恢复托盘号
+  try{ _scCurrentPallet = localStorage.getItem("b2b_sc_pallet_v1") || ""; }catch(e){ _scCurrentPallet = ""; }
+  document.getElementById("scPalletInput").value = _scCurrentPallet;
+  _scUpdatePalletDisplay();
   // 拉取详情以获取进度和汇总
   jsonp(LOCK_URL, { action:"b2b_scan_batch_detail", batch_id:batchId, k:getFoKey_() }, { skipBusy:true }).then(function(res){
     if(!res || !res.ok){ alert("加载批次失败: "+(res&&res.error||"")); return; }
@@ -5615,6 +5636,14 @@ function scDoScan(){
   if(!bc){ return; }
   if(!_scCurrentBatch){ alert("请先选择批次"); return; }
 
+  // 如果输入框有新值但未点设定，自动同步
+  var palletInput = document.getElementById("scPalletInput").value.trim();
+  if(palletInput !== _scCurrentPallet){
+    _scCurrentPallet = palletInput;
+    try{ localStorage.setItem("b2b_sc_pallet_v1", palletInput); }catch(e){}
+    _scUpdatePalletDisplay();
+  }
+
   _scBusy = true;
   var opId = getOperatorId() || "";
   jsonp(LOCK_URL, {
@@ -5622,6 +5651,7 @@ function scDoScan(){
     batch_id: _scCurrentBatch.batch_id,
     outbound_barcode: bc,
     scanned_by: opId,
+    pallet_no: _scCurrentPallet,
     k: getFoKey_()
   }, { skipBusy:true }).then(function(res){
     _scBusy = false;

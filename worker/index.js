@@ -620,6 +620,13 @@ export default {
           )`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v10_b2b_operation_results', ?)`).bind(Date.now()).run();
         }
+
+        // v11: b2b_scan_logs 增加 pallet_no 字段
+        const m11 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v11_scan_log_pallet'`).first();
+        if (!m11) {
+          await env.DB.prepare(`ALTER TABLE b2b_scan_logs ADD COLUMN pallet_no TEXT NOT NULL DEFAULT ''`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v11_scan_log_pallet', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2182,16 +2189,18 @@ export default {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const plan_day = String(p.plan_day || "").trim();
       const customer_name = String(p.customer_name || "").trim();
-      const biz_type = String(p.biz_type || "other").trim();
+      const biz_type = String(p.biz_type || "").trim();
       const goods_summary = String(p.goods_summary || "").trim();
       const expected_arrival_time = String(p.expected_arrival_time || "").trim();
       const purpose_text = String(p.purpose_text || "").trim();
       const remark = String(p.remark || "").trim();
       const created_by = String(p.created_by || "").trim();
 
+      const BIZ_NEW = ["b2c","b2b","inventory_op","return_op"];
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!goods_summary) return jsonpOrJson({ ok:false, error:"missing goods_summary" }, callback);
+      if (!BIZ_NEW.includes(biz_type)) return jsonpOrJson({ ok:false, error:"invalid biz_type, must be: " + BIZ_NEW.join("/") }, callback);
 
       // 生成 plan_id：IP-YYMMDD-NNN（后端原子生成，避免撞号）
       const dayTag = plan_day.slice(2).replace(/-/g, ""); // "260316"
@@ -2263,15 +2272,17 @@ export default {
 
       const plan_day = String(p.plan_day || "").trim();
       const customer_name = String(p.customer_name || "").trim();
-      const biz_type = String(p.biz_type || "other").trim();
+      const biz_type = String(p.biz_type || "").trim();
       const goods_summary = String(p.goods_summary || "").trim();
       const expected_arrival_time = String(p.expected_arrival_time || "").trim();
       const purpose_text = String(p.purpose_text || "").trim();
       const remark = String(p.remark || "").trim();
 
+      const BIZ_ALL = ["b2c","b2b","inventory_op","return_op","b2c_inbound","b2b_inbound","direct_transfer","other"];
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!goods_summary) return jsonpOrJson({ ok:false, error:"missing goods_summary" }, callback);
+      if (!BIZ_ALL.includes(biz_type)) return jsonpOrJson({ ok:false, error:"invalid biz_type" }, callback);
 
       await env.DB.prepare(
         `UPDATE b2b_inbound_plans SET plan_day=?, customer_name=?, biz_type=?, goods_summary=?, expected_arrival_time=?, purpose_text=?, remark=? WHERE plan_id=?`
@@ -3144,11 +3155,24 @@ export default {
       ).bind(batch_id).all();
       const items = itemsRs.results || [];
 
-      // 计划外条码汇总
+      // 计划外条码汇总（含托盘号）
       const unplannedRs = await env.DB.prepare(
-        `SELECT outbound_barcode, COUNT(*) as scan_times FROM b2b_scan_logs WHERE batch_id=? AND is_planned=0 AND undone=0 GROUP BY outbound_barcode ORDER BY scan_times DESC`
+        `SELECT outbound_barcode, COUNT(*) as scan_times, GROUP_CONCAT(DISTINCT CASE WHEN pallet_no!='' THEN pallet_no END) as pallets FROM b2b_scan_logs WHERE batch_id=? AND is_planned=0 AND undone=0 GROUP BY outbound_barcode ORDER BY scan_times DESC`
       ).bind(batch_id).all();
       const unplanned = unplannedRs.results || [];
+
+      // 多扫条码的托盘号（计划内且 scanned > expected 的条码）
+      const overBarcodes = items.filter(it => it.scanned_count > it.expected_box_count).map(it => it.outbound_barcode);
+      let over_pallets = {};
+      if (overBarcodes.length > 0) {
+        const placeholders = overBarcodes.map(() => "?").join(",");
+        const opRs = await env.DB.prepare(
+          `SELECT outbound_barcode, GROUP_CONCAT(DISTINCT CASE WHEN pallet_no!='' THEN pallet_no END) as pallets FROM b2b_scan_logs WHERE batch_id=? AND is_planned=1 AND undone=0 AND outbound_barcode IN (${placeholders}) GROUP BY outbound_barcode`
+        ).bind(batch_id, ...overBarcodes).all();
+        for (const r of (opRs.results || [])) {
+          over_pallets[r.outbound_barcode] = r.pallets || "";
+        }
+      }
 
       // 进度
       let doneBoxes = 0;
@@ -3157,7 +3181,7 @@ export default {
       }
 
       return jsonpOrJson({
-        ok:true, batch, items, unplanned,
+        ok:true, batch, items, unplanned, over_pallets,
         done_boxes: doneBoxes,
         total_expected_boxes: batch.total_expected_boxes,
         progress_percent: batch.total_expected_boxes > 0 ? Math.round(doneBoxes * 100 / batch.total_expected_boxes) : 0
@@ -3212,6 +3236,7 @@ export default {
       const batch_id = String(p.batch_id || "").trim();
       const outbound_barcode = String(p.outbound_barcode || "").trim();
       const scanned_by = String(p.scanned_by || "").trim();
+      const pallet_no = String(p.pallet_no || "").trim();
 
       if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
       if (!outbound_barcode) return jsonpOrJson({ ok:false, error:"missing outbound_barcode" }, callback);
@@ -3229,8 +3254,8 @@ export default {
         // 计划内：原子写日志 + 更新计数
         await env.DB.batch([
           env.DB.prepare(
-            `INSERT INTO b2b_scan_logs(batch_id,outbound_barcode,is_planned,scanned_by,scanned_at,undone) VALUES(?,?,1,?,?,0)`
-          ).bind(batch_id, outbound_barcode, scanned_by, now),
+            `INSERT INTO b2b_scan_logs(batch_id,outbound_barcode,is_planned,scanned_by,scanned_at,undone,pallet_no) VALUES(?,?,1,?,?,0,?)`
+          ).bind(batch_id, outbound_barcode, scanned_by, now, pallet_no),
           env.DB.prepare(
             `UPDATE b2b_scan_items SET scanned_count=scanned_count+1 WHERE batch_id=? AND outbound_barcode=?`
           ).bind(batch_id, outbound_barcode)
@@ -3256,8 +3281,8 @@ export default {
       } else {
         // 计划外：只写日志
         await env.DB.prepare(
-          `INSERT INTO b2b_scan_logs(batch_id,outbound_barcode,is_planned,scanned_by,scanned_at,undone) VALUES(?,?,0,?,?,0)`
-        ).bind(batch_id, outbound_barcode, scanned_by, now).run();
+          `INSERT INTO b2b_scan_logs(batch_id,outbound_barcode,is_planned,scanned_by,scanned_at,undone,pallet_no) VALUES(?,?,0,?,?,0,?)`
+        ).bind(batch_id, outbound_barcode, scanned_by, now, pallet_no).run();
 
         return jsonpOrJson({ ok:true, planned:false, outbound_barcode }, callback);
       }

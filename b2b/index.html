@@ -22,6 +22,11 @@
     .st-draft{background:#999;} .st-issued{background:#3498db;} .st-working{background:#e67e22;} .st-recording{background:#e67e22;}
     .bound-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;color:#fff;background:#8e24aa;margin-left:4px;}
     .st-open{background:#3498db;} .st-closed{background:#27ae60;}
+    .biz{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;margin-right:4px;}
+    .biz-b2c{background:#e3f2fd;color:#1565c0;} .biz-b2b{background:#fce4ec;color:#c62828;}
+    .biz-inventory_op{background:#fff3e0;color:#e65100;} .biz-return_op{background:#e8f5e9;color:#2e7d32;}
+    .biz-legacy{background:#f5f5f5;color:#888;}
+    .pallet-tag{display:inline-block;background:#fff3e0;color:#e65100;border:1px solid #ffb300;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;margin-left:4px;}
     .sc-progress{background:#e3f2fd;border-radius:8px;padding:10px 12px;margin:10px 0;font-size:14px;font-weight:700;}
     .sc-progress-bar{height:8px;border-radius:4px;background:#e0e0e0;margin-top:6px;overflow:hidden;}
     .sc-progress-fill{height:100%;border-radius:4px;background:#2196f3;transition:width .3s;}
@@ -143,10 +148,10 @@
       <div class="form-group">
         <label>业务类型</label>
         <select id="pc-biz">
-          <option value="b2c_inbound">B2C 入库</option>
-          <option value="b2b_inbound">B2B 入库</option>
-          <option value="direct_transfer">直接转发</option>
-          <option value="other">其他</option>
+          <option value="b2c">B2C</option>
+          <option value="b2b">B2B</option>
+          <option value="inventory_op">库存操作</option>
+          <option value="return_op">退件操作</option>
         </select>
       </div>
       <div class="form-group"><label>货物摘要</label><input id="pc-summary" placeholder="如：服装 200箱" /></div>
