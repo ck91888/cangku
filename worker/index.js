@@ -757,6 +757,19 @@ export default {
           }
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v18_accounted_fields', ?)`).bind(Date.now()).run();
         }
+
+        // --- v19: 幂等请求表 ---
+        const m19 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v19_idempotency_keys'`).first();
+        if (!m19) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS api_idempotency_keys (
+            request_id TEXT PRIMARY KEY,
+            action TEXT NOT NULL,
+            result_id TEXT NOT NULL DEFAULT '',
+            response_json TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v19_idempotency_keys', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2325,6 +2338,13 @@ export default {
     // ===== B2B 入库计划 =====
     if (action === "b2b_plan_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      // 幂等检查
+      const req_id = String(p.request_id || "").trim();
+      if (req_id) {
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_plan_create'`).bind(req_id).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id, "b2b_plan_create", Date.now()).run();
+      }
       const plan_day = String(p.plan_day || "").trim();
       const customer_name = String(p.customer_name || "").trim();
       const biz_type = String(p.biz_type || "").trim();
@@ -2358,7 +2378,11 @@ export default {
          VALUES(?,?,?,?,?,?,?,?,'pending',?,?)`
       ).bind(plan_id, plan_day, customer_name, biz_type, goods_summary, expected_arrival_time, purpose_text, remark, created_by, now).run();
 
-      return jsonpOrJson({ ok:true, plan_id }, callback);
+      const respPlan = { ok:true, plan_id };
+      if (req_id) {
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(plan_id, JSON.stringify(respPlan), req_id).run();
+      }
+      return jsonpOrJson(respPlan, callback);
     }
 
     if (action === "b2b_plan_list") {
@@ -2455,6 +2479,13 @@ export default {
     // ===== B2B 出库作业单 =====
     if (action === "b2b_wo_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      // 幂等检查
+      const req_id_wo = String(p.request_id || "").trim();
+      if (req_id_wo) {
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_wo_create'`).bind(req_id_wo).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id_wo, "b2b_wo_create", Date.now()).run();
+      }
 
       // 三模式字段（向后兼容：旧前端可能只传 outbound_mode=sku_based/carton_based）
       let detail_mode = String(p.detail_mode || "").trim();
@@ -2552,7 +2583,11 @@ export default {
 
       await env.DB.batch(batchStmts);
 
-      return jsonpOrJson({ ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm }, callback);
+      const respWo = { ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm };
+      if (req_id_wo) {
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(workorder_id, JSON.stringify(respWo), req_id_wo).run();
+      }
+      return jsonpOrJson(respWo, callback);
     }
 
     if (action === "b2b_wo_list") {
@@ -2934,6 +2969,13 @@ export default {
 
     if (action === "b2b_field_op_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      // 幂等检查
+      const req_id_fo = String(p.request_id || "").trim();
+      if (req_id_fo) {
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_field_op_create'`).bind(req_id_fo).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id_fo, "b2b_field_op_create", Date.now()).run();
+      }
 
       const plan_day = String(p.plan_day || "").trim();
       const customer_name = String(p.customer_name || "").trim();
@@ -3002,7 +3044,11 @@ export default {
         fo_needs_forklift_pick, fo_forklift_pallet_count, fo_rack_pick_location_count,
         created_by, now).run();
 
-      return jsonpOrJson({ ok:true, record_id }, callback);
+      const respFo = { ok:true, record_id };
+      if (req_id_fo) {
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(record_id, JSON.stringify(respFo), req_id_fo).run();
+      }
+      return jsonpOrJson(respFo, callback);
     }
 
     if (action === "b2b_field_op_list") {
@@ -3405,6 +3451,13 @@ export default {
 
     if (action === "b2b_scan_batch_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      // 幂等检查
+      const req_id_sc = String(p.request_id || "").trim();
+      if (req_id_sc) {
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_scan_batch_create'`).bind(req_id_sc).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id_sc, "b2b_scan_batch_create", Date.now()).run();
+      }
 
       const check_day = String(p.check_day || "").trim();
       const batch_name = String(p.batch_name || "").trim();
@@ -3473,7 +3526,11 @@ export default {
         return jsonpOrJson({ ok:false, error:"batch create failed: " + msg }, callback);
       }
 
-      return jsonpOrJson({ ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected }, callback);
+      const respSc = { ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected };
+      if (req_id_sc) {
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(batch_id, JSON.stringify(respSc), req_id_sc).run();
+      }
+      return jsonpOrJson(respSc, callback);
     }
 
     if (action === "b2b_scan_batch_list") {

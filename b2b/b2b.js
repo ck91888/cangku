@@ -3,6 +3,16 @@ var API_URL = "https://api.ck91888.cn";
 var KEY_STORAGE = "b2b_plan_k_v1";
 var B2B_EARLIEST_DAY = "2020-01-01";
 
+// ===== 防重提交 =====
+var _submitting = false;
+var _pendingRequestId = null;
+function genRequestId(){ return "rid-" + Date.now() + "-" + Math.random().toString(36).slice(2,8); }
+function getOrCreateRequestId(){
+  if(!_pendingRequestId) _pendingRequestId = genRequestId();
+  return _pendingRequestId;
+}
+function clearRequestId(){ _pendingRequestId = null; }
+
 // ===== 工具函数 =====
 function esc(s){ return String(s||"").replace(/[&<>"']/g, function(c){ return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]; }); }
 function pad2(n){ return String(n).padStart(2,"0"); }
@@ -1054,14 +1064,19 @@ function submitPlan(){
   if(!summary){ alert("请输入货物摘要"); return; }
   if(!_editingPlanId && !creator){ alert("请输入创建人"); return; }
 
+  var btn = document.getElementById("pc-submit-btn");
   if(_editingPlanId){
     // 编辑模式
+    if(_submitting) return;
+    _submitting = true;
+    btn.disabled = true; btn.textContent = "保存中...";
     fetchApi({
       action:"b2b_plan_update", plan_id:_editingPlanId,
       plan_day:day, customer_name:customer, biz_type:biz,
       goods_summary:summary, expected_arrival_time:arrival,
       purpose_text:purpose, remark:remark
     }).then(function(res){
+      _submitting = false; btn.disabled = false; btn.textContent = "保存修改";
       if(res && res.ok){
         alert("修改成功！");
         _editingPlanId = null;
@@ -1073,12 +1088,17 @@ function submitPlan(){
     });
   } else {
     // 新建模式
+    if(_submitting) return;
+    _submitting = true;
+    btn.disabled = true; btn.textContent = "创建中...";
     fetchApi({
       action:"b2b_plan_create", plan_day:day, customer_name:customer, biz_type:biz,
       goods_summary:summary, expected_arrival_time:arrival, purpose_text:purpose,
-      remark:remark, created_by:creator
+      remark:remark, created_by:creator, request_id:getOrCreateRequestId()
     }).then(function(res){
+      _submitting = false; btn.disabled = false; btn.textContent = "保存";
       if(res && res.ok){
+        clearRequestId();
         alert("创建成功！编号: " + res.plan_id);
         _editingPlanId = null;
         _navStack = [];
@@ -1287,8 +1307,15 @@ function submitWo(){
     if(lines.length === 0){ alert("请至少录入一行明细（数量>0）"); return; }
   }
 
+  var btn = document.getElementById("wc-submit-btn");
+  if(_submitting) return;
+  _submitting = true;
+  var origBtnText = btn.textContent;
+  btn.disabled = true;
+
   if(_editingWoId){
     // 编辑模式
+    btn.textContent = "保存中...";
     fetchApi({
       action:"b2b_wo_update", workorder_id:_editingWoId,
       detail_mode:detailMode, operation_mode:opMode, outbound_mode:obMode,
@@ -1298,6 +1325,7 @@ function submitWo(){
       outbound_box_count:boxCount, outbound_pallet_count:palletCount,
       edited_by:creator, lines:lines
     }).then(function(res){
+      _submitting = false; btn.disabled = false; btn.textContent = origBtnText;
       if(res && res.ok){
         var id = _editingWoId;
         _editingWoId = null;
@@ -1309,6 +1337,7 @@ function submitWo(){
     });
   } else {
     // 新建模式
+    btn.textContent = "创建中...";
     fetchApi({
       action:"b2b_wo_create", detail_mode:detailMode, operation_mode:opMode,
       outbound_mode:obMode, plan_day:day,
@@ -1316,9 +1345,11 @@ function submitWo(){
       external_workorder_no:extNo, instruction_text:instr,
       outbound_destination:destination, order_ref_no:orderRef,
       outbound_box_count:boxCount, outbound_pallet_count:palletCount,
-      created_by:creator, lines:lines
+      created_by:creator, lines:lines, request_id:getOrCreateRequestId()
     }).then(function(res){
+      _submitting = false; btn.disabled = false; btn.textContent = origBtnText;
       if(res && res.ok){
+        clearRequestId();
         _editingWoId = null;
         goWoDetail(res.workorder_id, true);
       } else {
@@ -2238,14 +2269,22 @@ function submitFo(){
   if(!customer){ alert("请输入客户名"); return; }
   if(!_editingFoId && !creator){ alert("请输入创建人"); return; }
 
+  var foBtn = document.getElementById("fo-submit-btn");
+  if(_submitting) return;
+  _submitting = true;
+  var foOrigText = foBtn.textContent;
+  foBtn.disabled = true;
+
   if(_editingFoId){
     // 编辑模式 — 全量提交
+    foBtn.textContent = "保存中...";
     fetchApi({
       action:"b2b_field_op_update", record_id:_editingFoId, sub:"edit",
       plan_day:day, customer_name:customer, goods_summary:summary,
       operation_type:optype, input_box_count:inputBox, output_box_count:outputBox,
       output_pallet_count:outputPallet, instruction_text:instr
     }).then(function(res){
+      _submitting = false; foBtn.disabled = false; foBtn.textContent = foOrigText;
       if(res && res.ok){
         alert("修改成功！");
         navDropTopIf("fo_detail");
@@ -2256,15 +2295,19 @@ function submitFo(){
     });
   } else {
     // 新建模式
+    foBtn.textContent = "创建中...";
     var params = {
       action:"b2b_field_op_create", plan_day:day, customer_name:customer,
       goods_summary:summary, operation_type:optype,
       input_box_count:inputBox, output_box_count:outputBox,
-      output_pallet_count:outputPallet, instruction_text:instr, created_by:creator
+      output_pallet_count:outputPallet, instruction_text:instr, created_by:creator,
+      request_id:getOrCreateRequestId()
     };
     if(_foSourcePlanId) params.source_plan_id = _foSourcePlanId;
     fetchApi(params).then(function(res){
+      _submitting = false; foBtn.disabled = false; foBtn.textContent = foOrigText;
       if(res && res.ok){
+        clearRequestId();
         alert("创建成功！编号: " + res.record_id);
         goFoDetail(res.record_id, true);
       } else {
@@ -2594,6 +2637,7 @@ function scImportExcel(input){
 }
 
 function submitSc(){
+  if(_submitting) return;
   var day = document.getElementById("sc-day").value;
   var name = document.getElementById("sc-name").value.trim();
   var creator = document.getElementById("sc-creator").value.trim();
@@ -2603,6 +2647,7 @@ function submitSc(){
   if(!creator){ alert("请输入创建人"); return; }
   if(!_scImportedItems.length){ alert("请先导入 Excel"); return; }
 
+  _submitting = true;
   // 清理 _row 字段
   var items = _scImportedItems.map(function(it){
     return { outbound_barcode:it.outbound_barcode, expected_box_count:it.expected_box_count, customer_name:it.customer_name, goods_summary:it.goods_summary };
@@ -2614,11 +2659,14 @@ function submitSc(){
   fetchApi({
     action:"b2b_scan_batch_create",
     check_day:day, batch_name:name, created_by:creator,
-    items:JSON.stringify(items)
+    items:JSON.stringify(items),
+    request_id:getOrCreateRequestId()
   }).then(function(res){
+    _submitting = false;
     document.getElementById("sc-submit-btn").disabled = false;
     document.getElementById("sc-submit-btn").textContent = "确认创建批次";
     if(res && res.ok){
+      clearRequestId();
       alert("创建成功！批次编号: " + res.batch_id + "\n条码: " + res.total_barcodes + " 种\n总箱数: " + res.total_expected_boxes);
       goScDetail(res.batch_id, true);
     } else {
