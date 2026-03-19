@@ -3663,26 +3663,14 @@ export default {
       const dayExpr = "substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10)";
 
       // keyword 全局搜索：wave_id / session / work_day_kst / customer_name
-      // customer_name 来自 enrichment 表，需要 pre-query 拿到匹配的 wave_id
+      // customer_name 用子查询覆盖三张表，无截断、无 bind 上限问题
       if (filterKw) {
         const kwLike = "%" + filterKw + "%";
-        // 步骤0: pre-query customer_name → 匹配的 wave_id 集合
-        const custRs = await env.DB.prepare(
-          `SELECT source_order_no as wid FROM b2b_operation_results WHERE customer_name LIKE ?
-           UNION
-           SELECT record_id as wid FROM b2b_field_ops WHERE customer_name LIKE ?`
-        ).bind(kwLike, kwLike).all();
-        const custWaveIds = (custRs.results || []).map(r => r.wid).slice(0, 80);
-
-        // 构建 OR 条件：wave_id / session / work_day_kst / customer匹配的wave_id
-        const kwOrParts = ["wave_id LIKE ?", "session LIKE ?", `${dayExpr} LIKE ?`];
-        binds.push(kwLike, kwLike, kwLike);
-        if (custWaveIds.length > 0) {
-          const ph = custWaveIds.map(() => "?").join(",");
-          kwOrParts.push(`wave_id IN (${ph})`);
-          binds.push(...custWaveIds);
-        }
-        whereParts.push(`(${kwOrParts.join(" OR ")})`);
+        whereParts.push(`(wave_id LIKE ? OR session LIKE ? OR ${dayExpr} LIKE ?
+          OR wave_id IN (SELECT source_order_no FROM b2b_operation_results WHERE customer_name LIKE ?)
+          OR wave_id IN (SELECT record_id FROM b2b_field_ops WHERE customer_name LIKE ?)
+          OR wave_id IN (SELECT workorder_id FROM b2b_workorders WHERE customer_name LIKE ?))`);
+        binds.push(kwLike, kwLike, kwLike, kwLike, kwLike, kwLike);
       }
       const whereClause = whereParts.join(" AND ");
 
