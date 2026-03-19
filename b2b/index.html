@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>B2B 计划与作业单</title>
+  <title>仓库协同中心</title>
   <link rel="stylesheet" href="../style.css">
   <style>
     body{max-width:1000px;margin:16px auto;}
@@ -79,6 +79,24 @@
     .lightbox-overlay img{max-width:92vw;max-height:92vh;border-radius:4px;}
     .list-section-title{font-size:14px;font-weight:700;padding:8px 0 4px;border-bottom:2px solid #eee;margin-bottom:4px;}
     .overdue-section-title{color:#e65100;}
+    .tab-bar{display:flex;gap:0;border-bottom:2px solid #e0e0e0;margin-bottom:12px;overflow-x:auto;}
+    .tab-bar button{width:auto!important;min-width:0;margin:0;padding:10px 18px;font-size:13px;font-weight:700;color:#666;background:none;border:none;border-bottom:3px solid transparent;border-radius:0;cursor:pointer;white-space:nowrap;flex-shrink:0;}
+    .tab-bar button:hover{color:#333;background:#f5f5f5;}
+    .tab-bar button.tab-active{color:#1565c0;border-bottom-color:#1565c0;}
+    .alert-card{border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:13px;cursor:pointer;}
+    .alert-card:hover{opacity:0.85;}
+    .alert-cancel{background:#ffebee;border:1px solid #ef9a9a;color:#c62828;}
+    .alert-update{background:#fff3e0;border:1px solid #ffcc80;color:#e65100;}
+    .alert-open{background:#e3f2fd;border:1px solid #90caf9;color:#1565c0;}
+    .alert-incomplete{background:#f3e5f5;border:1px solid #ce93d8;color:#6a1b9a;}
+    .wave-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;cursor:pointer;}
+    .wave-row:hover{background:#f9f9f9;}
+    .wave-detail-box{background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;margin:4px 0 8px;font-size:12px;}
+    .cross-ref{border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;margin:10px 0;background:#fafafa;}
+    .cross-ref-title{font-size:13px;font-weight:700;margin-bottom:6px;}
+    .cross-ref-row{border-bottom:1px solid #f0f0f0;padding:4px 0;font-size:12px;cursor:pointer;}
+    .cross-ref-row:hover{background:#f0f0f0;}
+    .weak-label{font-size:10px;color:#999;font-style:italic;}
     @media print{.no-print{display:none !important;} body{margin:0;}}
   </style>
 </head>
@@ -86,8 +104,8 @@
 
 <div class="header no-print">
   <div>
-    <div class="title">B2B 计划与作业单</div>
-    <div class="subtitle">入库计划 · 出库作业单 · 制单管理</div>
+    <div class="title">仓库协同中心</div>
+    <div class="subtitle">入库计划 · 出库作业 · 现场动态 · 核对异常</div>
   </div>
   <div class="pill" id="todayPill">--</div>
 </div>
@@ -108,40 +126,45 @@
 <!-- 主内容（登录后显示） -->
 <div id="v-main" style="display:none;">
 
-  <!-- 导航 -->
+  <!-- 一级 Tab 导航 -->
+  <div class="tab-bar no-print" id="mainTabBar">
+    <button class="tab-active" onclick="goTab('home')">今日看板</button>
+    <button onclick="goTab('plan')">入库计划</button>
+    <button onclick="goTab('wo')">出库作业</button>
+    <button onclick="goTab('fo')">现场动态</button>
+    <button onclick="goTab('sc')">核对/异常</button>
+    <button onclick="goTab('wave')">作业记录</button>
+    <button style="margin-left:auto;color:#999;font-size:11px;font-weight:400;" onclick="doLogout()">退出</button>
+  </div>
+  <!-- 操作按钮栏 -->
   <div class="topnav no-print">
-    <button class="primary" onclick="goHome()">首页</button>
     <button onclick="goNewPlan()">+ 入库计划</button>
     <button onclick="goNewWo()">+ 出库作业单</button>
     <button onclick="goNewFo()">+ 现场记录</button>
-    <button onclick="goCardDetail('plan','today')">计划列表</button>
-    <button onclick="goView('wo_list')">作业单列表</button>
-    <button onclick="goView('fo_list')">记录列表</button>
     <button onclick="goNewSc()">+ 核对批次</button>
-    <button onclick="goView('sc_list')">核对列表</button>
-    <button style="margin-left:auto;" onclick="doLogout()">退出</button>
   </div>
 
   <!-- 首页 -->
   <div id="v-home">
     <div class="quadrant">
-      <div class="q-card q-clickable" onclick="goCardDetail('plan','today')">
+      <div class="q-card q-clickable" onclick="goTab('plan')">
         <div class="q-title">📥 今日入库计划 <span class="count" id="ip-today-count">--</span></div>
         <div id="ip-today-body"><div class="q-empty">加载中...</div></div>
       </div>
-      <div class="q-card q-clickable" onclick="goCardDetail('plan','tomorrow')">
-        <div class="q-title">📥 明日入库计划 <span class="count" id="ip-tmr-count">--</span></div>
-        <div id="ip-tmr-body"><div class="q-empty">加载中...</div></div>
-      </div>
-      <div class="q-card q-clickable" onclick="goCardDetail('wo','today')">
-        <div class="q-title">📦 今日出库作业单 <span class="count" id="wo-today-count">--</span></div>
+      <div class="q-card q-clickable" onclick="goTab('wo')">
+        <div class="q-title">📦 未来三天出库作业单 <span class="count" id="wo-today-count">--</span></div>
         <div id="wo-today-body"><div class="q-empty">加载中...</div></div>
       </div>
-      <div class="q-card q-clickable" onclick="goCardDetail('wo','tomorrow')">
-        <div class="q-title">📦 明日出库作业单 <span class="count" id="wo-tmr-count">--</span></div>
-        <div id="wo-tmr-body"><div class="q-empty">加载中...</div></div>
+      <div class="q-card q-clickable" onclick="goTab('fo')">
+        <div class="q-title">🔧 今日现场动态 <span class="count" id="fo-today-count">--</span></div>
+        <div id="fo-today-body"><div class="q-empty">加载中...</div></div>
+      </div>
+      <div class="q-card q-clickable" onclick="goTab('sc')">
+        <div class="q-title">✅ 进行中核对批次 <span class="count" id="sc-today-count">--</span></div>
+        <div id="sc-today-body"><div class="q-empty">加载中...</div></div>
       </div>
     </div>
+    <div id="home-alerts" style="margin-top:12px;"></div>
   </div>
 
   <!-- 新建/编辑入库计划 -->
@@ -244,8 +267,20 @@
   <div id="v-plan_list" style="display:none;">
     <div class="card">
       <div id="pl-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">入库计划列表</div>
-      <div id="pl-result"></div>
+      <div class="row">
+        <div class="form-group"><label>开始日期</label><input id="pl-start" type="date" /></div>
+        <div class="form-group"><label>结束日期</label><input id="pl-end" type="date" /></div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="primary" style="width:auto;min-width:80px;" onclick="loadPlanListByRange()">查询</button>
+        </div>
+      </div>
+      <div id="pl-result" style="margin-top:10px;"></div>
     </div>
+  </div>
+
+  <!-- 入库计划详情 -->
+  <div id="v-plan_detail" style="display:none;">
+    <div class="card" id="plan-detail-card"></div>
   </div>
 
   <!-- 作业单列表 -->
@@ -370,6 +405,33 @@
   <!-- 核对批次详情 -->
   <div id="v-sc_detail" style="display:none;">
     <div class="card" id="sc-detail-card"></div>
+  </div>
+
+  <!-- 作业记录（波次/单号） -->
+  <div id="v-wave_list" style="display:none;">
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px;">作业记录编号</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px;">现场已扫过 / 记录过的波次、单号、工单号、FO号</div>
+      <div class="row">
+        <div class="form-group"><label>开始日期</label><input id="hw-start" type="date" /></div>
+        <div class="form-group"><label>结束日期</label><input id="hw-end" type="date" /></div>
+        <div class="form-group">
+          <label>biz</label>
+          <select id="hw-biz"><option value="">全部</option><option value="B2C">B2C</option><option value="B2B">B2B</option></select>
+        </div>
+        <div class="form-group">
+          <label>task</label>
+          <select id="hw-task"><option value="">全部</option></select>
+        </div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="primary" style="width:auto;min-width:80px;" onclick="loadWaveList()">查询</button>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <input id="hw-keyword" placeholder="关键词（wave_id / session / operator / 客户名）" style="width:100%;box-sizing:border-box;" onkeyup="filterWaveListLocal()" />
+      </div>
+      <div id="hw-result" style="margin-top:10px;"></div>
+    </div>
   </div>
 
 </div><!-- /v-main -->
