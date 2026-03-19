@@ -745,6 +745,18 @@ export default {
           await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_b2b_op_bindings_day_source ON b2b_operation_bindings(day_kst, source_order_no)`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v17_doc_ledger_indexes', ?)`).bind(Date.now()).run();
         }
+
+        // --- v18: 入库计划+出库作业单 记帐字段 ---
+        const m18 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v18_accounted_fields'`).first();
+        if (!m18) {
+          const tables = ["b2b_inbound_plans", "b2b_workorders"];
+          for (const tbl of tables) {
+            try { await env.DB.prepare(`ALTER TABLE ${tbl} ADD COLUMN is_accounted INTEGER NOT NULL DEFAULT 0`).run(); } catch(e) {}
+            try { await env.DB.prepare(`ALTER TABLE ${tbl} ADD COLUMN accounted_at INTEGER`).run(); } catch(e) {}
+            try { await env.DB.prepare(`ALTER TABLE ${tbl} ADD COLUMN accounted_by TEXT NOT NULL DEFAULT ''`).run(); } catch(e) {}
+          }
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v18_accounted_fields', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2418,6 +2430,28 @@ export default {
       return jsonpOrJson({ ok:true, plan_id }, callback);
     }
 
+    // ===== 入库计划 记帐标记 =====
+    if (action === "b2b_plan_set_accounted") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const plan_id = String(p.plan_id || "").trim();
+      const is_accounted = parseInt(p.is_accounted) || 0;
+      const accounted_by = String(p.accounted_by || "").trim();
+      if (!plan_id) return jsonpOrJson({ ok:false, error:"missing plan_id" }, callback);
+      if (is_accounted && !accounted_by) return jsonpOrJson({ ok:false, error:"accounted_by required" }, callback);
+
+      const plan = await env.DB.prepare(`SELECT plan_id FROM b2b_inbound_plans WHERE plan_id=?`).bind(plan_id).first();
+      if (!plan) return jsonpOrJson({ ok:false, error:"plan not found" }, callback);
+
+      if (is_accounted) {
+        await env.DB.prepare(`UPDATE b2b_inbound_plans SET is_accounted=1, accounted_at=?, accounted_by=? WHERE plan_id=?`)
+          .bind(Date.now(), accounted_by, plan_id).run();
+      } else {
+        await env.DB.prepare(`UPDATE b2b_inbound_plans SET is_accounted=0, accounted_at=NULL, accounted_by='' WHERE plan_id=?`)
+          .bind(plan_id).run();
+      }
+      return jsonpOrJson({ ok:true, plan_id, is_accounted }, callback);
+    }
+
     // ===== B2B 出库作业单 =====
     if (action === "b2b_wo_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
@@ -2739,6 +2773,28 @@ export default {
       }
 
       return jsonpOrJson({ ok:true, workorder_id, kind, op }, callback);
+    }
+
+    // ===== 出库作业单 记帐标记 =====
+    if (action === "b2b_wo_set_accounted") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const workorder_id = String(p.workorder_id || "").trim();
+      const is_accounted = parseInt(p.is_accounted) || 0;
+      const accounted_by = String(p.accounted_by || "").trim();
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+      if (is_accounted && !accounted_by) return jsonpOrJson({ ok:false, error:"accounted_by required" }, callback);
+
+      const wo = await env.DB.prepare(`SELECT workorder_id FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!wo) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+
+      if (is_accounted) {
+        await env.DB.prepare(`UPDATE b2b_workorders SET is_accounted=1, accounted_at=?, accounted_by=? WHERE workorder_id=?`)
+          .bind(Date.now(), accounted_by, workorder_id).run();
+      } else {
+        await env.DB.prepare(`UPDATE b2b_workorders SET is_accounted=0, accounted_at=NULL, accounted_by='' WHERE workorder_id=?`)
+          .bind(workorder_id).run();
+      }
+      return jsonpOrJson({ ok:true, workorder_id, is_accounted }, callback);
     }
 
     // ===== B2B 附件上传（multipart/form-data） =====

@@ -126,7 +126,7 @@ function goTab(tab){
   }
   if(tab === "home"){ goHome(); return; }
   if(tab === "plan"){ _planListScope = "today"; goView("plan_list"); return; }
-  if(tab === "wo"){ _woListScope = "today"; goView("wo_list"); return; }
+  if(tab === "wo"){ _woListScope = "next3"; goView("wo_list"); return; }
   if(tab === "fo"){ goView("fo_list"); return; }
   if(tab === "sc"){ goView("sc_list"); return; }
   if(tab === "wave"){ goView("doc_list"); return; }
@@ -340,14 +340,20 @@ function renderPlanList(container, plans, overduePlans){
   if(overduePlans.length > 0){
     overduePlans.sort(function(a,b){
       if(a.plan_day !== b.plan_day) return a.plan_day < b.plan_day ? -1 : 1;
-      return (PLAN_STATUS_PRIORITY[a.status]||9) - (PLAN_STATUS_PRIORITY[b.status]||9);
+      var sp = (PLAN_STATUS_PRIORITY[a.status]||9) - (PLAN_STATUS_PRIORITY[b.status]||9);
+      if(sp !== 0) return sp;
+      return (a.is_accounted||0) - (b.is_accounted||0);
     });
     html += '<div class="list-section-title overdue-section-title">⚠ 逾期未完成（'+overduePlans.length+' 单）</div>';
     html += overduePlans.map(renderPlanRow).join("");
   }
 
   if(plans.length > 0){
-    plans.sort(function(a,b){ return (PLAN_STATUS_PRIORITY[a.status]||9) - (PLAN_STATUS_PRIORITY[b.status]||9); });
+    plans.sort(function(a,b){
+      var sp = (PLAN_STATUS_PRIORITY[a.status]||9) - (PLAN_STATUS_PRIORITY[b.status]||9);
+      if(sp !== 0) return sp;
+      return (a.is_accounted||0) - (b.is_accounted||0);
+    });
     if(overduePlans.length > 0){
       html += '<div class="list-section-title" style="margin-top:12px;">📥 当日计划（'+plans.length+' 单）</div>';
     }
@@ -365,9 +371,13 @@ function renderPlanRow(p){
   }).join("");
   var editBtn = PLAN_EDITABLE[p.status] ? '<button onclick="event.stopPropagation();goEditPlan(\''+esc(p.plan_id)+'\')">编辑</button>' : '';
   var foBtn = (p.status==="arrived"||p.status==="processing") ? '<button onclick="event.stopPropagation();goNewFoFromPlan(\''+esc(p.plan_id)+'\',\''+esc(p.plan_day)+'\',\''+esc(p.customer_name)+'\',\''+esc(p.goods_summary||"")+'\',\''+esc(p.purpose_text||"")+'\')" style="background:#8e24aa;color:#fff;">+ 现场记录</button>' : '';
+  var accTag = p.is_accounted ? '<span class="acc-tag acc-yes">已记帐</span>' : '<span class="acc-tag acc-no">未记帐</span>';
+  var accBtn = p.is_accounted
+    ? '<span class="acc-btn" onclick="event.stopPropagation();setPlanAccounted(\''+esc(p.plan_id)+'\',0)">撤销记帐</span>'
+    : '<span class="acc-btn" onclick="event.stopPropagation();setPlanAccounted(\''+esc(p.plan_id)+'\',1)">标记记帐</span>';
   return '<div class="wo-row'+dimClass+'" onclick="goPlanDetail(\''+esc(p.plan_id)+'\')">' +
     '<div><span class="st st-'+esc(p.status)+'">'+esc(PLAN_STATUS_LABEL[p.status]||p.status)+'</span> ' +
-    '<b>'+esc(p.customer_name)+'</b> ' + bizBadge(p.biz_type) +
+    '<b>'+esc(p.customer_name)+'</b> ' + bizBadge(p.biz_type) + accTag + accBtn +
     ' <span class="muted" style="font-size:11px;">'+esc(p.plan_id)+' · '+esc(p.plan_day)+'</span></div>' +
     '<div class="meta">'+esc(p.goods_summary) + (p.expected_arrival_time ? ' · 预计'+esc(p.expected_arrival_time) : '') + '</div>' +
     (p.purpose_text ? '<div class="meta">用途: '+esc(p.purpose_text)+'</div>' : '') +
@@ -409,6 +419,11 @@ function goPlanDetail(plan_id){
       '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(p.created_by)+' · '+new Date(p.created_at).toLocaleString() +
       (p.status_updated_at ? ' · 更新: '+new Date(p.status_updated_at).toLocaleString() : '') +
       (p.status_updated_by ? ' ('+esc(p.status_updated_by)+')' : '') + '</div>' +
+      '<div class="detail-field">' +
+        (p.is_accounted
+          ? '<span class="acc-tag acc-yes">已记帐</span> <span class="muted" style="font-size:12px;">记帐人: '+esc(p.accounted_by||"")+' · '+( p.accounted_at ? new Date(p.accounted_at).toLocaleString() : "")+'</span> <span class="acc-btn" onclick="setPlanAccounted(\''+esc(p.plan_id)+'\',0)">撤销记帐</span>'
+          : '<span class="acc-tag acc-no">未记帐</span> <span class="acc-btn" onclick="setPlanAccounted(\''+esc(p.plan_id)+'\',1)">标记记帐</span>') +
+      '</div>' +
       '<div style="margin:12px 0;">' + statusBtns + editBtn + foBtn + '</div>' +
       '<div id="plan-cross-fo" class="cross-ref"><div class="cross-ref-title">关联现场记录</div><div class="muted">加载中...</div></div>' +
       '<div id="plan-cross-wo" class="cross-ref"><div class="cross-ref-title">同日同客户作业单 <span class="weak-label">（弱关联：同日期+同客户名）</span></div><div class="muted">加载中...</div></div>';
@@ -1145,7 +1160,12 @@ function initWoList(){
   _woListScope = "today";
   var titleEl = document.getElementById("wl-title");
 
-  if(scope === "tomorrow"){
+  if(scope === "next3"){
+    titleEl.textContent = "近3日出库作业单";
+    document.getElementById("wl-start").value = today;
+    document.getElementById("wl-end").value = kstDayOffset(2);
+    loadWoListByScope("next3");
+  } else if(scope === "tomorrow"){
     titleEl.textContent = "明日出库作业单";
     document.getElementById("wl-start").value = tmr;
     document.getElementById("wl-end").value = tmr;
@@ -1190,6 +1210,17 @@ function loadWoListByScope(scope){
       var overdue = all.filter(function(w){ return WO_INCOMPLETE_STATUS[w.status]; });
       renderWoList(el, [], overdue);
     });
+  } else if(scope === "next3"){
+    var endDay = kstDayOffset(2);
+    Promise.all([
+      fetchApi({ action:"b2b_wo_list", start_day:today, end_day:endDay }),
+      fetchApi({ action:"b2b_wo_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday })
+    ]).then(function(results){
+      var wos = (results[0] && results[0].ok) ? (results[0].workorders||[]) : [];
+      var all = (results[1] && results[1].ok) ? (results[1].workorders||[]) : [];
+      var overdue = all.filter(function(w){ return WO_INCOMPLETE_STATUS[w.status]; });
+      renderWoList(el, wos, overdue);
+    });
   } else {
     Promise.all([
       fetchApi({ action:"b2b_wo_list", start_day:today, end_day:today }),
@@ -1209,14 +1240,20 @@ function renderWoList(container, wos, overdueWos){
   if(overdueWos.length > 0){
     overdueWos.sort(function(a,b){
       if(a.plan_day !== b.plan_day) return a.plan_day < b.plan_day ? -1 : 1;
-      return (WO_STATUS_PRIORITY[a.status]||9) - (WO_STATUS_PRIORITY[b.status]||9);
+      var sp = (WO_STATUS_PRIORITY[a.status]||9) - (WO_STATUS_PRIORITY[b.status]||9);
+      if(sp !== 0) return sp;
+      return (a.is_accounted||0) - (b.is_accounted||0);
     });
     html += '<div class="list-section-title overdue-section-title">⚠ 逾期未完成（'+overdueWos.length+' 单）</div>';
     html += overdueWos.map(renderWoRow).join("");
   }
 
   if(wos.length > 0){
-    wos.sort(function(a,b){ return (WO_STATUS_PRIORITY[a.status]||9) - (WO_STATUS_PRIORITY[b.status]||9); });
+    wos.sort(function(a,b){
+      var sp = (WO_STATUS_PRIORITY[a.status]||9) - (WO_STATUS_PRIORITY[b.status]||9);
+      if(sp !== 0) return sp;
+      return (a.is_accounted||0) - (b.is_accounted||0);
+    });
     if(overdueWos.length > 0){
       html += '<div class="list-section-title" style="margin-top:12px;">📦 当日作业单（'+wos.length+' 单）</div>';
     }
@@ -1246,9 +1283,13 @@ function renderWoRow(w){
     noticeTag = ' <span class="ack-tag">已确认变更</span>' +
       ' <button onclick="event.stopPropagation();woNoticeAction(\''+esc(w.workorder_id)+'\',\'updated\',\'unack\')" class="unack-btn">取消确认</button>';
   }
+  var accTag = w.is_accounted ? '<span class="acc-tag acc-yes">已记帐</span>' : '<span class="acc-tag acc-no">未记帐</span>';
+  var accBtn = w.is_accounted
+    ? '<span class="acc-btn" onclick="event.stopPropagation();setWoAccounted(\''+esc(w.workorder_id)+'\',0)">撤销记帐</span>'
+    : '<span class="acc-btn" onclick="event.stopPropagation();setWoAccounted(\''+esc(w.workorder_id)+'\',1)">标记记帐</span>';
   return '<div class="wo-row'+dimClass+'" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
     '<div><span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
-    '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name) + noticeTag + '</div>' +
+    '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name) + noticeTag + accTag + accBtn + '</div>' +
     '<div class="meta">'+esc(w.plan_day)+' · '+esc(opLabel)+' · '+esc(obLabel) +
     ' · '+(isCartonNoLine(w,[]) && fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
       ? fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
@@ -1346,6 +1387,11 @@ function goWoDetail(id){
       (w.external_workorder_no ? '<div class="detail-field"><b>WMS工单号:</b> '+esc(w.external_workorder_no)+'</div>' : '') +
       (w.instruction_text ? '<div class="detail-field"><b>作业指示:</b> '+esc(w.instruction_text)+'</div>' : '') +
       '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(w.created_by)+' · 创建时间: '+new Date(w.created_at).toLocaleString()+'</div>' +
+      '<div class="detail-field">' +
+        (w.is_accounted
+          ? '<span class="acc-tag acc-yes">已记帐</span> <span class="muted" style="font-size:12px;">记帐人: '+esc(w.accounted_by||"")+' · '+(w.accounted_at ? new Date(w.accounted_at).toLocaleString() : "")+'</span> <span class="acc-btn" onclick="setWoAccounted(\''+esc(w.workorder_id)+'\',0)">撤销记帐</span>'
+          : '<span class="acc-tag acc-no">未记帐</span> <span class="acc-btn" onclick="setWoAccounted(\''+esc(w.workorder_id)+'\',1)">标记记帐</span>') +
+      '</div>' +
 
       '<div style="margin:12px 0;" class="no-print">' + statusBtns + editBtn +
         ' <button onclick="printWo(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">打印</button>' +
@@ -1426,6 +1472,49 @@ function woNoticeAction(id, kind, op){
       alert("操作失败: "+(res&&res.error||"unknown"));
     }
   });
+}
+
+// ===== 记帐标记 =====
+function setPlanAccounted(plan_id, val){
+  if(val){
+    var by = prompt("请输入记帐人姓名：");
+    if(by === null) return;
+    by = by.trim();
+    if(!by){ alert("记帐人不能为空"); return; }
+    fetchApi({ action:"b2b_plan_set_accounted", plan_id:plan_id, is_accounted:1, accounted_by:by }).then(function(res){
+      if(res && res.ok){ refreshAfterAccounted("plan", plan_id); } else { alert("操作失败: "+(res&&res.error||"")); }
+    });
+  } else {
+    if(!confirm("确认撤销记帐？")) return;
+    fetchApi({ action:"b2b_plan_set_accounted", plan_id:plan_id, is_accounted:0, accounted_by:"" }).then(function(res){
+      if(res && res.ok){ refreshAfterAccounted("plan", plan_id); } else { alert("操作失败: "+(res&&res.error||"")); }
+    });
+  }
+}
+function setWoAccounted(wo_id, val){
+  if(val){
+    var by = prompt("请输入记帐人姓名：");
+    if(by === null) return;
+    by = by.trim();
+    if(!by){ alert("记帐人不能为空"); return; }
+    fetchApi({ action:"b2b_wo_set_accounted", workorder_id:wo_id, is_accounted:1, accounted_by:by }).then(function(res){
+      if(res && res.ok){ refreshAfterAccounted("wo", wo_id); } else { alert("操作失败: "+(res&&res.error||"")); }
+    });
+  } else {
+    if(!confirm("确认撤销记帐？")) return;
+    fetchApi({ action:"b2b_wo_set_accounted", workorder_id:wo_id, is_accounted:0, accounted_by:"" }).then(function(res){
+      if(res && res.ok){ refreshAfterAccounted("wo", wo_id); } else { alert("操作失败: "+(res&&res.error||"")); }
+    });
+  }
+}
+function refreshAfterAccounted(type, id){
+  if(type === "plan"){
+    var detailCard = document.getElementById("plan-detail-card");
+    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goPlanDetail(id); } else { loadPlanList(); }
+  } else {
+    var detailCard = document.getElementById("wo-detail-card");
+    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goWoDetail(id); } else { loadWoList(); }
+  }
 }
 
 // ===== 附件区 =====
