@@ -179,6 +179,13 @@ function navPush(){
   if(_navStack.length > NAV_STACK_MAX) _navStack.shift();
 }
 
+// 编辑保存成功后，弹掉栈顶的 detail 快照，避免"返回回到同一详情页"
+function navDropTopIf(viewName){
+  if(_navStack.length > 0 && _navStack[_navStack.length - 1].view === viewName){
+    _navStack.pop();
+  }
+}
+
 function navRestoreState(entry){
   var v = entry.view;
   var st = entry.state || {};
@@ -1058,6 +1065,7 @@ function submitPlan(){
       if(res && res.ok){
         alert("修改成功！");
         _editingPlanId = null;
+        _navStack = [];
         goHome();
       } else {
         document.getElementById("pc-result").innerHTML = '<span class="bad">修改失败: '+esc(res&&res.error||"unknown")+'</span>';
@@ -1073,6 +1081,7 @@ function submitPlan(){
       if(res && res.ok){
         alert("创建成功！编号: " + res.plan_id);
         _editingPlanId = null;
+        _navStack = [];
         goHome();
       } else {
         document.getElementById("pc-result").innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
@@ -1292,6 +1301,7 @@ function submitWo(){
       if(res && res.ok){
         var id = _editingWoId;
         _editingWoId = null;
+        navDropTopIf("wo_detail");
         goWoDetail(id, true);
       } else {
         document.getElementById("wc-result").innerHTML = '<span class="bad">修改失败: '+esc(res&&res.error||"unknown")+'</span>';
@@ -2238,6 +2248,7 @@ function submitFo(){
     }).then(function(res){
       if(res && res.ok){
         alert("修改成功！");
+        navDropTopIf("fo_detail");
         goFoDetail(_editingFoId, true);
       } else {
         document.getElementById("fo-result").innerHTML = '<span class="bad">修改失败: '+esc(res&&res.error||"unknown")+'</span>';
