@@ -2062,7 +2062,7 @@ function loadB2bResults(){
   }).catch(function(){});
 }
 
-function openResultForm(orderNo){
+function openResultForm(orderNo, seedData){
   var kstDay = kstDayKey_(Date.now());
   var modal = document.getElementById("b2bResultModal");
   var body = document.getElementById("b2bResultBody");
@@ -2072,7 +2072,9 @@ function openResultForm(orderNo){
 
   jsonp(LOCK_URL, { action:"b2b_op_result_get", day_kst: kstDay, source_order_no: orderNo }, { skipBusy:true }).then(function(res){
     if(!res || !res.ok){ body.innerHTML = '<div style="color:red;">'+esc(res&&res.error||"加载失败")+'</div>'; return; }
-    var r = res.result || {};
+    var serverData = res.result || {};
+    // seedData 优先（从确认层取消返回时恢复本地未保存输入）
+    var r = seedData ? _mergeResultSeed(serverData, seedData) : serverData;
     var cust = res.customer_name || r.customer_name || "";
     var pt = res.participation || {};
     var om = r.operation_mode || "pack_outbound";
@@ -2148,6 +2150,22 @@ function openResultForm(orderNo){
 
     body.innerHTML = html;
   }).catch(function(e){ body.innerHTML = '<div style="color:red;">网络错误</div>'; });
+}
+
+// --- seedData 合并：用 payload 字段覆盖服务端数据，保留服务端的 status/confirm 等元数据 ---
+function _mergeResultSeed(server, seed){
+  var r = {};
+  for(var k in server) r[k] = server[k];
+  // 用 seed payload 覆盖所有表单字段
+  var fields = ["operation_mode","sku_kind_count","packed_qty","box_count","packed_box_count",
+    "used_carton","big_carton_count","small_carton_count","pallet_count","label_count","photo_count",
+    "has_pallet_detail","did_pack","did_rebox","rebox_count",
+    "needs_forklift_pick","forklift_pallet_count","rack_pick_location_count","remark"];
+  for(var i=0;i<fields.length;i++){
+    var f = fields[i];
+    if(seed[f] !== undefined) r[f] = seed[f];
+  }
+  return r;
 }
 
 // --- 表单构建 helpers ---
@@ -2308,13 +2326,12 @@ async function _openBadgeScanner(){
 }
 
 function _cancelBadgeConfirm(){
-  // 保留 payload 以便重新打开表单时不丢数据
-  var orderNo = window._rfPendingPayload ? window._rfPendingPayload.source_order_no : "";
+  var pending = window._rfPendingPayload;
+  var orderNo = pending ? pending.source_order_no : "";
   window._rfPendingPayload = null;
   window._rfConfirmBadgeRaw = "";
-  // 重新打开原结果单表单（从服务端重新加载，保留已有数据）
   if(orderNo){
-    openResultForm(orderNo);
+    openResultForm(orderNo, pending);
   } else {
     closeResultForm();
   }
