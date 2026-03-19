@@ -5813,6 +5813,7 @@ function _scUpdatePalletDisplay(){
 function scStartScan(){
   var batchId = document.getElementById("scBatchSelect").value;
   if(!batchId){ alert("请先选择批次"); return; }
+  if(!getOperatorId()){ alert("请先在主系统设置操作员工牌后，再进入扫码核对\n\n（不需要B2B子系统登录，但需要主系统操作员工牌）"); return; }
   _scSaveBatch(batchId);
   // 恢复托盘号
   try{ _scCurrentPallet = localStorage.getItem("b2b_sc_pallet_v1") || ""; }catch(e){ _scCurrentPallet = ""; }
@@ -5964,7 +5965,8 @@ function scUndoLast(){
   _scBusy = true;
   jsonp(LOCK_URL, {
     action:"b2b_scan_undo",
-    batch_id: _scCurrentBatch.batch_id
+    batch_id: _scCurrentBatch.batch_id,
+    operator_id: getOperatorId() || ""
   }, { skipBusy:true }).then(function(res){
     _scBusy = false;
     if(!res || !res.ok){

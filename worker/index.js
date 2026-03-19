@@ -3485,6 +3485,7 @@ export default {
 
       if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
       if (!outbound_barcode) return jsonpOrJson({ ok:false, error:"missing outbound_barcode" }, callback);
+      if (!scanned_by) return jsonpOrJson({ ok:false, error:"missing scanned_by" }, callback);
 
       const batch = await env.DB.prepare(`SELECT status, total_expected_boxes FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
       if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
@@ -3536,6 +3537,8 @@ export default {
     if (action === "b2b_scan_undo") {
       const batch_id = String(p.batch_id || "").trim();
       if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
+      const operator_id = String(p.operator_id || "").trim();
+      if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
 
       const batch = await env.DB.prepare(`SELECT status, total_expected_boxes FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
       if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
