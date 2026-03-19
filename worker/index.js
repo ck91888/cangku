@@ -3375,24 +3375,26 @@ export default {
     }
 
     if (action === "b2b_scan_batch_list") {
-      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const hasKey = isAdmin_(p, env) || isView_(p, env);
       const start_day = String(p.start_day || "").trim();
       const end_day = String(p.end_day || "").trim();
       if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
 
-      const rs = await env.DB.prepare(
-        `SELECT * FROM b2b_scan_batches WHERE check_day >= ? AND check_day <= ? ORDER BY check_day DESC, created_at DESC`
-      ).bind(start_day, end_day).all();
+      const sql = hasKey
+        ? `SELECT * FROM b2b_scan_batches WHERE check_day >= ? AND check_day <= ? ORDER BY check_day DESC, created_at DESC`
+        : `SELECT * FROM b2b_scan_batches WHERE check_day >= ? AND check_day <= ? AND status='open' ORDER BY check_day DESC, created_at DESC`;
+      const rs = await env.DB.prepare(sql).bind(start_day, end_day).all();
       return jsonpOrJson({ ok:true, batches: rs.results || [] }, callback);
     }
 
     if (action === "b2b_scan_batch_detail") {
-      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const hasKey = isAdmin_(p, env) || isView_(p, env);
       const batch_id = String(p.batch_id || "").trim();
       if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
 
       const batch = await env.DB.prepare(`SELECT * FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
       if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
+      if (!hasKey && batch.status !== "open") return jsonpOrJson({ ok:false, error:"batch is not open" }, callback);
 
       const itemsRs = await env.DB.prepare(
         `SELECT * FROM b2b_scan_items WHERE batch_id=? ORDER BY item_id ASC`
@@ -3476,7 +3478,6 @@ export default {
     }
 
     if (action === "b2b_scan_do") {
-      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const batch_id = String(p.batch_id || "").trim();
       const outbound_barcode = String(p.outbound_barcode || "").trim();
       const scanned_by = String(p.scanned_by || "").trim();
@@ -3533,7 +3534,6 @@ export default {
     }
 
     if (action === "b2b_scan_undo") {
-      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const batch_id = String(p.batch_id || "").trim();
       if (!batch_id) return jsonpOrJson({ ok:false, error:"missing batch_id" }, callback);
 

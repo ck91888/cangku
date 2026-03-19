@@ -5767,7 +5767,7 @@ function initScanCheckPage(){
   var sel = document.getElementById("scBatchSelect");
   sel.innerHTML = '<option value="">加载中...</option>';
   var today = kstToday_();
-  jsonp(LOCK_URL, { action:"b2b_scan_batch_list", start_day:"2020-01-01", end_day:"2099-12-31", k:getFoKey_() }, { skipBusy:true }).then(function(res){
+  jsonp(LOCK_URL, { action:"b2b_scan_batch_list", start_day:"2020-01-01", end_day:"2099-12-31" }, { skipBusy:true }).then(function(res){
     if(!res || !res.ok){ sel.innerHTML = '<option value="">加载失败</option>'; return; }
     var open = (res.batches || []).filter(function(b){ return b.status === "open"; });
     if(!open.length){ sel.innerHTML = '<option value="">暂无进行中的批次</option>'; return; }
@@ -5819,7 +5819,7 @@ function scStartScan(){
   document.getElementById("scPalletInput").value = _scCurrentPallet;
   _scUpdatePalletDisplay();
   // 拉取详情以获取进度和汇总
-  jsonp(LOCK_URL, { action:"b2b_scan_batch_detail", batch_id:batchId, k:getFoKey_() }, { skipBusy:true }).then(function(res){
+  jsonp(LOCK_URL, { action:"b2b_scan_batch_detail", batch_id:batchId }, { skipBusy:true }).then(function(res){
     if(!res || !res.ok){ alert("加载批次失败: "+(res&&res.error||"")); return; }
     if(res.batch.status !== "open"){
       alert("此批次已关闭，无法扫码");
@@ -5890,8 +5890,7 @@ function scDoScan(){
     batch_id: _scCurrentBatch.batch_id,
     outbound_barcode: bc,
     scanned_by: opId,
-    pallet_no: _scCurrentPallet,
-    k: getFoKey_()
+    pallet_no: _scCurrentPallet
   }, { skipBusy:true }).then(function(res){
     _scBusy = false;
     if(!res || !res.ok){
@@ -5947,7 +5946,7 @@ function _scShowResult(text, color, bgColor, barcode, type){
 
 function _scRefreshSummary(){
   if(!_scCurrentBatch) return;
-  jsonp(LOCK_URL, { action:"b2b_scan_batch_detail", batch_id:_scCurrentBatch.batch_id, k:getFoKey_() }, { skipBusy:true }).then(function(res){
+  jsonp(LOCK_URL, { action:"b2b_scan_batch_detail", batch_id:_scCurrentBatch.batch_id }, { skipBusy:true }).then(function(res){
     if(!res || !res.ok) return;
     if(res.batch.status !== "open"){
       _scShowResult("❌ 批次已被关闭", "#d32f2f", "#ffebee", "", "");
@@ -5965,8 +5964,7 @@ function scUndoLast(){
   _scBusy = true;
   jsonp(LOCK_URL, {
     action:"b2b_scan_undo",
-    batch_id: _scCurrentBatch.batch_id,
-    k: getFoKey_()
+    batch_id: _scCurrentBatch.batch_id
   }, { skipBusy:true }).then(function(res){
     _scBusy = false;
     if(!res || !res.ok){
