@@ -536,20 +536,23 @@ function loadDocList(){
     _docListData = res.docs || [];
     _docTotal = res.total || 0;
     _docListFiltered = _docListData;
-    filterDocListLocal();
+    renderDocList(_docListFiltered);
     renderDocPager();
   });
 }
 
+var _docKwTimer = null;
 function docKeywordKeyup(ev){
   if(ev && ev.key === "Enter"){
-    // 回车 → 重置页码，走后端搜索
+    if(_docKwTimer) clearTimeout(_docKwTimer);
     _docPage = 1;
     loadDocList();
     return;
   }
-  // 非回车 → 在当前页数据上本地过滤 customer_name（enrichment后字段，后端SQL无法过滤）
+  // 非回车：本地即时过滤当前页数据（视觉响应），同时 debounce 500ms 后触发后端搜索
   filterDocListLocal();
+  if(_docKwTimer) clearTimeout(_docKwTimer);
+  _docKwTimer = setTimeout(function(){ _docPage = 1; loadDocList(); }, 500);
 }
 
 function filterDocListLocal(){
@@ -557,11 +560,11 @@ function filterDocListLocal(){
   if(!kw){
     _docListFiltered = _docListData;
   } else {
-    // 本地只额外过滤 customer_name（后端已用 LIKE 过滤了 wave_id/session）
     _docListFiltered = _docListData.filter(function(d){
-      return (d.customer_name||"").toLowerCase().indexOf(kw)>=0 ||
-             (d.wave_id||"").toLowerCase().indexOf(kw)>=0 ||
-             (d.session||"").toLowerCase().indexOf(kw)>=0;
+      return (d.wave_id||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.session||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.customer_name||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.work_day_kst||"").indexOf(kw)>=0;
     });
   }
   renderDocList(_docListFiltered);

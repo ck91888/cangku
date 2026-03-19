@@ -3660,15 +3660,31 @@ export default {
         whereParts.push("biz=?", "task=?");
         binds.push(WAVE_KIND_MAP[filterWaveKind].biz, WAVE_KIND_MAP[filterWaveKind].task);
       }
-      // keyword 下推到 SQL HAVING（wave_id / session 在 GROUP BY 列中可直接过滤）
-      // work_day_kst 是计算列，用 HAVING 过滤
+      const dayExpr = "substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10)";
+
+      // keyword 全局搜索：wave_id / session / work_day_kst / customer_name
+      // customer_name 来自 enrichment 表，需要 pre-query 拿到匹配的 wave_id
       if (filterKw) {
-        whereParts.push("(wave_id LIKE ? OR session LIKE ?)");
         const kwLike = "%" + filterKw + "%";
-        binds.push(kwLike, kwLike);
+        // 步骤0: pre-query customer_name → 匹配的 wave_id 集合
+        const custRs = await env.DB.prepare(
+          `SELECT source_order_no as wid FROM b2b_operation_results WHERE customer_name LIKE ?
+           UNION
+           SELECT record_id as wid FROM b2b_field_ops WHERE customer_name LIKE ?`
+        ).bind(kwLike, kwLike).all();
+        const custWaveIds = (custRs.results || []).map(r => r.wid).slice(0, 80);
+
+        // 构建 OR 条件：wave_id / session / work_day_kst / customer匹配的wave_id
+        const kwOrParts = ["wave_id LIKE ?", "session LIKE ?", `${dayExpr} LIKE ?`];
+        binds.push(kwLike, kwLike, kwLike);
+        if (custWaveIds.length > 0) {
+          const ph = custWaveIds.map(() => "?").join(",");
+          kwOrParts.push(`wave_id IN (${ph})`);
+          binds.push(...custWaveIds);
+        }
+        whereParts.push(`(${kwOrParts.join(" OR ")})`);
       }
       const whereClause = whereParts.join(" AND ");
-      const dayExpr = "substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10)";
 
       let rows, total;
       if (summaryMode) {
