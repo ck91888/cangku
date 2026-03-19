@@ -3231,9 +3231,10 @@ export default {
       const confirm_badge = String(p.confirm_badge || "").trim();
       const confirmed_by = String(p.confirmed_by || "").trim();
 
-      // completed 必须有工牌确认
-      if (new_status === "completed" && !confirm_badge) {
-        return jsonpOrJson({ ok:false, error:"missing completion confirmation (confirm_badge required)" }, callback);
+      // completed 必须有职员工牌确认
+      if (new_status === "completed") {
+        if (!confirm_badge) return jsonpOrJson({ ok:false, error:"missing confirm_badge" }, callback);
+        if (!/^EMP-.+$/.test(confirm_badge)) return jsonpOrJson({ ok:false, error:"invalid confirm_badge, employee badge (EMP-...) required" }, callback);
       }
 
       // 客户名

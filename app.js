@@ -2286,39 +2286,58 @@ function _showBadgeConfirmLayer(){
   var tmpPayload = _collectResultPayload("completed");
   if(!tmpPayload) return;
   window._rfPendingPayload = tmpPayload;
+  window._rfConfirmBadgeRaw = "";
 
   body.innerHTML = '<div style="text-align:center;padding:20px 0;">' +
-    '<div style="font-size:18px;font-weight:800;margin-bottom:12px;">🔒 扫工牌确认完成</div>' +
-    '<div style="font-size:13px;color:#555;margin-bottom:16px;">工单: <b>'+esc(orderNo)+'</b><br>请扫描或输入工牌号以确认完成提交</div>' +
-    '<input id="rf-confirm-badge" type="text" placeholder="扫描/输入工牌号" autofocus ' +
-      'style="width:90%;font-size:18px;padding:12px;text-align:center;border:2px solid #2e7d32;border-radius:8px;margin-bottom:12px;" />' +
+    '<div style="font-size:18px;font-weight:800;margin-bottom:12px;">🔒 扫职员工牌确认完成</div>' +
+    '<div style="font-size:13px;color:#555;margin-bottom:12px;">工单: <b>'+esc(orderNo)+'</b></div>' +
+    '<div style="font-size:13px;color:#c00;margin-bottom:16px;">必须扫描职员工牌（EMP-...），不支持手动输入</div>' +
+    '<input id="rf-confirm-badge" type="text" readonly placeholder="等待扫描职员工牌..." ' +
+      'style="width:90%;font-size:18px;padding:12px;text-align:center;border:2px solid #2e7d32;border-radius:8px;margin-bottom:12px;background:#f5f5f5;" />' +
+    '<button onclick="_openBadgeScanner()" style="width:90%;padding:12px;font-size:15px;background:#1565c0;color:#fff;border:none;border-radius:8px;margin-bottom:12px;cursor:pointer;">📷 开始扫描职员工牌</button>' +
     '<div style="display:flex;gap:8px;justify-content:center;">' +
       '<button onclick="_cancelBadgeConfirm()" style="flex:1;padding:10px;font-size:14px;">取消</button>' +
       '<button onclick="_doBadgeConfirmSubmit()" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">确认完成</button>' +
     '</div>' +
   '</div>';
+}
 
-  setTimeout(function(){ var inp = document.getElementById("rf-confirm-badge"); if(inp) inp.focus(); }, 100);
+async function _openBadgeScanner(){
+  scanMode = "b2b_result_confirm_badge";
+  await openScannerCommon();
 }
 
 function _cancelBadgeConfirm(){
+  // 保留 payload 以便重新打开表单时不丢数据
+  var orderNo = window._rfPendingPayload ? window._rfPendingPayload.source_order_no : "";
   window._rfPendingPayload = null;
-  // 重新打开原表单
-  var orderNo = "";
-  try{ orderNo = window._rfPendingPayload && window._rfPendingPayload.source_order_no; }catch(e){}
-  closeResultForm();
+  window._rfConfirmBadgeRaw = "";
+  // 重新打开原结果单表单（从服务端重新加载，保留已有数据）
+  if(orderNo){
+    openResultForm(orderNo);
+  } else {
+    closeResultForm();
+  }
   setStatus("已取消完成提交", true);
 }
 
 function _doBadgeConfirmSubmit(){
-  var badge = (document.getElementById("rf-confirm-badge") || {}).value || "";
-  badge = badge.trim();
-  if(!badge){ alert("请扫描或输入工牌号"); return; }
+  var badgeRaw = window._rfConfirmBadgeRaw || "";
+  if(!badgeRaw){
+    alert("请先点击「开始扫描职员工牌」扫描 EMP 工牌\n\n不支持手动输入");
+    return;
+  }
+  var p = parseBadge(badgeRaw);
+  if(!isEmpId(p.id)){
+    alert("工牌格式无效，必须是职员工牌（EMP-...）");
+    return;
+  }
   var payload = window._rfPendingPayload;
   if(!payload){ alert("表单数据丢失，请重新操作"); closeResultForm(); return; }
-  payload.confirm_badge = badge;
-  payload.confirmed_by = badge;
+  payload.confirm_badge = p.id;
+  payload.confirmed_by = p.name || p.id;
   window._rfPendingPayload = null;
+  window._rfConfirmBadgeRaw = "";
   _doSubmitResult(payload);
 }
 
@@ -3587,7 +3606,7 @@ async function openScannerCommon(){
     lastScanAt = now;
 
     // ✅ 乱码检测：对非 QR 码场景（工单/单号扫码）自动拦截可疑结果
-    if(scanMode !== "operator_setup" && scanMode !== "session_join" && scanMode !== "labor" && scanMode !== "badgeBind" && scanMode !== "leaderLoginPick"){
+    if(scanMode !== "operator_setup" && scanMode !== "session_join" && scanMode !== "labor" && scanMode !== "badgeBind" && scanMode !== "leaderLoginPick" && scanMode !== "b2b_result_confirm_badge"){
       if(looksGarbled_(code)){
         setStatus("⚠️ 扫码结果异常（疑似乱码）：" + code + " — 请重新扫码或手动输入", false);
         return;
@@ -3601,6 +3620,21 @@ async function openScannerCommon(){
         await closeScanner();
         setStatus("操作员已设置 ✅ " + parseBadge(code).id, true);
       }
+      return;
+    }
+
+    if(scanMode === "b2b_result_confirm_badge"){
+      var bp = parseBadge(code);
+      if(!isEmpId(bp.id)){
+        setStatus("⚠️ 请扫描职员工牌（EMP-...），当前扫到: " + code, false);
+        try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
+        return;
+      }
+      window._rfConfirmBadgeRaw = code;
+      var inp = document.getElementById("rf-confirm-badge");
+      if(inp) inp.value = (bp.name ? bp.name + " (" + bp.id + ")" : bp.id);
+      await closeScanner();
+      setStatus("职员工牌已扫描 ✅ " + bp.id, true);
       return;
     }
 
