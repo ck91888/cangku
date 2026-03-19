@@ -2064,7 +2064,13 @@ function openResultForm(orderNo){
       '工单共用结果单 · 参与 session: '+pt.session_count+' · 参与人: '+pt.badge_count +
       (pt.badges && pt.badges.length > 0 ? '<br>'+pt.badges.map(function(b){ var p=b.split("|"); return esc(p[1]||p[0]); }).join(", ") : '') +
     '</div>';
-    if(r.status === "completed") html += '<div style="color:#2e7d32;font-weight:700;margin-bottom:8px;">✅ 已完成提交</div>';
+    if(r.status === "completed"){
+      html += '<div style="color:#2e7d32;font-weight:700;margin-bottom:8px;">✅ 已完成提交';
+      if(r.confirm_badge) html += ' · 工牌: '+esc(r.confirm_badge);
+      else if(r.confirmed_by) html += ' · 确认人: '+esc(r.confirmed_by);
+      html += '</div>';
+      html += '<div style="margin-bottom:10px;"><button onclick="revertResultToDraft(\''+esc(orderNo)+'\')" style="font-size:12px;padding:4px 12px;background:#ff9800;color:#fff;border:none;border-radius:4px;cursor:pointer;">↩ 退回草稿</button></div>';
+    }
 
     html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">作业类型</label>' +
       '<select id="rf-mode" style="width:100%;margin-top:2px;" onchange="rfToggleMode()">' +
@@ -2111,16 +2117,23 @@ function rfToggleMode(){
 function rfToggleFork(){
   var cb = document.getElementById("rf-fork");
   var fields = document.getElementById("rf-fork-fields");
-  if(cb && fields) fields.style.display = cb.checked ? "" : "none";
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked){
+      var fp = document.getElementById("rf-fork-pallet");
+      var fl = document.getElementById("rf-fork-loc");
+      if(fp) fp.value = "0";
+      if(fl) fl.value = "0";
+    }
+  }
 }
 
-function submitResult(st){
+function _collectResultPayload(st, extraFields){
   var orderNo = (document.getElementById("rf-order-no") || {}).value || "";
-  if(!orderNo) return;
-  var kstDay = kstDayKey_(Date.now());
+  if(!orderNo) return null;
   var payload = {
     action: "b2b_op_result_upsert",
-    day_kst: kstDay,
+    day_kst: kstDayKey_(Date.now()),
     source_order_no: orderNo,
     session_id: currentSessionId || "",
     operation_mode: (document.getElementById("rf-mode") || {}).value || "pack_outbound",
@@ -2133,14 +2146,127 @@ function submitResult(st){
     remark: (document.getElementById("rf-remark") || {}).value || "",
     status: st,
     created_by: getOperatorId() || "",
-    confirmed_by: st === "completed" ? (getOperatorId() || "") : ""
+    confirmed_by: "",
+    confirm_badge: ""
   };
+  if(extraFields) for(var k in extraFields) payload[k] = extraFields[k];
+  return payload;
+}
 
+function _doSubmitResult(payload){
+  var st = payload.status;
   jsonp(LOCK_URL, payload, { skipBusy:true }).then(function(res){
     if(!res || !res.ok){ alert("保存失败: " + (res&&res.error||"unknown")); return; }
     closeResultForm();
     loadB2bResults();
     setStatus(st === "completed" ? "结果已提交 ✅" : "草稿已保存 ✅", true);
+  }).catch(function(){ alert("网络错误，请重试"); });
+}
+
+function submitResult(st){
+  if(st === "completed"){
+    // 第一步：强确认
+    if(!confirm("⚠️ 确认完成提交？\n\n完成后该结果将进入正式统计，请确认数据无误。")) return;
+    // 第二步：弹出扫工牌确认层
+    _showBadgeConfirmLayer();
+    return;
+  }
+  // 草稿直接保存
+  var payload = _collectResultPayload("draft");
+  if(!payload) return;
+  _doSubmitResult(payload);
+}
+
+function _showBadgeConfirmLayer(){
+  var body = document.getElementById("b2bResultBody");
+  if(!body) return;
+  var orderNo = (document.getElementById("rf-order-no") || {}).value || "";
+  // 保存当前表单数据到临时变量，因为 body 即将被替换
+  var tmpPayload = _collectResultPayload("completed");
+  if(!tmpPayload) return;
+  window._rfPendingPayload = tmpPayload;
+
+  body.innerHTML = '<div style="text-align:center;padding:20px 0;">' +
+    '<div style="font-size:18px;font-weight:800;margin-bottom:12px;">🔒 扫工牌确认完成</div>' +
+    '<div style="font-size:13px;color:#555;margin-bottom:16px;">工单: <b>'+esc(orderNo)+'</b><br>请扫描或输入工牌号以确认完成提交</div>' +
+    '<input id="rf-confirm-badge" type="text" placeholder="扫描/输入工牌号" autofocus ' +
+      'style="width:90%;font-size:18px;padding:12px;text-align:center;border:2px solid #2e7d32;border-radius:8px;margin-bottom:12px;" />' +
+    '<div style="display:flex;gap:8px;justify-content:center;">' +
+      '<button onclick="_cancelBadgeConfirm()" style="flex:1;padding:10px;font-size:14px;">取消</button>' +
+      '<button onclick="_doBadgeConfirmSubmit()" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">确认完成</button>' +
+    '</div>' +
+  '</div>';
+
+  setTimeout(function(){ var inp = document.getElementById("rf-confirm-badge"); if(inp) inp.focus(); }, 100);
+}
+
+function _cancelBadgeConfirm(){
+  window._rfPendingPayload = null;
+  // 重新打开原表单
+  var orderNo = "";
+  try{ orderNo = window._rfPendingPayload && window._rfPendingPayload.source_order_no; }catch(e){}
+  closeResultForm();
+  setStatus("已取消完成提交", true);
+}
+
+function _doBadgeConfirmSubmit(){
+  var badge = (document.getElementById("rf-confirm-badge") || {}).value || "";
+  badge = badge.trim();
+  if(!badge){ alert("请扫描或输入工牌号"); return; }
+  var payload = window._rfPendingPayload;
+  if(!payload){ alert("表单数据丢失，请重新操作"); closeResultForm(); return; }
+  payload.confirm_badge = badge;
+  payload.confirmed_by = badge;
+  window._rfPendingPayload = null;
+  _doSubmitResult(payload);
+}
+
+function revertResultToDraft(orderNo){
+  if(!confirm("确认退回草稿？\n将清除完成确认记录，状态改回草稿。")) return;
+  var kstDay = kstDayKey_(Date.now());
+  jsonp(LOCK_URL, { action:"b2b_op_result_get", day_kst: kstDay, source_order_no: orderNo }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ alert("加载失败"); return; }
+    var r = res.result || {};
+    var payload = {
+      action: "b2b_op_result_upsert",
+      day_kst: kstDay,
+      source_order_no: orderNo,
+      session_id: currentSessionId || "",
+      operation_mode: r.operation_mode || "pack_outbound",
+      sku_kind_count: r.sku_kind_count || 0,
+      box_count: r.box_count || 0,
+      pallet_count: r.pallet_count || 0,
+      needs_forklift_pick: r.needs_forklift_pick || 0,
+      forklift_pallet_count: r.forklift_pallet_count || 0,
+      rack_pick_location_count: r.rack_pick_location_count || 0,
+      remark: r.remark || "",
+      status: "draft",
+      created_by: r.created_by || "",
+      confirmed_by: "",
+      confirm_badge: ""
+    };
+    _doSubmitResult(payload);
+  }).catch(function(){ alert("网络错误"); });
+}
+
+function unbindB2bWorkorder(orderNo){
+  if(!confirm("确认解绑工单 "+orderNo+"？\n\n仅删除当前作业中的绑定关系，不删除原工单。")) return;
+  var b = b2bWorkorderBindings[orderNo];
+  var srcType = (b && b.source_type) || "internal_b2b_workorder";
+  jsonp(LOCK_URL, {
+    action: "b2b_op_unbind",
+    session_id: currentSessionId || "",
+    source_type: srcType,
+    source_order_no: orderNo
+  }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ alert("解绑失败: "+(res&&res.error||"unknown")); return; }
+    scannedB2bWorkorders.delete(orderNo);
+    delete b2bWorkorderBindings[orderNo];
+    persistState();
+    renderB2bWorkorderUI();
+    var msg = "已解绑 "+orderNo;
+    if(res.remaining_bindings === 0) msg += "（该工单已无任何绑定）";
+    setStatus(msg+" ✅", true);
   }).catch(function(){ alert("网络错误，请重试"); });
 }
 
@@ -2943,9 +3069,10 @@ function renderB2bWorkorderUI(){
           resultLine = '<div style="font-size:11px;margin-top:2px;">' + statusTag + esc(fmtResultSummary(r)) + '</div>';
         }
         var btn = b ? ' <button onclick="openResultForm(\''+esc(x)+'\')" style="font-size:10px;padding:1px 5px;cursor:pointer;vertical-align:middle;">'+(r?'编辑':'录入')+'</button>' : '';
+        var unbindBtn = ' <button onclick="unbindB2bWorkorder(\''+esc(x)+'\')" style="font-size:10px;padding:1px 5px;cursor:pointer;vertical-align:middle;color:#c00;" title="解绑">✕</button>';
 
         return '<div style="display:inline-block;margin:2px 4px 2px 0;padding:4px 8px;border-radius:6px;'+srcStyle+'font-size:13px;vertical-align:top;">' +
-          label + btn + resultLine + '</div>';
+          label + btn + unbindBtn + resultLine + '</div>';
       }).join("");
     }
   }

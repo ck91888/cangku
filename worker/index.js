@@ -653,6 +653,13 @@ export default {
           await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN cancel_ack_by TEXT NOT NULL DEFAULT ''`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v14_wo_cancel_notice', ?)`).bind(Date.now()).run();
         }
+
+        // v15: b2b_operation_results 增加 confirm_badge 字段
+        const m15 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v15_result_confirm_badge'`).first();
+        if (!m15) {
+          await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN confirm_badge TEXT NOT NULL DEFAULT ''`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v15_result_confirm_badge', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -3014,6 +3021,28 @@ export default {
       return jsonpOrJson({ ok:true, bindings }, callback);
     }
 
+    // ===== 解绑工单 =====
+
+    if (action === "b2b_op_unbind") {
+      const session_id = String(p.session_id || "").trim();
+      const source_type = String(p.source_type || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      if (!session_id) return jsonpOrJson({ ok:false, error:"missing session_id" }, callback);
+      if (!source_type) return jsonpOrJson({ ok:false, error:"missing source_type" }, callback);
+      if (!source_order_no) return jsonpOrJson({ ok:false, error:"missing source_order_no" }, callback);
+
+      const del = await env.DB.prepare(
+        `DELETE FROM b2b_operation_bindings WHERE session_id=? AND source_type=? AND source_order_no=?`
+      ).bind(session_id, source_type, source_order_no).run();
+
+      // 查询该工单剩余绑定数
+      const remain = await env.DB.prepare(
+        `SELECT COUNT(*) as cnt FROM b2b_operation_bindings WHERE source_type=? AND source_order_no=? AND day_kst=?`
+      ).bind(source_type, source_order_no, new Date(now + 9*60*60*1000).toISOString().slice(0,10)).first();
+
+      return jsonpOrJson({ ok:true, deleted: del.meta && del.meta.changes || 0, remaining_bindings: (remain && remain.cnt) || 0 }, callback);
+    }
+
     // ===== 现场结果单 =====
 
     if (action === "b2b_op_result_get") {
@@ -3083,7 +3112,13 @@ export default {
       const new_status = String(p.status || "draft").trim();
       if (new_status !== "draft" && new_status !== "completed")
         return jsonpOrJson({ ok:false, error:"invalid status" }, callback);
+      const confirm_badge = String(p.confirm_badge || "").trim();
       const confirmed_by = String(p.confirmed_by || "").trim();
+
+      // completed 必须有工牌确认
+      if (new_status === "completed" && !confirm_badge) {
+        return jsonpOrJson({ ok:false, error:"missing completion confirmation (confirm_badge required)" }, callback);
+      }
 
       // 客户名
       let customer_name = String(p.customer_name || "").trim();
@@ -3096,17 +3131,21 @@ export default {
         `SELECT id, status FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
       ).bind(day_kst, bind.source_type, source_order_no).first();
 
+      // draft 退回时清空确认痕迹
+      const final_confirm_badge = new_status === "draft" ? "" : confirm_badge;
+      const final_confirmed_by = new_status === "draft" ? "" : confirmed_by;
+
       if (existing) {
         // 更新
         const completed_at = new_status === "completed" ? now : null;
         await env.DB.prepare(
           `UPDATE b2b_operation_results SET operation_mode=?, sku_kind_count=?, box_count=?, pallet_count=?,
            needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?,
-           remark=?, status=?, confirmed_by=?, customer_name=?, updated_at=?, completed_at=?
+           remark=?, status=?, confirmed_by=?, confirm_badge=?, customer_name=?, updated_at=?, completed_at=?
            WHERE id=?`
         ).bind(operation_mode, sku_kind_count, box_count, pallet_count,
           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
-          remark, new_status, confirmed_by, customer_name, now, completed_at, existing.id).run();
+          remark, new_status, final_confirmed_by, final_confirm_badge, customer_name, now, completed_at, existing.id).run();
         return jsonpOrJson({ ok:true, id: existing.id, created: false }, callback);
       } else {
         // 新建
@@ -3115,13 +3154,13 @@ export default {
           `INSERT INTO b2b_operation_results(day_kst, source_type, source_order_no, internal_workorder_id,
            customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
            needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
-           remark, photo_urls_json, status, created_by, confirmed_by, first_session_id,
+           remark, photo_urls_json, status, created_by, confirmed_by, confirm_badge, first_session_id,
            created_at, updated_at, completed_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?)`
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?,?)`
         ).bind(day_kst, bind.source_type, source_order_no, bind.internal_workorder_id || null,
           customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
-          remark, new_status, String(p.created_by || "").trim(), confirmed_by, session_id,
+          remark, new_status, String(p.created_by || "").trim(), final_confirmed_by, final_confirm_badge, session_id,
           now, now, completed_at).run();
         return jsonpOrJson({ ok:true, id: ins.meta && ins.meta.last_row_id, created: true }, callback);
       }
