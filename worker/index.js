@@ -278,6 +278,25 @@ function toBool01(v) {
   return (v === 1 || v === true || v === "1" || v === "true") ? 1 : 0;
 }
 
+// ===== B2B工单操作: 未完成结果单检查 =====
+async function getPendingB2bOpResultsForSession_(db, sessionId) {
+  const bindings = await db.prepare(
+    `SELECT DISTINCT day_kst, source_type, source_order_no FROM b2b_operation_bindings WHERE session_id=?`
+  ).bind(sessionId).all();
+  const rows = bindings.results || [];
+  const pending = [];
+  for (const b of rows) {
+    const result = await db.prepare(
+      `SELECT status FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+    ).bind(b.day_kst, b.source_type, b.source_order_no).first();
+    const st = result ? result.status : "missing";
+    if (st !== "completed") {
+      pending.push({ day_kst: b.day_kst, source_type: b.source_type, source_order_no: b.source_order_no, result_status: st });
+    }
+  }
+  return pending;
+}
+
 // ===== Admin-only: events_tail =====
 function isAdmin_(p, env){
   const key = String(p.k || "").trim();             // 前端传 k=口令
@@ -811,6 +830,14 @@ export default {
       const active = lockInfo.active || [];
       if (active.length > 0) {
         return jsonpOrJson({ ok:true, blocked:true, reason:"still_active", session, active }, callback);
+      }
+
+      // B2B工单操作: 未完成结果单拦截
+      if (s && s.biz === "B2B" && s.task === "B2B工单操作") {
+        const pending = await getPendingB2bOpResultsForSession_(env.DB, session);
+        if (pending.length > 0) {
+          return jsonpOrJson({ ok:true, blocked:true, reason:"pending_b2b_results", session, pending_orders: pending }, callback);
+        }
       }
 
       const closed_ms = Date.now();

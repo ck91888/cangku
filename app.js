@@ -1153,6 +1153,16 @@ async function endSessionGlobal_(){
     if(_retry < 2) await new Promise(function(res){ setTimeout(res, 800); });
   }
   if(r.blocked){
+    if(r.reason === "pending_b2b_results"){
+      var orders = (r.pending_orders || []).map(function(o){
+        var st = o.result_status === "missing" ? "未录入" : (o.result_status === "draft" ? "草稿未提交" : o.result_status);
+        return o.source_order_no + " 〔" + st + "〕";
+      }).join("\n");
+      var msg = "当前还有未完成提交的工单结果单，不能结束本趟作业。\n\n请先完成以下工单的结果单：\n" + orders;
+      setStatus("有未完成结果单，禁止结束", false);
+      alert(msg);
+      return;
+    }
     var msg = "还有人员未退出，不能结束。\n\n" + formatActiveListForAlert_(r.active);
     setStatus("还有人员未退出，禁止结束", false);
     alert(msg);
