@@ -2019,9 +2019,30 @@ var B2B_OP_MODE_LABELS = { pack_outbound:"打包出库", move_and_palletize:"纯
 function fmtResultSummary(r){
   if(!r) return "";
   var parts = [B2B_OP_MODE_LABELS[r.operation_mode] || r.operation_mode];
-  if(r.operation_mode === "pack_outbound" && r.sku_kind_count) parts.push(r.sku_kind_count + "品");
-  if(r.box_count) parts.push(r.box_count + "箱");
-  if(r.pallet_count) parts.push(r.pallet_count + "托");
+
+  if(r.operation_mode === "pack_outbound"){
+    if(r.sku_kind_count) parts.push(r.sku_kind_count + "品");
+    if(r.packed_qty) parts.push(r.packed_qty + "件");
+    if(r.box_count) parts.push(r.box_count + "箱");
+    if(r.pallet_count) parts.push(r.pallet_count + "托");
+    if(r.used_carton){
+      var ct = ["用纸箱"];
+      if(r.big_carton_count) ct.push("大"+r.big_carton_count);
+      if(r.small_carton_count) ct.push("小"+r.small_carton_count);
+      parts.push(ct.join(" · "));
+    }
+    if(r.label_count) parts.push("贴标"+r.label_count);
+    if(r.photo_count) parts.push("拍照"+r.photo_count);
+    if(r.has_pallet_detail) parts.push("含打托明细");
+  } else {
+    // move_and_palletize
+    if(r.box_count) parts.push(r.box_count + "箱");
+    if(r.pallet_count) parts.push(r.pallet_count + "托");
+    if(r.did_pack) parts.push("打包"+( r.packed_box_count || 0)+"箱");
+    if(r.did_rebox) parts.push("换箱"+(r.rebox_count || 0)+"箱");
+    if(r.label_count) parts.push("贴标"+r.label_count);
+  }
+
   if(r.needs_forklift_pick){
     var fp = ["含叉车找货"];
     if(r.forklift_pallet_count) fp.push(r.forklift_pallet_count + "托");
@@ -2054,9 +2075,7 @@ function openResultForm(orderNo){
     var r = res.result || {};
     var cust = res.customer_name || r.customer_name || "";
     var pt = res.participation || {};
-    var isNew = !res.result;
     var om = r.operation_mode || "pack_outbound";
-    var nfp = r.needs_forklift_pick ? 1 : 0;
 
     var html = '<div style="font-size:16px;font-weight:800;margin-bottom:6px;">现场结果单</div>';
     html += '<div style="font-size:13px;color:#555;margin-bottom:4px;">工单: <b>'+esc(orderNo)+'</b>'+(cust ? ' · '+esc(cust) : '')+'</div>';
@@ -2078,22 +2097,44 @@ function openResultForm(orderNo){
         '<option value="move_and_palletize"'+(om==="move_and_palletize"?' selected':'')+'>纯搬箱打托</option>' +
       '</select></div>';
 
-    html += '<div id="rf-sku-row" style="margin-bottom:8px;'+(om==="move_and_palletize"?"display:none;":"")+'"><label style="font-size:13px;font-weight:700;">品项数</label>' +
-      '<input id="rf-sku" type="number" min="0" step="1" value="'+(r.sku_kind_count||0)+'" style="width:100%;margin-top:2px;" /></div>';
+    // === 打包出库 字段区 ===
+    html += '<div id="rf-pack-area" style="'+(om==="move_and_palletize"?"display:none;":"")+'">';
+    html += _rfField("品项数", "rf-sku", "number", r.sku_kind_count, "0", "1");
+    html += _rfField("打包件数", "rf-packed-qty", "number", r.packed_qty, "0", "1");
+    html += _rfField("总出库箱数", "rf-box", "number", r.box_count, "0", "0.5");
+    html += _rfField("打包箱数", "rf-packed-box", "number", r.packed_box_count, "0", "0.5");
+    html += _rfSwitch("rf-carton", "是否用了纸箱", r.used_carton, "rfToggleCarton()");
+    html += '<div id="rf-carton-fields" style="'+(r.used_carton?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
+      _rfField("大箱数", "rf-big-carton", "number", r.big_carton_count, "0", "1") +
+      _rfField("小箱数", "rf-small-carton", "number", r.small_carton_count, "0", "1") +
+    '</div>';
+    html += _rfField("出库托数", "rf-pallet", "number", r.pallet_count, "0", "0.5");
+    html += _rfField("贴标数量", "rf-label", "number", r.label_count, "0", "1");
+    html += _rfField("拍照数量", "rf-photo", "number", r.photo_count, "0", "1");
+    html += _rfSwitch("rf-pallet-detail", "是否制作了打托明细", r.has_pallet_detail);
+    html += '</div>';
 
-    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">箱数</label>' +
-      '<input id="rf-box" type="number" min="0" step="0.5" value="'+(r.box_count||0)+'" style="width:100%;margin-top:2px;" /></div>';
+    // === 搬箱打托 字段区 ===
+    html += '<div id="rf-move-area" style="'+(om==="pack_outbound"?"display:none;":"")+'">';
+    html += _rfSwitch("rf-did-pack", "是否打包", r.did_pack, "rfToggleDidPack()");
+    html += '<div id="rf-did-pack-fields" style="'+(r.did_pack?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
+      _rfField("打包箱数", "rf-move-packed-box", "number", r.packed_box_count, "0", "0.5") +
+    '</div>';
+    html += _rfSwitch("rf-did-rebox", "是否换箱", r.did_rebox, "rfToggleDidRebox()");
+    html += '<div id="rf-did-rebox-fields" style="'+(r.did_rebox?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
+      _rfField("换箱数", "rf-rebox-count", "number", r.rebox_count, "0", "1") +
+    '</div>';
+    html += _rfField("贴标数量", "rf-move-label", "number", r.label_count, "0", "1");
+    html += _rfField("出库箱数", "rf-move-box", "number", r.box_count, "0", "0.5");
+    html += _rfField("出库托数", "rf-move-pallet", "number", r.pallet_count, "0", "0.5");
+    html += '</div>';
 
-    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">托数</label>' +
-      '<input id="rf-pallet" type="number" min="0" step="0.5" value="'+(r.pallet_count||0)+'" style="width:100%;margin-top:2px;" /></div>';
-
-    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;"><input id="rf-fork" type="checkbox" '+(nfp?'checked':'')+' onchange="rfToggleFork()" /> 需要叉车找货</label></div>';
-
+    // === 公共区：叉车找货 + 备注 ===
+    var nfp = r.needs_forklift_pick ? 1 : 0;
+    html += _rfSwitch("rf-fork", "需要叉车找货", nfp, "rfToggleFork()");
     html += '<div id="rf-fork-fields" style="'+(nfp?"":"display:none;")+'padding-left:12px;border-left:3px solid #ff9800;margin-bottom:8px;">' +
-      '<div style="margin-bottom:6px;"><label style="font-size:12px;font-weight:700;">叉车取货托数</label>' +
-        '<input id="rf-fork-pallet" type="number" min="0" step="0.5" value="'+(r.forklift_pallet_count||0)+'" style="width:100%;margin-top:2px;" /></div>' +
-      '<div><label style="font-size:12px;font-weight:700;">涉及货位数</label>' +
-        '<input id="rf-fork-loc" type="number" min="0" step="1" value="'+(r.rack_pick_location_count||0)+'" style="width:100%;margin-top:2px;" /></div>' +
+      _rfField("叉车取货托数", "rf-fork-pallet", "number", r.forklift_pallet_count, "0", "0.5") +
+      _rfField("涉及货位数", "rf-fork-loc", "number", r.rack_pick_location_count, "0", "1") +
     '</div>';
 
     html += '<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:700;">备注</label>' +
@@ -2109,40 +2150,100 @@ function openResultForm(orderNo){
   }).catch(function(e){ body.innerHTML = '<div style="color:red;">网络错误</div>'; });
 }
 
+// --- 表单构建 helpers ---
+function _rfField(label, id, type, val, min, step){
+  return '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">'+label+'</label>' +
+    '<input id="'+id+'" type="'+type+'" min="'+min+'" step="'+step+'" value="'+(val||0)+'" style="width:100%;margin-top:2px;" /></div>';
+}
+function _rfSwitch(id, label, val, onchange){
+  return '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;"><input id="'+id+'" type="checkbox" '+(val?'checked':'')+
+    (onchange ? ' onchange="'+onchange+'"' : '') + ' /> '+label+'</label></div>';
+}
+
+// --- Toggle functions ---
 function rfToggleMode(){
-  var m = document.getElementById("rf-mode");
-  var row = document.getElementById("rf-sku-row");
-  if(m && row) row.style.display = m.value === "move_and_palletize" ? "none" : "";
+  var m = (document.getElementById("rf-mode") || {}).value;
+  var packArea = document.getElementById("rf-pack-area");
+  var moveArea = document.getElementById("rf-move-area");
+  if(packArea) packArea.style.display = m === "move_and_palletize" ? "none" : "";
+  if(moveArea) moveArea.style.display = m === "pack_outbound" ? "none" : "";
 }
 function rfToggleFork(){
   var cb = document.getElementById("rf-fork");
   var fields = document.getElementById("rf-fork-fields");
   if(cb && fields){
     fields.style.display = cb.checked ? "" : "none";
-    if(!cb.checked){
-      var fp = document.getElementById("rf-fork-pallet");
-      var fl = document.getElementById("rf-fork-loc");
-      if(fp) fp.value = "0";
-      if(fl) fl.value = "0";
-    }
+    if(!cb.checked){ _rfClear(["rf-fork-pallet","rf-fork-loc"]); }
   }
 }
+function rfToggleCarton(){
+  var cb = document.getElementById("rf-carton");
+  var fields = document.getElementById("rf-carton-fields");
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked){ _rfClear(["rf-big-carton","rf-small-carton"]); }
+  }
+}
+function rfToggleDidPack(){
+  var cb = document.getElementById("rf-did-pack");
+  var fields = document.getElementById("rf-did-pack-fields");
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked){ _rfClear(["rf-move-packed-box"]); }
+  }
+}
+function rfToggleDidRebox(){
+  var cb = document.getElementById("rf-did-rebox");
+  var fields = document.getElementById("rf-did-rebox-fields");
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked){ _rfClear(["rf-rebox-count"]); }
+  }
+}
+function _rfClear(ids){
+  for(var i=0;i<ids.length;i++){ var el=document.getElementById(ids[i]); if(el) el.value="0"; }
+}
+
+function _rfVal(id){ return Number((document.getElementById(id) || {}).value) || 0; }
+function _rfChk(id){ return (document.getElementById(id) || {}).checked ? 1 : 0; }
 
 function _collectResultPayload(st, extraFields){
   var orderNo = (document.getElementById("rf-order-no") || {}).value || "";
   if(!orderNo) return null;
+  var om = (document.getElementById("rf-mode") || {}).value || "pack_outbound";
+  var isPack = om === "pack_outbound";
+
+  // 公共 & 主开关
+  var needs_forklift_pick = _rfChk("rf-fork");
+  var used_carton = isPack ? _rfChk("rf-carton") : 0;
+  var has_pallet_detail = isPack ? _rfChk("rf-pallet-detail") : 0;
+  var did_pack = isPack ? 0 : _rfChk("rf-did-pack");
+  var did_rebox = isPack ? 0 : _rfChk("rf-did-rebox");
+
+  // 按模式取值，联动归零
   var payload = {
     action: "b2b_op_result_upsert",
     day_kst: kstDayKey_(Date.now()),
     source_order_no: orderNo,
     session_id: currentSessionId || "",
-    operation_mode: (document.getElementById("rf-mode") || {}).value || "pack_outbound",
-    sku_kind_count: Number((document.getElementById("rf-sku") || {}).value) || 0,
-    box_count: Number((document.getElementById("rf-box") || {}).value) || 0,
-    pallet_count: Number((document.getElementById("rf-pallet") || {}).value) || 0,
-    needs_forklift_pick: (document.getElementById("rf-fork") || {}).checked ? 1 : 0,
-    forklift_pallet_count: Number((document.getElementById("rf-fork-pallet") || {}).value) || 0,
-    rack_pick_location_count: Number((document.getElementById("rf-fork-loc") || {}).value) || 0,
+    operation_mode: om,
+    sku_kind_count: isPack ? _rfVal("rf-sku") : 0,
+    packed_qty: isPack ? _rfVal("rf-packed-qty") : 0,
+    box_count: isPack ? _rfVal("rf-box") : _rfVal("rf-move-box"),
+    packed_box_count: isPack ? _rfVal("rf-packed-box") : (did_pack ? _rfVal("rf-move-packed-box") : 0),
+    used_carton: used_carton,
+    big_carton_count: used_carton ? _rfVal("rf-big-carton") : 0,
+    small_carton_count: used_carton ? _rfVal("rf-small-carton") : 0,
+    pallet_count: isPack ? _rfVal("rf-pallet") : _rfVal("rf-move-pallet"),
+    label_count: isPack ? _rfVal("rf-label") : _rfVal("rf-move-label"),
+    photo_count: isPack ? _rfVal("rf-photo") : 0,
+    has_pallet_detail: has_pallet_detail,
+    did_pack: did_pack,
+    did_rebox: did_rebox,
+    rebox_count: did_rebox ? _rfVal("rf-rebox-count") : 0,
+    needs_forklift_pick: needs_forklift_pick,
+    forklift_pallet_count: needs_forklift_pick ? _rfVal("rf-fork-pallet") : 0,
+    rack_pick_location_count: needs_forklift_pick ? _rfVal("rf-fork-loc") : 0,
     remark: (document.getElementById("rf-remark") || {}).value || "",
     status: st,
     created_by: getOperatorId() || "",
@@ -2234,8 +2335,19 @@ function revertResultToDraft(orderNo){
       session_id: currentSessionId || "",
       operation_mode: r.operation_mode || "pack_outbound",
       sku_kind_count: r.sku_kind_count || 0,
+      packed_qty: r.packed_qty || 0,
       box_count: r.box_count || 0,
+      packed_box_count: r.packed_box_count || 0,
+      used_carton: r.used_carton || 0,
+      big_carton_count: r.big_carton_count || 0,
+      small_carton_count: r.small_carton_count || 0,
       pallet_count: r.pallet_count || 0,
+      label_count: r.label_count || 0,
+      photo_count: r.photo_count || 0,
+      has_pallet_detail: r.has_pallet_detail || 0,
+      did_pack: r.did_pack || 0,
+      did_rebox: r.did_rebox || 0,
+      rebox_count: r.rebox_count || 0,
       needs_forklift_pick: r.needs_forklift_pick || 0,
       forklift_pallet_count: r.forklift_pallet_count || 0,
       rack_pick_location_count: r.rack_pick_location_count || 0,

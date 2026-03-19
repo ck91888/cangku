@@ -273,6 +273,11 @@ async function taskStateCloseAll_(env, session, ended_ms, operator_id){
   ).bind(Number(ended_ms||0), String(operator_id||""), String(session||"")).run();
 }
 
+// ===== 布尔归一化 helper =====
+function toBool01(v) {
+  return (v === 1 || v === true || v === "1" || v === "true") ? 1 : 0;
+}
+
 // ===== Admin-only: events_tail =====
 function isAdmin_(p, env){
   const key = String(p.k || "").trim();             // 前端传 k=口令
@@ -659,6 +664,49 @@ export default {
         if (!m15) {
           await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN confirm_badge TEXT NOT NULL DEFAULT ''`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v15_result_confirm_badge', ?)`).bind(Date.now()).run();
+        }
+
+        // v16: 现场结果单+现场记录 字段完善
+        const m16 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v16_result_fields_extend'`).first();
+        if (!m16) {
+          // b2b_operation_results 新增 11 列
+          const resCols = [
+            "packed_qty REAL NOT NULL DEFAULT 0",
+            "packed_box_count REAL NOT NULL DEFAULT 0",
+            "used_carton INTEGER NOT NULL DEFAULT 0",
+            "big_carton_count REAL NOT NULL DEFAULT 0",
+            "small_carton_count REAL NOT NULL DEFAULT 0",
+            "label_count REAL NOT NULL DEFAULT 0",
+            "photo_count REAL NOT NULL DEFAULT 0",
+            "has_pallet_detail INTEGER NOT NULL DEFAULT 0",
+            "did_pack INTEGER NOT NULL DEFAULT 0",
+            "did_rebox INTEGER NOT NULL DEFAULT 0",
+            "rebox_count REAL NOT NULL DEFAULT 0"
+          ];
+          for (const col of resCols) {
+            await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN ${col}`).run();
+          }
+          // b2b_field_ops 新增 14 列（含叉车3列）
+          const foCols = [
+            "packed_qty REAL NOT NULL DEFAULT 0",
+            "packed_box_count REAL NOT NULL DEFAULT 0",
+            "used_carton INTEGER NOT NULL DEFAULT 0",
+            "big_carton_count REAL NOT NULL DEFAULT 0",
+            "small_carton_count REAL NOT NULL DEFAULT 0",
+            "label_count REAL NOT NULL DEFAULT 0",
+            "photo_count REAL NOT NULL DEFAULT 0",
+            "has_pallet_detail INTEGER NOT NULL DEFAULT 0",
+            "did_pack INTEGER NOT NULL DEFAULT 0",
+            "did_rebox INTEGER NOT NULL DEFAULT 0",
+            "rebox_count REAL NOT NULL DEFAULT 0",
+            "needs_forklift_pick INTEGER NOT NULL DEFAULT 0",
+            "forklift_pallet_count REAL NOT NULL DEFAULT 0",
+            "rack_pick_location_count REAL NOT NULL DEFAULT 0"
+          ];
+          for (const col of foCols) {
+            await env.DB.prepare(`ALTER TABLE b2b_field_ops ADD COLUMN ${col}`).run();
+          }
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v16_result_fields_extend', ?)`).bind(Date.now()).run();
         }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
@@ -2797,6 +2845,22 @@ export default {
       const instruction_text = String(p.instruction_text || "").trim();
       const created_by = String(p.created_by || "").trim();
 
+      // 新增字段（v16）
+      const fo_packed_qty = Math.max(0, Number(p.packed_qty || 0));
+      const fo_label_count = Math.max(0, Number(p.label_count || 0));
+      const fo_photo_count = Math.max(0, Number(p.photo_count || 0));
+      const fo_used_carton = toBool01(p.used_carton);
+      const fo_has_pallet_detail = toBool01(p.has_pallet_detail);
+      const fo_did_pack = toBool01(p.did_pack);
+      const fo_did_rebox = toBool01(p.did_rebox);
+      const fo_needs_forklift_pick = toBool01(p.needs_forklift_pick);
+      const fo_packed_box_count = fo_did_pack ? Math.max(0, Number(p.packed_box_count || 0)) : Math.max(0, Number(p.packed_box_count || 0));
+      const fo_big_carton_count = fo_used_carton ? Math.max(0, Number(p.big_carton_count || 0)) : 0;
+      const fo_small_carton_count = fo_used_carton ? Math.max(0, Number(p.small_carton_count || 0)) : 0;
+      const fo_rebox_count = fo_did_rebox ? Math.max(0, Number(p.rebox_count || 0)) : 0;
+      const fo_forklift_pallet_count = fo_needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
+      const fo_rack_pick_location_count = fo_needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
+
       if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
       if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
       if (!created_by) return jsonpOrJson({ ok:false, error:"missing created_by" }, callback);
@@ -2823,9 +2887,19 @@ export default {
       const record_id = "FO-" + dayTag + "-" + String(seq).padStart(3, "0");
 
       await env.DB.prepare(
-        `INSERT INTO b2b_field_ops(record_id,source_plan_id,plan_day,customer_name,goods_summary,operation_type,input_box_count,output_box_count,output_pallet_count,instruction_text,status,created_by,created_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,'draft',?,?)`
-      ).bind(record_id, source_plan_id, plan_day, customer_name, goods_summary, operation_type, input_box_count, output_box_count, output_pallet_count, instruction_text, created_by, now).run();
+        `INSERT INTO b2b_field_ops(record_id,source_plan_id,plan_day,customer_name,goods_summary,operation_type,
+         input_box_count,output_box_count,output_pallet_count,instruction_text,
+         packed_qty,packed_box_count,used_carton,big_carton_count,small_carton_count,
+         label_count,photo_count,has_pallet_detail,did_pack,did_rebox,rebox_count,
+         needs_forklift_pick,forklift_pallet_count,rack_pick_location_count,
+         status,created_by,created_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`
+      ).bind(record_id, source_plan_id, plan_day, customer_name, goods_summary, operation_type,
+        input_box_count, output_box_count, output_pallet_count, instruction_text,
+        fo_packed_qty, fo_packed_box_count, fo_used_carton, fo_big_carton_count, fo_small_carton_count,
+        fo_label_count, fo_photo_count, fo_has_pallet_detail, fo_did_pack, fo_did_rebox, fo_rebox_count,
+        fo_needs_forklift_pick, fo_forklift_pallet_count, fo_rack_pick_location_count,
+        created_by, now).run();
 
       return jsonpOrJson({ ok:true, record_id }, callback);
     }
@@ -2876,6 +2950,22 @@ export default {
         const output_pallet_count = Number(p.output_pallet_count) || 0;
         const instruction_text = String(p.instruction_text || "").trim();
 
+        // 新增字段（v16）
+        const e_packed_qty = Math.max(0, Number(p.packed_qty || 0));
+        const e_label_count = Math.max(0, Number(p.label_count || 0));
+        const e_photo_count = Math.max(0, Number(p.photo_count || 0));
+        const e_used_carton = toBool01(p.used_carton);
+        const e_has_pallet_detail = toBool01(p.has_pallet_detail);
+        const e_did_pack = toBool01(p.did_pack);
+        const e_did_rebox = toBool01(p.did_rebox);
+        const e_needs_forklift_pick = toBool01(p.needs_forklift_pick);
+        const e_packed_box_count = Math.max(0, Number(p.packed_box_count || 0));
+        const e_big_carton_count = e_used_carton ? Math.max(0, Number(p.big_carton_count || 0)) : 0;
+        const e_small_carton_count = e_used_carton ? Math.max(0, Number(p.small_carton_count || 0)) : 0;
+        const e_rebox_count = e_did_rebox ? Math.max(0, Number(p.rebox_count || 0)) : 0;
+        const e_forklift_pallet_count = e_needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
+        const e_rack_pick_location_count = e_needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
+
         if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
         if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
         if (!operation_type) return jsonpOrJson({ ok:false, error:"missing operation_type" }, callback);
@@ -2884,8 +2974,18 @@ export default {
         if (!VALID_OP.includes(operation_type)) return jsonpOrJson({ ok:false, error:"invalid operation_type" }, callback);
 
         await env.DB.prepare(
-          `UPDATE b2b_field_ops SET plan_day=?, customer_name=?, goods_summary=?, operation_type=?, input_box_count=?, output_box_count=?, output_pallet_count=?, instruction_text=? WHERE record_id=?`
-        ).bind(plan_day, customer_name, goods_summary, operation_type, input_box_count, output_box_count, output_pallet_count, instruction_text, record_id).run();
+          `UPDATE b2b_field_ops SET plan_day=?, customer_name=?, goods_summary=?, operation_type=?,
+           input_box_count=?, output_box_count=?, output_pallet_count=?, instruction_text=?,
+           packed_qty=?, packed_box_count=?, used_carton=?, big_carton_count=?, small_carton_count=?,
+           label_count=?, photo_count=?, has_pallet_detail=?, did_pack=?, did_rebox=?, rebox_count=?,
+           needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?
+           WHERE record_id=?`
+        ).bind(plan_day, customer_name, goods_summary, operation_type,
+          input_box_count, output_box_count, output_pallet_count, instruction_text,
+          e_packed_qty, e_packed_box_count, e_used_carton, e_big_carton_count, e_small_carton_count,
+          e_label_count, e_photo_count, e_has_pallet_detail, e_did_pack, e_did_rebox, e_rebox_count,
+          e_needs_forklift_pick, e_forklift_pallet_count, e_rack_pick_location_count,
+          record_id).run();
 
         return jsonpOrJson({ ok:true, record_id }, callback);
       }
@@ -3105,10 +3205,26 @@ export default {
       const sku_kind_count = Math.max(0, Number(p.sku_kind_count || 0));
       const box_count = Math.max(0, Number(p.box_count || 0));
       const pallet_count = Math.max(0, Number(p.pallet_count || 0));
-      const needs_forklift_pick = String(p.needs_forklift_pick) === "1" ? 1 : 0;
+      const packed_qty = Math.max(0, Number(p.packed_qty || 0));
+      const packed_box_count_raw = Math.max(0, Number(p.packed_box_count || 0));
+      const label_count = Math.max(0, Number(p.label_count || 0));
+      const photo_count = Math.max(0, Number(p.photo_count || 0));
+      const remark = String(p.remark || "").trim();
+
+      // 主开关字段 — 统一 toBool01
+      const used_carton = toBool01(p.used_carton);
+      const has_pallet_detail = toBool01(p.has_pallet_detail);
+      const did_pack = toBool01(p.did_pack);
+      const did_rebox = toBool01(p.did_rebox);
+      const needs_forklift_pick = toBool01(p.needs_forklift_pick);
+
+      // 联动归零
+      const big_carton_count = used_carton ? Math.max(0, Number(p.big_carton_count || 0)) : 0;
+      const small_carton_count = used_carton ? Math.max(0, Number(p.small_carton_count || 0)) : 0;
+      const packed_box_count = (operation_mode === "move_and_palletize" && !did_pack) ? 0 : packed_box_count_raw;
+      const rebox_count = did_rebox ? Math.max(0, Number(p.rebox_count || 0)) : 0;
       const forklift_pallet_count = needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
       const rack_pick_location_count = needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
-      const remark = String(p.remark || "").trim();
       const new_status = String(p.status || "draft").trim();
       if (new_status !== "draft" && new_status !== "completed")
         return jsonpOrJson({ ok:false, error:"invalid status" }, callback);
@@ -3140,10 +3256,14 @@ export default {
         const completed_at = new_status === "completed" ? now : null;
         await env.DB.prepare(
           `UPDATE b2b_operation_results SET operation_mode=?, sku_kind_count=?, box_count=?, pallet_count=?,
+           packed_qty=?, packed_box_count=?, used_carton=?, big_carton_count=?, small_carton_count=?,
+           label_count=?, photo_count=?, has_pallet_detail=?, did_pack=?, did_rebox=?, rebox_count=?,
            needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?,
            remark=?, status=?, confirmed_by=?, confirm_badge=?, customer_name=?, updated_at=?, completed_at=?
            WHERE id=?`
         ).bind(operation_mode, sku_kind_count, box_count, pallet_count,
+          packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
+          label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
           remark, new_status, final_confirmed_by, final_confirm_badge, customer_name, now, completed_at, existing.id).run();
         return jsonpOrJson({ ok:true, id: existing.id, created: false }, callback);
@@ -3153,12 +3273,16 @@ export default {
         const ins = await env.DB.prepare(
           `INSERT INTO b2b_operation_results(day_kst, source_type, source_order_no, internal_workorder_id,
            customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
+           packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
+           label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
            needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
            remark, photo_urls_json, status, created_by, confirmed_by, confirm_badge, first_session_id,
            created_at, updated_at, completed_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?,?)`
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?,?)`
         ).bind(day_kst, bind.source_type, source_order_no, bind.internal_workorder_id || null,
           customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
+          packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
+          label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
           remark, new_status, String(p.created_by || "").trim(), final_confirmed_by, final_confirm_badge, session_id,
           now, now, completed_at).run();
