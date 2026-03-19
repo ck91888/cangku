@@ -1878,8 +1878,29 @@ async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
     var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？\n（一般请取消，继续当前趟次。）");
     if(!ok){ releaseBusy_(); return; }
     // 尝试关闭旧 session，避免孤儿 session
-    try{ await sessionCloseServer_(); }catch(e2){ /* 关闭失败不阻断新建 */ }
-    cleanupLocalSession_();
+    var closeRes;
+    try{ closeRes = await sessionCloseServer_(); }catch(e2){ closeRes = {}; }
+    if(closeRes.blocked){
+      if(closeRes.reason === "pending_b2b_results"){
+        var orders = (closeRes.pending_orders || []).map(function(o){
+          var st = o.result_status === "missing" ? "未录入" : (o.result_status === "draft" ? "草稿未提交" : o.result_status);
+          return o.source_order_no + " 〔" + st + "〕";
+        }).join("\n");
+        setStatus("有未完成结果单，无法开始新任务", false);
+        alert("当前还有未完成提交的工单结果单，不能开始新任务。\n\n请先完成以下工单的结果单：\n" + orders);
+      } else {
+        setStatus("旧趟次未能释放，无法开始新任务", false);
+        alert("旧趟次未能释放（" + (closeRes.reason || "未知原因") + "），请先结束当前趟次。");
+      }
+      return;
+    }
+    if(closeRes.closed || closeRes.already_closed){
+      cleanupLocalSession_();
+    } else {
+      setStatus("旧趟次状态异常，无法开始新任务", false);
+      alert("旧趟次状态异常，请先确认当前作业状态。");
+      return;
+    }
   }
   var btn = e && e.target ? e.target : null;
   var origText = btn ? btn.textContent : "";
@@ -2656,8 +2677,29 @@ async function startB2bFieldOp(e){
     if(currentSessionId){
       var ok = confirm("当前已有进行中的趟次：" + currentSessionId + "\n\n确定要放弃当前趟次、重新开始一个新趟次吗？");
       if(!ok){ throw new Error("用户取消"); }
-      try{ await sessionCloseServer_(); }catch(e2){}
-      cleanupLocalSession_();
+      var closeRes;
+      try{ closeRes = await sessionCloseServer_(); }catch(e2){ closeRes = {}; }
+      if(closeRes.blocked){
+        if(closeRes.reason === "pending_b2b_results"){
+          var orders = (closeRes.pending_orders || []).map(function(o){
+            var st = o.result_status === "missing" ? "未录入" : (o.result_status === "draft" ? "草稿未提交" : o.result_status);
+            return o.source_order_no + " 〔" + st + "〕";
+          }).join("\n");
+          setStatus("有未完成结果单，无法开始新任务", false);
+          alert("当前还有未完成提交的工单结果单，不能开始新任务。\n\n请先完成以下工单的结果单：\n" + orders);
+        } else {
+          setStatus("旧趟次未能释放，无法开始新任务", false);
+          alert("旧趟次未能释放（" + (closeRes.reason || "未知原因") + "），请先结束当前趟次。");
+        }
+        throw new Error("用户取消");
+      }
+      if(closeRes.closed || closeRes.already_closed){
+        cleanupLocalSession_();
+      } else {
+        setStatus("旧趟次状态异常，无法开始新任务", false);
+        alert("旧趟次状态异常，请先确认当前作业状态。");
+        throw new Error("用户取消");
+      }
     }
 
     var newSid = makePickSessionId();
