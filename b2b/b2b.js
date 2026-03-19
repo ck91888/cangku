@@ -167,6 +167,8 @@ function kstDayOffset(days){
 // ===== 首页 =====
 var _planListScope = "today";
 var _woListScope = "today";
+var _currentPlanScope = "today";
+var _currentWoScope = "today";
 
 function loadHome(){
   var today = kstToday();
@@ -298,6 +300,7 @@ function initPlanList(){
   var today = kstToday();
   var scope = _planListScope;
   _planListScope = "today";
+  _currentPlanScope = scope;
 
   if(scope === "tomorrow"){
     var tmr = kstTomorrow();
@@ -1158,10 +1161,11 @@ function initWoList(){
   var yesterday = kstYesterday();
   var scope = _woListScope;
   _woListScope = "today";
+  _currentWoScope = scope;
   var titleEl = document.getElementById("wl-title");
 
   if(scope === "next3"){
-    titleEl.textContent = "近3日出库作业单";
+    titleEl.textContent = "未来三天出库作业单";
     document.getElementById("wl-start").value = today;
     document.getElementById("wl-end").value = kstDayOffset(2);
     loadWoListByScope("next3");
@@ -1188,6 +1192,7 @@ function loadWoList(){
   var s = document.getElementById("wl-start").value;
   var e = document.getElementById("wl-end").value;
   if(!s || !e){ alert("请选择日期"); return; }
+  _currentWoScope = "custom";
   document.getElementById("wl-title").textContent = "出库作业单列表";
   var el = document.getElementById("wl-result");
   el.innerHTML = '<div class="q-empty">加载中...</div>';
@@ -1255,7 +1260,8 @@ function renderWoList(container, wos, overdueWos){
       return (a.is_accounted||0) - (b.is_accounted||0);
     });
     if(overdueWos.length > 0){
-      html += '<div class="list-section-title" style="margin-top:12px;">📦 当日作业单（'+wos.length+' 单）</div>';
+      var woSectionTitle = (_currentWoScope === "next3") ? "未来三天作业单" : "当期作业单";
+      html += '<div class="list-section-title" style="margin-top:12px;">📦 '+woSectionTitle+'（'+wos.length+' 单）</div>';
     }
     html += wos.map(renderWoRow).join("");
   }
@@ -1466,7 +1472,7 @@ function woNoticeAction(id, kind, op){
       if(document.getElementById("wo-detail-card").innerHTML.indexOf(id) >= 0){
         goWoDetail(id);
       } else {
-        loadWoList();
+        reloadCurrentWoList();
       }
     } else {
       alert("操作失败: "+(res&&res.error||"unknown"));
@@ -1510,10 +1516,17 @@ function setWoAccounted(wo_id, val){
 function refreshAfterAccounted(type, id){
   if(type === "plan"){
     var detailCard = document.getElementById("plan-detail-card");
-    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goPlanDetail(id); } else { loadPlanList(); }
+    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goPlanDetail(id); } else { loadPlanListByRange(_currentPlanScope === "overdue" ? "overdue" : null); }
   } else {
     var detailCard = document.getElementById("wo-detail-card");
-    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goWoDetail(id); } else { loadWoList(); }
+    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goWoDetail(id); } else { reloadCurrentWoList(); }
+  }
+}
+function reloadCurrentWoList(){
+  if(_currentWoScope === "next3" || _currentWoScope === "today" || _currentWoScope === "overdue"){
+    loadWoListByScope(_currentWoScope);
+  } else {
+    loadWoList();
   }
 }
 
