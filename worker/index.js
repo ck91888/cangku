@@ -2358,9 +2358,15 @@ export default {
       // 幂等检查
       const req_id = String(p.request_id || "").trim();
       if (req_id) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_plan_create'`).bind(req_id).first();
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=?`).bind(req_id).first();
         if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id, "b2b_plan_create", Date.now()).run();
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_plan_create',?,?)`).bind(req_id, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=?`).bind(req_id).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
       const plan_day = String(p.plan_day || "").trim();
       const customer_name = String(p.customer_name || "").trim();
@@ -2499,9 +2505,15 @@ export default {
       // 幂等检查
       const req_id_wo = String(p.request_id || "").trim();
       if (req_id_wo) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_wo_create'`).bind(req_id_wo).first();
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=?`).bind(req_id_wo).first();
         if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id_wo, "b2b_wo_create", Date.now()).run();
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_wo_create',?,?)`).bind(req_id_wo, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=?`).bind(req_id_wo).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
 
       // 三模式字段（向后兼容：旧前端可能只传 outbound_mode=sku_based/carton_based）
@@ -2989,9 +3001,15 @@ export default {
       // 幂等检查
       const req_id_fo = String(p.request_id || "").trim();
       if (req_id_fo) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_field_op_create'`).bind(req_id_fo).first();
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=?`).bind(req_id_fo).first();
         if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id_fo, "b2b_field_op_create", Date.now()).run();
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_field_op_create',?,?)`).bind(req_id_fo, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=?`).bind(req_id_fo).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
 
       const plan_day = String(p.plan_day || "").trim();
@@ -3471,9 +3489,15 @@ export default {
       // 幂等检查
       const req_id_sc = String(p.request_id || "").trim();
       if (req_id_sc) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE request_id=? AND action='b2b_scan_batch_create'`).bind(req_id_sc).first();
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(req_id_sc).first();
         if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(request_id,action,created_at) VALUES(?,?,?)`).bind(req_id_sc, "b2b_scan_batch_create", Date.now()).run();
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_scan_batch_create',?,?)`).bind(req_id_sc, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(req_id_sc).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
 
       const check_day = String(p.check_day || "").trim();
