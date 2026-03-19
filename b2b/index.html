@@ -94,6 +94,8 @@
     .acc-yes{background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7;}
     .acc-btn{display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:600;margin-left:4px;cursor:pointer;border:1px solid #ccc;background:#f5f5f5;color:#666;}
     .acc-btn:hover{background:#eee;}
+    .nav-back{display:inline-block;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;color:#1565c0;background:none;border:1px solid #90caf9;margin-bottom:8px;}
+    .nav-back:hover{background:#e3f2fd;}
     .wave-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;cursor:pointer;}
     .wave-row:hover{background:#f9f9f9;}
     .wave-detail-box{background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;margin:4px 0 8px;font-size:12px;}
@@ -193,6 +195,7 @@
 
   <!-- 新建/编辑入库计划 -->
   <div id="v-plan_create" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card">
       <div id="pc-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">新建入库计划</div>
       <div id="pc-id-bar" class="edit-id-bar" style="display:none;"></div>
@@ -219,6 +222,7 @@
 
   <!-- 新建/编辑出库作业单 -->
   <div id="v-wo_create" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card">
       <div id="wc-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">新建出库作业单</div>
       <div id="wc-id-bar" class="edit-id-bar" style="display:none;"></div>
@@ -304,6 +308,7 @@
 
   <!-- 入库计划详情 -->
   <div id="v-plan_detail" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card" id="plan-detail-card"></div>
   </div>
 
@@ -324,11 +329,13 @@
 
   <!-- 作业单详情 -->
   <div id="v-wo_detail" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card" id="wo-detail-card"></div>
   </div>
 
   <!-- 新建/编辑现场作业记录 -->
   <div id="v-fo_create" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card">
       <div id="fo-title" style="font-size:16px;font-weight:700;margin-bottom:10px;">新建现场作业记录</div>
       <div id="fo-id-bar" class="edit-id-bar" style="display:none;"></div>
@@ -378,11 +385,13 @@
 
   <!-- 现场作业记录详情 -->
   <div id="v-fo_detail" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card" id="fo-detail-card"></div>
   </div>
 
   <!-- 新建核对批次 -->
   <div id="v-sc_create" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card">
       <div style="font-size:16px;font-weight:700;margin-bottom:10px;">新建出库扫码核对批次</div>
       <div class="row">
@@ -428,6 +437,7 @@
 
   <!-- 核对批次详情 -->
   <div id="v-sc_detail" style="display:none;">
+    <span class="nav-back" onclick="goBack()">&larr; 返回</span>
     <div class="card" id="sc-detail-card"></div>
   </div>
 

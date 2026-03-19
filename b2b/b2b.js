@@ -105,8 +105,11 @@ function showMain(){
 
 // ===== 视图切换 =====
 var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-plan_detail","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail","v-sc_create","v-sc_list","v-sc_detail","v-doc_list","v-wave_list"];
-function goView(name){
+var _currentViewName = "home";
+function goView(name, opts){
   ALL_VIEWS.forEach(function(v){ document.getElementById(v).style.display = (v === "v-" + name) ? "" : "none"; });
+  _currentViewName = name;
+  if(opts && opts.skipInit) return;
   if(name === "plan_list") initPlanList();
   if(name === "wo_list") initWoList();
   if(name === "fo_list") initFoList();
@@ -115,9 +118,159 @@ function goView(name){
   if(name === "wave_list") initWaveList();
 }
 
+// ===== 导航栈 =====
+var _navStack = [];
+var NAV_STACK_MAX = 20;
+
+var _currentDetailId = null;
+
+function navCaptureState(){
+  var v = _currentViewName;
+  var entry = { view: v, tab: _currentTab };
+  // 详情页：记住当前正在看的 ID
+  if(v === "plan_detail" || v === "wo_detail" || v === "fo_detail" || v === "sc_detail"){
+    entry.detailId = _currentDetailId;
+  }
+  if(v === "plan_list"){
+    entry.state = {
+      "pl-start": document.getElementById("pl-start").value,
+      "pl-end": document.getElementById("pl-end").value,
+      scope: _currentPlanScope
+    };
+  } else if(v === "wo_list"){
+    entry.state = {
+      "wl-start": document.getElementById("wl-start").value,
+      "wl-end": document.getElementById("wl-end").value,
+      scope: _currentWoScope
+    };
+  } else if(v === "fo_list"){
+    entry.state = {
+      "fl-start": document.getElementById("fl-start").value,
+      "fl-end": document.getElementById("fl-end").value
+    };
+  } else if(v === "sc_list"){
+    entry.state = {
+      "scl-start": document.getElementById("scl-start").value,
+      "scl-end": document.getElementById("scl-end").value
+    };
+  } else if(v === "doc_list"){
+    entry.state = {
+      "dl-start": document.getElementById("dl-start").value,
+      "dl-end": document.getElementById("dl-end").value,
+      "dl-kind": document.getElementById("dl-kind").value,
+      "dl-keyword": document.getElementById("dl-keyword").value,
+      viewMode: _docViewMode,
+      page: _docPage
+    };
+  } else if(v === "wave_list"){
+    entry.state = {
+      "hw-start": document.getElementById("hw-start").value,
+      "hw-end": document.getElementById("hw-end").value,
+      "hw-biz": document.getElementById("hw-biz").value,
+      "hw-task": document.getElementById("hw-task").value,
+      "hw-keyword": document.getElementById("hw-keyword").value
+    };
+  }
+  return entry;
+}
+
+function navPush(){
+  _navStack.push(navCaptureState());
+  if(_navStack.length > NAV_STACK_MAX) _navStack.shift();
+}
+
+function navRestoreState(entry){
+  var v = entry.view;
+  var st = entry.state || {};
+  // 切换视图但跳过 init
+  goView(v, { skipInit: true });
+  // 恢复 tab 高亮
+  if(entry.tab){
+    _currentTab = entry.tab;
+    var btns = document.querySelectorAll("#mainTabBar button");
+    var tabOrder = ["home","plan","wo","fo","sc","wave"];
+    for(var i = 0; i < btns.length && i < tabOrder.length; i++){
+      btns[i].className = (tabOrder[i] === entry.tab) ? "tab-active" : "";
+    }
+  }
+
+  if(v === "plan_list"){
+    document.getElementById("pl-start").value = st["pl-start"] || "";
+    document.getElementById("pl-end").value = st["pl-end"] || "";
+    _currentPlanScope = st.scope || "today";
+    reloadCurrentPlanList();
+  } else if(v === "wo_list"){
+    document.getElementById("wl-start").value = st["wl-start"] || "";
+    document.getElementById("wl-end").value = st["wl-end"] || "";
+    _currentWoScope = st.scope || "today";
+    // 恢复标题
+    var titleEl = document.getElementById("wl-title");
+    if(_currentWoScope === "next3") titleEl.textContent = "未来三天出库作业单";
+    else if(_currentWoScope === "overdue") titleEl.textContent = "逾期未完成出库作业单";
+    else if(_currentWoScope === "today") titleEl.textContent = "今日出库作业单";
+    else titleEl.textContent = "出库作业单列表";
+    reloadCurrentWoList();
+  } else if(v === "fo_list"){
+    document.getElementById("fl-start").value = st["fl-start"] || "";
+    document.getElementById("fl-end").value = st["fl-end"] || "";
+    loadFoList();
+  } else if(v === "sc_list"){
+    document.getElementById("scl-start").value = st["scl-start"] || "";
+    document.getElementById("scl-end").value = st["scl-end"] || "";
+    loadScList();
+  } else if(v === "doc_list"){
+    document.getElementById("dl-start").value = st["dl-start"] || "";
+    document.getElementById("dl-end").value = st["dl-end"] || "";
+    document.getElementById("dl-kind").value = st["dl-kind"] || "";
+    document.getElementById("dl-keyword").value = st["dl-keyword"] || "";
+    _docViewMode = st.viewMode || "summary";
+    _docPage = st.page || 1;
+    // 更新 toggle 按钮
+    var btns2 = document.querySelectorAll("#docViewToggle button");
+    for(var j=0;j<btns2.length;j++) btns2[j].className = "";
+    if(_docViewMode === "summary") btns2[0].className = "vt-active";
+    else if(_docViewMode === "session") btns2[1].className = "vt-active";
+    loadDocList();
+  } else if(v === "wave_list"){
+    document.getElementById("hw-start").value = st["hw-start"] || "";
+    document.getElementById("hw-end").value = st["hw-end"] || "";
+    document.getElementById("hw-biz").value = st["hw-biz"] || "";
+    document.getElementById("hw-task").value = st["hw-task"] || "";
+    document.getElementById("hw-keyword").value = st["hw-keyword"] || "";
+    loadWaveList();
+  } else if(v === "plan_detail" && entry.detailId){
+    goPlanDetail(entry.detailId, true);
+  } else if(v === "wo_detail" && entry.detailId){
+    goWoDetail(entry.detailId, true);
+  } else if(v === "fo_detail" && entry.detailId){
+    goFoDetail(entry.detailId, true);
+  } else if(v === "sc_detail" && entry.detailId){
+    goScDetail(entry.detailId, true);
+  } else if(v === "home"){
+    loadHome();
+  }
+}
+
+// 返回按钮的默认列表页映射
+var TAB_DEFAULT_LIST = {
+  plan: "plan_list", wo: "wo_list", fo: "fo_list", sc: "sc_list", wave: "doc_list"
+};
+
+function goBack(){
+  if(_navStack.length > 0){
+    navRestoreState(_navStack.pop());
+  } else {
+    // 栈空 → 回当前 tab 默认列表页
+    var defaultView = TAB_DEFAULT_LIST[_currentTab];
+    if(defaultView) goView(defaultView);
+    else goHome();
+  }
+}
+
 // ===== Tab 导航 =====
 var _currentTab = "home";
 function goTab(tab){
+  _navStack = [];
   _currentTab = tab;
   var btns = document.querySelectorAll("#mainTabBar button");
   var tabOrder = ["home","plan","wo","fo","sc","wave"];
@@ -139,20 +292,24 @@ function goHome(){
 
 // ===== 导航入口：新建（清空编辑状态） =====
 function goNewPlan(){
+  navPush();
   _editingPlanId = null;
   goView("plan_create");
   initPlanForm(null);
 }
 function goNewWo(){
+  navPush();
   _editingWoId = null;
   goView("wo_create");
   initWoCreate(null);
 }
 function goNewSc(){
+  navPush();
   goView("sc_create");
   initScCreate();
 }
 function goNewFo(fromPlan){
+  navPush();
   _editingFoId = null;
   _foSourcePlanId = null;
   goView("fo_create");
@@ -288,7 +445,7 @@ function changePlanStatus(plan_id, status){
     if(res && res.ok){
       if(document.getElementById("v-home").style.display !== "none") loadHome();
       if(document.getElementById("v-plan_list").style.display !== "none") reloadCurrentPlanList();
-      if(document.getElementById("v-plan_detail").style.display !== "none") goPlanDetail(plan_id);
+      if(document.getElementById("v-plan_detail").style.display !== "none") goPlanDetail(plan_id, true);
     } else {
       alert("状态更新失败: " + (res&&res.error||"unknown"));
     }
@@ -391,7 +548,9 @@ function renderPlanRow(p){
 }
 
 // ===== 入库计划详情（含关联） =====
-function goPlanDetail(plan_id){
+function goPlanDetail(plan_id, _skipNav){
+  if(!_skipNav) navPush();
+  _currentDetailId = plan_id;
   goView("plan_detail");
   var card = document.getElementById("plan-detail-card");
   card.innerHTML = '<div class="muted">加载中...</div>';
@@ -859,12 +1018,14 @@ function initPlanForm(data){
 
 function goEditPlan(plan_id){
   // 从 API 拉最新数据，再进入编辑模式
+  var _navSnap = navCaptureState();
   fetchApi({ action:"b2b_plan_list", start_day:B2B_EARLIEST_DAY, end_day:"2099-12-31" }).then(function(res){
     if(!res || !res.ok){ alert("加载失败"); return; }
     var found = null;
     (res.plans||[]).forEach(function(p){ if(p.plan_id === plan_id) found = p; });
     if(!found){ alert("未找到计划 " + plan_id); return; }
     if(!PLAN_EDITABLE[found.status]){ alert("当前状态不允许编辑"); return; }
+    _navStack.push(_navSnap);
     _editingPlanId = plan_id;
     goView("plan_create");
     initPlanForm(found);
@@ -1078,11 +1239,13 @@ function wcCollectLines(){
 }
 
 function goEditWo(workorder_id){
+  var _navSnap = navCaptureState();
   fetchApi({ action:"b2b_wo_detail", workorder_id:workorder_id }).then(function(res){
     if(!res || !res.ok){ alert("加载失败"); return; }
     var w = res.workorder;
     var editable = ["draft","issued","working"];
     if(editable.indexOf(w.status) < 0){ alert("当前状态不允许编辑"); return; }
+    _navStack.push(_navSnap);
     _editingWoId = workorder_id;
     w._lines = res.lines || [];
     goView("wo_create");
@@ -1129,7 +1292,7 @@ function submitWo(){
       if(res && res.ok){
         var id = _editingWoId;
         _editingWoId = null;
-        goWoDetail(id);
+        goWoDetail(id, true);
       } else {
         document.getElementById("wc-result").innerHTML = '<span class="bad">修改失败: '+esc(res&&res.error||"unknown")+'</span>';
       }
@@ -1147,7 +1310,7 @@ function submitWo(){
     }).then(function(res){
       if(res && res.ok){
         _editingWoId = null;
-        goWoDetail(res.workorder_id);
+        goWoDetail(res.workorder_id, true);
       } else {
         document.getElementById("wc-result").innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
       }
@@ -1306,7 +1469,9 @@ function renderWoRow(w){
 }
 
 // ===== 作业单详情 =====
-function goWoDetail(id){
+function goWoDetail(id, _skipNav){
+  if(!_skipNav) navPush();
+  _currentDetailId = id;
   goView("wo_detail");
   var card = document.getElementById("wo-detail-card");
   card.innerHTML = '<div class="muted">加载中...</div>';
@@ -1451,7 +1616,7 @@ function changeWoStatus(id, status){
   }
   fetchApi({ action:"b2b_wo_update_status", workorder_id:id, status:status }).then(function(res){
     if(res && res.ok){
-      goWoDetail(id);
+      goWoDetail(id, true);
     } else {
       alert("状态更新失败: "+(res&&res.error||"unknown"));
     }
@@ -1471,7 +1636,7 @@ function woNoticeAction(id, kind, op){
   fetchApi({ action:"b2b_wo_ack_notice", workorder_id:id, kind:kind, op:op, ack_by:ackBy }).then(function(res){
     if(res && res.ok){
       if(document.getElementById("wo-detail-card").innerHTML.indexOf(id) >= 0){
-        goWoDetail(id);
+        goWoDetail(id, true);
       } else {
         reloadCurrentWoList();
       }
@@ -1517,10 +1682,10 @@ function setWoAccounted(wo_id, val){
 function refreshAfterAccounted(type, id){
   if(type === "plan"){
     var detailCard = document.getElementById("plan-detail-card");
-    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goPlanDetail(id); } else { reloadCurrentPlanList(); }
+    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goPlanDetail(id, true); } else { reloadCurrentPlanList(); }
   } else {
     var detailCard = document.getElementById("wo-detail-card");
-    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goWoDetail(id); } else { reloadCurrentWoList(); }
+    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goWoDetail(id, true); } else { reloadCurrentWoList(); }
   }
 }
 function reloadCurrentPlanList(){
@@ -1615,7 +1780,7 @@ function uploadAttachment(input, workorder_id){
   }).then(function(r){ return r.json(); }).then(function(res){
     if(res && res.ok){
       // 刷新附件区
-      goWoDetail(workorder_id);
+      goWoDetail(workorder_id, true);
     } else {
       if(msgEl) msgEl.innerHTML = '<span class="bad">上传失败: '+esc(res&&res.error||"unknown")+'</span>';
     }
@@ -1628,7 +1793,7 @@ function deleteAttachment(attachment_id, workorder_id){
   if(!confirm("确认删除此附件？删除后不可恢复。")) return;
   fetchApi({ action:"b2b_attachment_delete", attachment_id:attachment_id }).then(function(res){
     if(res && res.ok){
-      goWoDetail(workorder_id);
+      goWoDetail(workorder_id, true);
     } else {
       alert("删除失败: " + (res&&res.error||"unknown"));
     }
@@ -1984,6 +2149,7 @@ var _editingFoId = null;
 var _foSourcePlanId = null;
 
 function goNewFoFromPlan(plan_id, plan_day, customer_name, goods_summary, purpose_text){
+  navPush();
   _editingFoId = null;
   _foSourcePlanId = plan_id;
   goView("fo_create");
@@ -2072,7 +2238,7 @@ function submitFo(){
     }).then(function(res){
       if(res && res.ok){
         alert("修改成功！");
-        goFoDetail(_editingFoId);
+        goFoDetail(_editingFoId, true);
       } else {
         document.getElementById("fo-result").innerHTML = '<span class="bad">修改失败: '+esc(res&&res.error||"unknown")+'</span>';
       }
@@ -2089,7 +2255,7 @@ function submitFo(){
     fetchApi(params).then(function(res){
       if(res && res.ok){
         alert("创建成功！编号: " + res.record_id);
-        goFoDetail(res.record_id);
+        goFoDetail(res.record_id, true);
       } else {
         document.getElementById("fo-result").innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
       }
@@ -2098,10 +2264,12 @@ function submitFo(){
 }
 
 function goEditFo(record_id){
+  var _navSnap = navCaptureState();
   fetchApi({ action:"b2b_field_op_detail", record_id:record_id }).then(function(res){
     if(!res || !res.ok){ alert("加载失败"); return; }
     var r = res.record;
     if(!FO_EDITABLE[r.status]){ alert("当前状态不允许编辑"); return; }
+    _navStack.push(_navSnap);
     _editingFoId = record_id;
     goView("fo_create");
     initFoForm(r, null);
@@ -2166,7 +2334,9 @@ function renderFoRow(r){
 }
 
 // ===== 现场作业记录详情 =====
-function goFoDetail(id){
+function goFoDetail(id, _skipNav){
+  if(!_skipNav) navPush();
+  _currentDetailId = id;
   goView("fo_detail");
   var card = document.getElementById("fo-detail-card");
   card.innerHTML = '<div class="muted">加载中...</div>';
@@ -2225,7 +2395,7 @@ function changeFoStatus(id, status){
   }
   fetchApi({ action:"b2b_field_op_update", record_id:id, sub:"status", status:status }).then(function(res){
     if(res && res.ok){
-      goFoDetail(id);
+      goFoDetail(id, true);
     } else {
       alert("状态更新失败: "+(res&&res.error||"unknown"));
     }
@@ -2274,7 +2444,7 @@ function doBindWo(record_id){
   fetchApi({ action:"b2b_field_op_update", record_id:record_id, sub:"bind", workorder_id:workorder_id }).then(function(res){
     if(res && res.ok){
       alert("绑定成功！");
-      goFoDetail(record_id);
+      goFoDetail(record_id, true);
     } else {
       alert("绑定失败: "+(res&&res.error||"unknown"));
     }
@@ -2439,7 +2609,7 @@ function submitSc(){
     document.getElementById("sc-submit-btn").textContent = "确认创建批次";
     if(res && res.ok){
       alert("创建成功！批次编号: " + res.batch_id + "\n条码: " + res.total_barcodes + " 种\n总箱数: " + res.total_expected_boxes);
-      goScDetail(res.batch_id);
+      goScDetail(res.batch_id, true);
     } else {
       document.getElementById("sc-result").innerHTML = '<span class="bad">创建失败: '+esc(res&&res.error||"unknown")+'</span>';
     }
@@ -2476,7 +2646,9 @@ function loadScList(){
 }
 
 // ===== 核对批次详情 =====
-function goScDetail(batch_id){
+function goScDetail(batch_id, _skipNav){
+  if(!_skipNav) navPush();
+  _currentDetailId = batch_id;
   goView("sc_detail");
   var card = document.getElementById("sc-detail-card");
   card.innerHTML = '<div class="muted">加载中...</div>';
@@ -2502,7 +2674,7 @@ function goScDetail(batch_id){
     // 操作按钮
     var closeBtn = (b.status === "open") ?
       '<button onclick="closeScanBatch(\''+esc(b.batch_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;background:#e65100;color:#fff;border-color:#e65100;">关闭批次</button>' : '';
-    var refreshBtn = '<button onclick="goScDetail(\''+esc(b.batch_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">刷新</button>';
+    var refreshBtn = '<button onclick="goScDetail(\''+esc(b.batch_id)+'\',true)" style="width:auto;padding:8px 16px;font-size:13px;">刷新</button>';
 
     var html = '';
 
@@ -2602,7 +2774,7 @@ function closeScanBatch(batch_id){
       fetchApi({ action:"b2b_scan_batch_close", batch_id:batch_id, confirm:"true" }).then(function(res2){
         if(res2 && res2.ok){
           alert("批次已关闭！");
-          goScDetail(batch_id);
+          goScDetail(batch_id, true);
         } else {
           alert("关闭失败: "+(res2&&res2.error||"unknown"));
         }
