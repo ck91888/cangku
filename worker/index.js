@@ -3105,7 +3105,7 @@ export default {
       const sku_kind_count = Math.max(0, Number(p.sku_kind_count || 0));
       const box_count = Math.max(0, Number(p.box_count || 0));
       const pallet_count = Math.max(0, Number(p.pallet_count || 0));
-      const needs_forklift_pick = p.needs_forklift_pick ? 1 : 0;
+      const needs_forklift_pick = String(p.needs_forklift_pick) === "1" ? 1 : 0;
       const forklift_pallet_count = needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
       const rack_pick_location_count = needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
       const remark = String(p.remark || "").trim();
