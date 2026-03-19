@@ -104,13 +104,14 @@ function showMain(){
 }
 
 // ===== 视图切换 =====
-var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-plan_detail","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail","v-sc_create","v-sc_list","v-sc_detail","v-wave_list"];
+var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-plan_detail","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail","v-sc_create","v-sc_list","v-sc_detail","v-doc_list","v-wave_list"];
 function goView(name){
   ALL_VIEWS.forEach(function(v){ document.getElementById(v).style.display = (v === "v-" + name) ? "" : "none"; });
   if(name === "plan_list") initPlanList();
   if(name === "wo_list") initWoList();
   if(name === "fo_list") initFoList();
   if(name === "sc_list") initScList();
+  if(name === "doc_list") initDocList();
   if(name === "wave_list") initWaveList();
 }
 
@@ -128,7 +129,7 @@ function goTab(tab){
   if(tab === "wo"){ _woListScope = "today"; goView("wo_list"); return; }
   if(tab === "fo"){ goView("fo_list"); return; }
   if(tab === "sc"){ goView("sc_list"); return; }
-  if(tab === "wave"){ goView("wave_list"); return; }
+  if(tab === "wave"){ goView("doc_list"); return; }
 }
 
 function goHome(){
@@ -453,7 +454,232 @@ function goPlanDetail(plan_id){
   });
 }
 
-// ===== 作业记录（波次/单号）独立页 =====
+// ===== 作业记录：单据台账 =====
+var _docListData = [];
+var _docListFiltered = [];
+var _docViewMode = "summary";  // summary | session | raw
+var _docPage = 1;
+var _docPageSize = 50;
+var _docTotal = 0;
+
+var WAVE_KIND_LABEL = {
+  b2c_pick:"B2C拣货", b2c_tally:"B2C理货", b2c_batch_out:"B2C批量出库",
+  b2b_inbound_tally:"B2B入库理货", b2b_workorder:"B2B工单操作", b2b_field_op:"B2B现场记录"
+};
+
+var LINK_STATUS_LABEL = {
+  unlinked:"仅作业流水", no_binding:"无绑定", no_record:"无记录",
+  ambiguous_binding:"绑定冲突",
+  internal_bound_result_missing:"内部·无结果单", internal_bound_result_draft:"内部·草稿",
+  internal_bound_result_completed:"内部·已完成",
+  external_bound_result_missing:"外部·无结果单", external_bound_result_draft:"外部·草稿",
+  external_bound_result_completed:"外部·已完成",
+  plan_linked_wo_bound:"有计划+有工单", plan_linked_wo_unbound:"有计划·无工单",
+  independent_wo_bound:"独立+有工单", independent:"独立记录"
+};
+
+function linkStatusCls(ls){
+  if(!ls) return "link-default";
+  if(ls.indexOf("completed")>=0 || ls==="plan_linked_wo_bound") return "link-completed";
+  if(ls.indexOf("draft")>=0 || ls.indexOf("unbound")>=0) return "link-draft";
+  if(ls.indexOf("missing")>=0 || ls==="no_binding" || ls==="no_record" || ls==="ambiguous_binding") return "link-missing";
+  if(ls==="unlinked") return "link-unlinked";
+  return "link-default";
+}
+
+function switchDocView(mode){
+  _docViewMode = mode;
+  if(mode === "raw"){
+    goView("wave_list");
+    return;
+  }
+  goView("doc_list");
+}
+
+function initDocList(){
+  var today = kstToday();
+  if(!document.getElementById("dl-start").value) document.getElementById("dl-start").value = today;
+  if(!document.getElementById("dl-end").value) document.getElementById("dl-end").value = today;
+  // 更新 toggle 按钮状态
+  var btns = document.querySelectorAll("#docViewToggle button");
+  for(var i=0;i<btns.length;i++) btns[i].className = "";
+  if(_docViewMode === "summary") btns[0].className = "vt-active";
+  else if(_docViewMode === "session") btns[1].className = "vt-active";
+  _docPage = 1;
+  loadDocList();
+}
+
+function loadDocList(){
+  var s = document.getElementById("dl-start").value;
+  var e = document.getElementById("dl-end").value;
+  if(!s || !e){ alert("请选择日期"); return; }
+  var kind = document.getElementById("dl-kind").value;
+  var el = document.getElementById("dl-result");
+  el.innerHTML = '<div class="q-empty">加载中...</div>';
+  document.getElementById("dl-pager").style.display = "none";
+
+  var params = {
+    action: "collab_doc_list",
+    start_day: s, end_day: e,
+    summary_mode: _docViewMode === "summary" ? "1" : "0",
+    page: _docPage, page_size: _docPageSize
+  };
+  if(kind) params.wave_kind = kind;
+
+  fetchApi(params).then(function(res){
+    if(!res || !res.ok){
+      el.innerHTML = '<div class="bad">查询失败: '+esc(res&&res.error||"")+'</div>';
+      return;
+    }
+    _docListData = res.docs || [];
+    _docTotal = res.total || 0;
+    _docListFiltered = _docListData;
+    filterDocListLocal();
+    renderDocPager();
+  });
+}
+
+function filterDocListLocal(){
+  var kw = (document.getElementById("dl-keyword").value||"").trim().toLowerCase();
+  if(!kw){
+    _docListFiltered = _docListData;
+  } else {
+    _docListFiltered = _docListData.filter(function(d){
+      return (d.wave_id||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.session||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.customer_name||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.work_day_kst||"").indexOf(kw)>=0;
+    });
+  }
+  renderDocList(_docListFiltered);
+}
+
+function renderDocList(docs){
+  var el = document.getElementById("dl-result");
+  if(!docs.length){
+    el.innerHTML = '<div class="q-empty">暂无记录</div>';
+    return;
+  }
+  var isSummary = _docViewMode === "summary";
+  var html = '<div style="font-size:12px;color:#888;margin-bottom:4px;">本页 '+docs.length+' 条 / 共 '+_docTotal+' 条</div>';
+
+  html += docs.map(function(d){
+    var kindLabel = WAVE_KIND_LABEL[d.wave_kind] || d.task || "";
+    var kindCls = "doc-kind-tag doc-kind-" + (d.doc_class||"wave_only");
+    var linkLabel = LINK_STATUS_LABEL[d.link_status] || d.link_status || "";
+    var linkCls = "link-tag " + linkStatusCls(d.link_status);
+
+    var line1 = '<span class="'+kindCls+'">'+esc(kindLabel)+'</span> ';
+    line1 += '<code>'+esc(d.wave_id)+'</code>';
+    if(d.customer_name) line1 += ' · '+esc(d.customer_name);
+    line1 += ' <span class="'+linkCls+'">'+esc(linkLabel)+'</span>';
+
+    var line2parts = [];
+    line2parts.push(esc(d.work_day_kst || ""));
+    if(d.first_ms) line2parts.push(new Date(d.first_ms).toLocaleTimeString() + '~' + new Date(d.last_ms).toLocaleTimeString());
+    if(isSummary && d.session_count > 1) line2parts.push(d.session_count + ' sessions');
+    if(!isSummary && d.session) line2parts.push('session:' + esc((d.session||"").slice(-8)));
+    var bc = d.session_badge_count || 0;
+    if(bc) line2parts.push(bc + '人[' + esc(d.session_badge_list||"") + ']');
+    if(d.record_count > 1) line2parts.push('×'+d.record_count);
+
+    var line3 = "";
+    if(d.wave_kind === "b2b_workorder" && d.link_status && d.link_status !== "no_binding"){
+      var parts = [];
+      if(d.operation_mode) parts.push(esc(d.operation_mode));
+      if(d.box_count) parts.push('箱:'+d.box_count);
+      if(d.pallet_count) parts.push('托:'+d.pallet_count);
+      if(d.packed_qty) parts.push('件:'+d.packed_qty);
+      if(d.sku_kind_count) parts.push('SKU:'+d.sku_kind_count);
+      if(d.label_count) parts.push('标签:'+d.label_count);
+      if(d.packed_box_count) parts.push('打包箱:'+d.packed_box_count);
+      if(d.did_rebox) parts.push('换箱:'+d.rebox_count);
+      if(d.needs_forklift_pick) parts.push('叉车托:'+d.forklift_pallet_count);
+      if(d.remark) parts.push('备注:'+esc(d.remark));
+      if(parts.length) line3 = '<div class="meta">'+parts.join(' · ')+'</div>';
+      // 内部工单有更多信息
+      if(d.wo_status){
+        var woInfo = '<span class="st st-'+esc(d.wo_status)+'">'+esc(WO_STATUS_LABEL[d.wo_status]||d.wo_status)+'</span>';
+        if(d.has_cancel_notice) woInfo += ' <span class="cancel-notice-tag">已取消</span>';
+        if(d.has_update_notice) woInfo += ' <span class="notice-tag">已变更</span>';
+        line3 = '<div class="meta">'+woInfo+'</div>' + line3;
+      }
+      if(d.confirm_badge) line3 += '<div class="meta">确认: '+esc(d.confirm_badge)+(d.confirmed_by?' ('+esc(d.confirmed_by)+')':'')+'</div>';
+    } else if(d.wave_kind === "b2b_field_op" && d.link_status !== "no_record"){
+      var parts = [];
+      if(d.operation_type) parts.push(esc(FO_OP_TYPE_LABEL[d.operation_type]||d.operation_type));
+      if(d.fo_status) parts.push('<span class="st st-'+esc(d.fo_status)+'">'+esc(FO_STATUS_LABEL[d.fo_status]||d.fo_status)+'</span>');
+      if(d.input_box_count) parts.push('入箱:'+d.input_box_count);
+      if(d.output_box_count) parts.push('出箱:'+d.output_box_count);
+      if(d.output_pallet_count) parts.push('出托:'+d.output_pallet_count);
+      if(d.packed_qty) parts.push('件:'+d.packed_qty);
+      if(d.label_count) parts.push('标签:'+d.label_count);
+      if(d.source_plan_id) parts.push('计划:'+esc(d.source_plan_id));
+      if(d.bound_workorder_id) parts.push('工单:'+esc(d.bound_workorder_id));
+      if(parts.length) line3 = '<div class="meta">'+parts.join(' · ')+'</div>';
+    }
+
+    // 跳转按钮
+    var btns = "";
+    if(d.wave_kind === "b2b_workorder"){
+      btns = '<button style="width:auto;padding:2px 10px;font-size:11px;margin:2px 4px 0 0;" onclick="event.stopPropagation();goWoDetail(\''+esc(d.wave_id)+'\')">查看工单</button>';
+    } else if(d.wave_kind === "b2b_field_op"){
+      btns = '<button style="width:auto;padding:2px 10px;font-size:11px;margin:2px 4px 0 0;" onclick="event.stopPropagation();goFoDetail(\''+esc(d.wave_id)+'\')">查看记录</button>';
+    }
+
+    return '<div class="doc-row">' +
+      '<div>'+line1+'</div>' +
+      '<div class="meta">'+line2parts.join(' · ')+'</div>' +
+      line3 +
+      (btns ? '<div>'+btns+'</div>' : '') +
+    '</div>';
+  }).join("");
+
+  el.innerHTML = html;
+}
+
+function renderDocPager(){
+  var pagerEl = document.getElementById("dl-pager");
+  var totalPages = Math.ceil(_docTotal / _docPageSize) || 1;
+  if(totalPages <= 1){ pagerEl.style.display = "none"; return; }
+  pagerEl.style.display = "";
+  pagerEl.innerHTML =
+    '<button '+((_docPage<=1)?'disabled':'')+' onclick="docPageGo(-1)">上一页</button>' +
+    '<span>第 '+_docPage+' / '+totalPages+' 页</span>' +
+    '<button '+((_docPage>=totalPages)?'disabled':'')+' onclick="docPageGo(1)">下一页</button>';
+}
+
+function docPageGo(delta){
+  _docPage += delta;
+  if(_docPage < 1) _docPage = 1;
+  loadDocList();
+}
+
+function exportDocCsv(){
+  var s = document.getElementById("dl-start").value;
+  var e = document.getElementById("dl-end").value;
+  if(!s || !e){ alert("请选择日期"); return; }
+  var kind = document.getElementById("dl-kind").value;
+
+  var params = new URLSearchParams();
+  params.set("action","collab_doc_export");
+  params.set("k", getKey());
+  params.set("start_day", s);
+  params.set("end_day", e);
+  params.set("summary_mode", _docViewMode === "summary" ? "1" : "0");
+  if(kind) params.set("wave_kind", kind);
+
+  var url = API_URL + "?" + params.toString();
+  // 用隐藏 a 标签触发下载
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "doc_ledger_" + s + "_" + e + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// ===== 作业记录：原始波次流水（保留） =====
 var _waveListData = [];
 var TASK_LABEL_SHORT = {
   "B2C拣货":"拣货","B2C理货":"理货","B2C批量出库":"批量出库",

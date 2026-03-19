@@ -727,6 +727,24 @@ export default {
           }
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v16_result_fields_extend', ?)`).bind(Date.now()).run();
         }
+
+        // --- v17: 台账查询索引 ---
+        const m17 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v17_doc_ledger_indexes'`).first();
+        if (!m17) {
+          // wave 主查询索引：(event, ok) 等值过滤在前，server_ms 范围在中，GROUP BY 列在后
+          // 选择 (event, ok, server_ms) 而非把 biz/task 放前面，因为 biz/task 是可选过滤条件
+          // server_ms 范围扫描后，SQLite 可利用后续列加速 GROUP BY
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_events_wave_agg ON events(event, ok, server_ms, biz, task, wave_id, session)`).run();
+          // join 事件→session 参与工牌反推索引
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_events_join_session_badge ON events(event, ok, session, badge)`).run();
+          // 结果单按日期查询
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_b2b_op_results_day ON b2b_operation_results(day_kst)`).run();
+          // 现场记录按日期查询
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_b2b_field_ops_plan_day ON b2b_field_ops(plan_day)`).run();
+          // 绑定表按日期+单号查询
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_b2b_op_bindings_day_source ON b2b_operation_bindings(day_kst, source_order_no)`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v17_doc_ledger_indexes', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -3553,6 +3571,518 @@ export default {
       }
 
       return jsonpOrJson({ ok:true, waves }, callback);
+    }
+
+    // ===== 协同中心：单据台账查询（session级 / summary级） =====
+    if (action === "collab_doc_list" || action === "collab_doc_export") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_day = String(p.start_day || "").trim();
+      const end_day   = String(p.end_day || "").trim();
+      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
+
+      const startMs = new Date(start_day + "T00:00:00+09:00").getTime();
+      const endMs   = new Date(end_day   + "T23:59:59.999+09:00").getTime();
+      const filterWaveKind = String(p.wave_kind || "").trim();
+      const filterKw       = String(p.keyword || "").trim().toLowerCase();
+      const summaryMode    = String(p.summary_mode || "1") === "1";  // 默认汇总视图
+      const isExport       = action === "collab_doc_export";
+      const page      = Math.max(1, parseInt(p.page) || 1);
+      const page_size = isExport ? 5000 : Math.min(200, Math.max(1, parseInt(p.page_size) || 50));
+
+      // wave_kind ↔ (biz, task) 映射
+      const WAVE_KIND_MAP = {
+        b2c_pick:           { biz:"B2C", task:"拣货" },
+        b2c_tally:          { biz:"B2C", task:"理货" },
+        b2c_batch_out:      { biz:"B2C", task:"批量出库" },
+        b2b_inbound_tally:  { biz:"B2B", task:"B2B入库理货" },
+        b2b_workorder:      { biz:"B2B", task:"B2B工单操作" },
+        b2b_field_op:       { biz:"B2B", task:"B2B现场记录" }
+      };
+      const TASK_TO_KIND = {};
+      for (const [k, v] of Object.entries(WAVE_KIND_MAP)) TASK_TO_KIND[v.biz + "|" + v.task] = k;
+      const DOC_CLASS = { b2b_workorder:"full_doc", b2b_field_op:"full_doc" };
+
+      // 构建主查询 WHERE
+      let whereParts = ["event='wave'", "ok=1", "server_ms >= ?", "server_ms <= ?"];
+      let binds = [startMs, endMs];
+      if (filterWaveKind && WAVE_KIND_MAP[filterWaveKind]) {
+        whereParts.push("biz=?", "task=?");
+        binds.push(WAVE_KIND_MAP[filterWaveKind].biz, WAVE_KIND_MAP[filterWaveKind].task);
+      }
+      const whereClause = whereParts.join(" AND ");
+      const dayExpr = "substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10)";
+
+      let rows, total;
+      if (summaryMode) {
+        // --- Summary 级: GROUP BY biz, task, work_day_kst, wave_id ---
+        const countSql = `SELECT COUNT(*) as cnt FROM (SELECT 1 FROM events WHERE ${whereClause} GROUP BY biz, task, ${dayExpr}, wave_id)`;
+        const countRs = await env.DB.prepare(countSql).bind(...binds).first();
+        total = countRs ? countRs.cnt : 0;
+
+        const mainSql = `SELECT biz, task, wave_id,
+          ${dayExpr} as work_day_kst,
+          COUNT(DISTINCT session) as session_count,
+          MIN(server_ms) as first_ms, MAX(server_ms) as last_ms,
+          COUNT(*) as record_count
+          FROM events WHERE ${whereClause}
+          GROUP BY biz, task, ${dayExpr}, wave_id
+          ORDER BY first_ms DESC
+          LIMIT ? OFFSET ?`;
+        const rs = await env.DB.prepare(mainSql).bind(...binds, page_size, (page - 1) * page_size).all();
+        rows = rs.results || [];
+      } else {
+        // --- Session 级: GROUP BY biz, task, work_day_kst, wave_id, session ---
+        const countSql = `SELECT COUNT(*) as cnt FROM (SELECT 1 FROM events WHERE ${whereClause} GROUP BY biz, task, ${dayExpr}, wave_id, session)`;
+        const countRs = await env.DB.prepare(countSql).bind(...binds).first();
+        total = countRs ? countRs.cnt : 0;
+
+        const mainSql = `SELECT biz, task, wave_id, session,
+          ${dayExpr} as work_day_kst,
+          MIN(server_ms) as first_ms, MAX(server_ms) as last_ms,
+          COUNT(*) as record_count
+          FROM events WHERE ${whereClause}
+          GROUP BY biz, task, ${dayExpr}, wave_id, session
+          ORDER BY first_ms DESC
+          LIMIT ? OFFSET ?`;
+        const rs = await env.DB.prepare(mainSql).bind(...binds, page_size, (page - 1) * page_size).all();
+        rows = rs.results || [];
+      }
+
+      // 补充 wave_kind / doc_class
+      for (const r of rows) {
+        r.wave_kind = TASK_TO_KIND[r.biz + "|" + r.task] || "unknown";
+        r.doc_class = DOC_CLASS[r.wave_kind] || "wave_only";
+        r.link_status = (r.doc_class === "wave_only") ? "unlinked" : "pending_enrich";
+      }
+
+      // keyword 过滤（在分页后的小集合上过滤）
+      if (filterKw) {
+        rows = rows.filter(r =>
+          (r.wave_id || "").toLowerCase().includes(filterKw) ||
+          (r.session || "").toLowerCase().includes(filterKw) ||
+          (r.work_day_kst || "").includes(filterKw)
+        );
+      }
+
+      // ===== 批量查 session 参与工牌 =====
+      // V1 口径：session_badge_count / session_badge_list = session 内 event='join' 的 DISTINCT badge
+      // 不是按 wave 时间窗精确切片的人数，是整个 session 的参与人员
+      const allSessions = [...new Set(rows.map(r => r.session).filter(Boolean))];
+      const badgeMap = {};  // session → { badge_count, badge_list }
+      if (allSessions.length > 0) {
+        // D1 单次 bind 上限约 100，分批
+        for (let i = 0; i < allSessions.length; i += 80) {
+          const batch = allSessions.slice(i, i + 80);
+          const ph = batch.map(() => "?").join(",");
+          const brs = await env.DB.prepare(
+            `SELECT session, COUNT(DISTINCT badge) as badge_count, GROUP_CONCAT(DISTINCT badge) as badge_list
+             FROM events WHERE event='join' AND ok=1 AND session IN (${ph})
+             GROUP BY session`
+          ).bind(...batch).all();
+          for (const b of (brs.results || [])) {
+            badgeMap[b.session] = { badge_count: b.badge_count || 0, badge_list: b.badge_list || "" };
+          }
+        }
+      }
+
+      // summary 模式需要合并多 session 的 badge
+      if (summaryMode && allSessions.length > 0) {
+        // 需要知道每个 (biz,task,day,wave_id) 包含哪些 session → 查一次
+        const sessionMapSql = `SELECT biz, task, ${dayExpr} as work_day_kst, wave_id, session
+          FROM events WHERE ${whereClause} AND session IN (${allSessions.map(()=>"?").join(",")})
+          GROUP BY biz, task, ${dayExpr}, wave_id, session`;
+        // 但这个查询太重，改为：直接用 rows 的 wave_id 去查对应 sessions
+        const waveKeys = rows.map(r => r.biz + "|" + r.task + "|" + r.work_day_kst + "|" + r.wave_id);
+        const waveKeySet = [...new Set(waveKeys)];
+
+        // 批量查每个 wave 的 sessions
+        const waveSessionMap = {};  // waveKey → [session, ...]
+        for (let i = 0; i < waveKeySet.length; i += 20) {
+          const batch = waveKeySet.slice(i, i + 20);
+          // 用 OR 条件构建
+          const orParts = [];
+          const orBinds = [];
+          for (const key of batch) {
+            const [biz, task, day, wid] = key.split("|");
+            orParts.push(`(biz=? AND task=? AND ${dayExpr}=? AND wave_id=?)`);
+            orBinds.push(biz, task, day, wid);
+          }
+          const sessionRs = await env.DB.prepare(
+            `SELECT biz, task, ${dayExpr} as work_day_kst, wave_id, session
+             FROM events WHERE event='wave' AND ok=1 AND server_ms >= ? AND server_ms <= ?
+             AND (${orParts.join(" OR ")})
+             GROUP BY biz, task, ${dayExpr}, wave_id, session`
+          ).bind(startMs, endMs, ...orBinds).all();
+          for (const sr of (sessionRs.results || [])) {
+            const k = sr.biz + "|" + sr.task + "|" + sr.work_day_kst + "|" + sr.wave_id;
+            if (!waveSessionMap[k]) waveSessionMap[k] = [];
+            waveSessionMap[k].push(sr.session);
+          }
+        }
+
+        // 合并 badge
+        for (const r of rows) {
+          const k = r.biz + "|" + r.task + "|" + r.work_day_kst + "|" + r.wave_id;
+          const sessions = waveSessionMap[k] || [];
+          const allBadges = new Set();
+          for (const s of sessions) {
+            const b = badgeMap[s];
+            if (b && b.badge_list) b.badge_list.split(",").forEach(x => { if (x) allBadges.add(x); });
+          }
+          r.session_badge_count = allBadges.size;
+          r.session_badge_list = [...allBadges].join(",");
+        }
+      } else {
+        // session 级直接匹配
+        for (const r of rows) {
+          const b = badgeMap[r.session] || {};
+          r.session_badge_count = b.badge_count || 0;
+          r.session_badge_list = b.badge_list || "";
+        }
+      }
+
+      // ===== Enrichment: B2B工单操作 =====
+      const woRows = rows.filter(r => r.wave_kind === "b2b_workorder");
+      if (woRows.length > 0) {
+        // 步骤1: 批量查 bindings，key = session_id + source_order_no(=wave_id)
+        const woSessions = [...new Set(woRows.map(r => r.session).filter(Boolean))];
+        const bindingMap = {};  // "session|wave_id" → binding
+        const ambiguousSet = new Set();  // "session|wave_id" 有多条 binding
+
+        for (let i = 0; i < woSessions.length; i += 80) {
+          const batch = woSessions.slice(i, i + 80);
+          const ph = batch.map(() => "?").join(",");
+          const brs = await env.DB.prepare(
+            `SELECT session_id, source_type, source_order_no, internal_workorder_id, day_kst, badge, bound_at
+             FROM b2b_operation_bindings WHERE session_id IN (${ph})`
+          ).bind(...batch).all();
+          for (const b of (brs.results || [])) {
+            const key = b.session_id + "|" + b.source_order_no;
+            if (bindingMap[key]) {
+              // 同一 session+source_order_no 出现多条 → ambiguous
+              ambiguousSet.add(key);
+            } else {
+              bindingMap[key] = b;
+            }
+          }
+        }
+
+        // 收集需要查 results 的 (day_kst, source_type, source_order_no) 组合
+        const resultKeys = new Set();
+        const internalWoIds = new Set();
+        for (const r of woRows) {
+          const bk = (r.session || "") + "|" + r.wave_id;
+          const binding = bindingMap[bk];
+          if (binding) {
+            resultKeys.add(binding.day_kst + "|" + binding.source_type + "|" + binding.source_order_no);
+            if (binding.source_type === "internal_b2b_workorder") {
+              internalWoIds.add(binding.source_order_no);
+            }
+          }
+          // summary 模式下可能没有 session → 用 wave_id+day 查 binding
+        }
+
+        // summary 模式补充：wave_id 直接查 bindings（不按 session）
+        if (summaryMode) {
+          const waveIds = [...new Set(woRows.map(r => r.wave_id))];
+          const days = [...new Set(woRows.map(r => r.work_day_kst))];
+          for (let i = 0; i < waveIds.length; i += 80) {
+            const batch = waveIds.slice(i, i + 80);
+            const ph = batch.map(() => "?").join(",");
+            const dayPh = days.map(() => "?").join(",");
+            const brs = await env.DB.prepare(
+              `SELECT session_id, source_type, source_order_no, internal_workorder_id, day_kst, badge, bound_at
+               FROM b2b_operation_bindings WHERE source_order_no IN (${ph}) AND day_kst IN (${dayPh})`
+            ).bind(...batch, ...days).all();
+            for (const b of (brs.results || [])) {
+              resultKeys.add(b.day_kst + "|" + b.source_type + "|" + b.source_order_no);
+              if (b.source_type === "internal_b2b_workorder") internalWoIds.add(b.source_order_no);
+              // summary 模式存到 wave 级 key
+              const wk = b.day_kst + "|" + b.source_order_no;
+              if (!bindingMap["_wave_" + wk]) bindingMap["_wave_" + wk] = b;
+            }
+          }
+        }
+
+        // 步骤2 & 3 并行: 查 results + 查 workorders
+        const resultMap = {};  // "day_kst|source_type|source_order_no" → result
+        const woMap = {};      // workorder_id → wo
+
+        const resultKeysArr = [...resultKeys];
+        const internalWoIdsArr = [...internalWoIds];
+
+        const p2 = (async () => {
+          for (let i = 0; i < resultKeysArr.length; i += 30) {
+            const batch = resultKeysArr.slice(i, i + 30);
+            const orParts = batch.map(() => "(day_kst=? AND source_type=? AND source_order_no=?)");
+            const orBinds = [];
+            for (const k of batch) {
+              const [d, st, so] = k.split("|");
+              orBinds.push(d, st, so);
+            }
+            const rrs = await env.DB.prepare(
+              `SELECT day_kst, source_type, source_order_no, status, operation_mode,
+                      confirm_badge, confirmed_by, sku_kind_count, box_count, pallet_count,
+                      packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
+                      label_count, photo_count, did_pack, did_rebox, rebox_count,
+                      needs_forklift_pick, forklift_pallet_count, rack_pick_location_count, remark,
+                      internal_workorder_id, customer_name
+               FROM b2b_operation_results WHERE ${orParts.join(" OR ")}`
+            ).bind(...orBinds).all();
+            for (const rr of (rrs.results || [])) {
+              resultMap[rr.day_kst + "|" + rr.source_type + "|" + rr.source_order_no] = rr;
+            }
+          }
+        })();
+
+        const p3 = (async () => {
+          for (let i = 0; i < internalWoIdsArr.length; i += 80) {
+            const batch = internalWoIdsArr.slice(i, i + 80);
+            const ph = batch.map(() => "?").join(",");
+            const wrs = await env.DB.prepare(
+              `SELECT workorder_id, status, customer_name, outbound_destination, order_ref_no,
+                      outbound_box_count, outbound_pallet_count, operation_mode,
+                      has_update_notice, has_cancel_notice
+               FROM b2b_workorders WHERE workorder_id IN (${ph})`
+            ).bind(...batch).all();
+            for (const w of (wrs.results || [])) woMap[w.workorder_id] = w;
+          }
+        })();
+
+        await Promise.all([p2, p3]);
+
+        // 步骤4: merge
+        for (const r of woRows) {
+          let binding;
+          if (summaryMode) {
+            binding = bindingMap["_wave_" + r.work_day_kst + "|" + r.wave_id];
+          } else {
+            const bk = (r.session || "") + "|" + r.wave_id;
+            if (ambiguousSet.has(bk)) { r.link_status = "ambiguous_binding"; continue; }
+            binding = bindingMap[bk];
+          }
+
+          if (!binding) { r.link_status = "no_binding"; continue; }
+
+          r.source_type = binding.source_type || "";
+          r.internal_workorder_id = binding.internal_workorder_id || "";
+          const prefix = binding.source_type === "internal_b2b_workorder" ? "internal" :
+                         binding.source_type === "external_wms_workorder" ? "external" : "other";
+
+          const rk = binding.day_kst + "|" + binding.source_type + "|" + binding.source_order_no;
+          const result = resultMap[rk];
+          if (!result) {
+            r.link_status = prefix + "_bound_result_missing";
+          } else {
+            const rs_status = result.status || "draft";
+            r.link_status = prefix + "_bound_result_" + rs_status;
+            r.customer_name = result.customer_name || "";
+            r.operation_mode = result.operation_mode || "";
+            r.result_status = rs_status;
+            r.confirm_badge = result.confirm_badge || "";
+            r.confirmed_by = result.confirmed_by || "";
+            r.sku_kind_count = result.sku_kind_count || 0;
+            r.box_count = result.box_count || 0;
+            r.pallet_count = result.pallet_count || 0;
+            r.packed_qty = result.packed_qty || 0;
+            r.packed_box_count = result.packed_box_count || 0;
+            r.used_carton = result.used_carton || 0;
+            r.big_carton_count = result.big_carton_count || 0;
+            r.small_carton_count = result.small_carton_count || 0;
+            r.label_count = result.label_count || 0;
+            r.photo_count = result.photo_count || 0;
+            r.did_pack = result.did_pack || 0;
+            r.did_rebox = result.did_rebox || 0;
+            r.rebox_count = result.rebox_count || 0;
+            r.needs_forklift_pick = result.needs_forklift_pick || 0;
+            r.forklift_pallet_count = result.forklift_pallet_count || 0;
+            r.rack_pick_location_count = result.rack_pick_location_count || 0;
+            r.remark = result.remark || "";
+          }
+
+          // 内部工单补充
+          if (binding.source_type === "internal_b2b_workorder") {
+            const wo = woMap[binding.source_order_no];
+            if (wo) {
+              if (!r.customer_name) r.customer_name = wo.customer_name || "";
+              r.wo_status = wo.status || "";
+              r.outbound_destination = wo.outbound_destination || "";
+              r.order_ref_no = wo.order_ref_no || "";
+              r.wo_box_count = wo.outbound_box_count || 0;
+              r.wo_pallet_count = wo.outbound_pallet_count || 0;
+              r.has_update_notice = wo.has_update_notice || 0;
+              r.has_cancel_notice = wo.has_cancel_notice || 0;
+              if (!r.operation_mode) r.operation_mode = wo.operation_mode || "";
+            }
+          }
+        }
+      }
+
+      // ===== Enrichment: B2B现场记录 =====
+      const foRows = rows.filter(r => r.wave_kind === "b2b_field_op");
+      if (foRows.length > 0) {
+        const foIds = [...new Set(foRows.map(r => r.wave_id))];
+        const foMap = {};
+
+        for (let i = 0; i < foIds.length; i += 80) {
+          const batch = foIds.slice(i, i + 80);
+          const ph = batch.map(() => "?").join(",");
+          const frs = await env.DB.prepare(
+            `SELECT record_id, status, customer_name, source_plan_id, bound_workorder_id, operation_type,
+                    plan_day, input_box_count, output_box_count, output_pallet_count,
+                    packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
+                    label_count, photo_count, did_pack, did_rebox, rebox_count,
+                    needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
+                    created_by, created_at, completed_at
+             FROM b2b_field_ops WHERE record_id IN (${ph})`
+          ).bind(...batch).all();
+          for (const f of (frs.results || [])) foMap[f.record_id] = f;
+        }
+
+        for (const r of foRows) {
+          const fo = foMap[r.wave_id];
+          if (!fo) { r.link_status = "no_record"; continue; }
+
+          const planLinked = !!(fo.source_plan_id);
+          const woBound = !!(fo.bound_workorder_id);
+          if (planLinked && woBound) r.link_status = "plan_linked_wo_bound";
+          else if (planLinked) r.link_status = "plan_linked_wo_unbound";
+          else if (woBound) r.link_status = "independent_wo_bound";
+          else r.link_status = "independent";
+
+          r.customer_name = fo.customer_name || "";
+          r.fo_status = fo.status || "";
+          r.operation_type = fo.operation_type || "";
+          r.source_plan_id = fo.source_plan_id || "";
+          r.bound_workorder_id = fo.bound_workorder_id || "";
+          r.plan_day = fo.plan_day || "";
+          r.input_box_count = fo.input_box_count || 0;
+          r.output_box_count = fo.output_box_count || 0;
+          r.output_pallet_count = fo.output_pallet_count || 0;
+          r.packed_qty = fo.packed_qty || 0;
+          r.packed_box_count = fo.packed_box_count || 0;
+          r.used_carton = fo.used_carton || 0;
+          r.big_carton_count = fo.big_carton_count || 0;
+          r.small_carton_count = fo.small_carton_count || 0;
+          r.label_count = fo.label_count || 0;
+          r.photo_count = fo.photo_count || 0;
+          r.did_pack = fo.did_pack || 0;
+          r.did_rebox = fo.did_rebox || 0;
+          r.rebox_count = fo.rebox_count || 0;
+          r.needs_forklift_pick = fo.needs_forklift_pick || 0;
+          r.forklift_pallet_count = fo.forklift_pallet_count || 0;
+          r.rack_pick_location_count = fo.rack_pick_location_count || 0;
+          r.created_by = fo.created_by || "";
+          r.fo_created_at = fo.created_at || 0;
+          r.fo_completed_at = fo.completed_at || 0;
+        }
+      }
+
+      // ===== 返回或导出 =====
+      if (isExport) {
+        // CSV 导出（UTF-8 BOM）
+        const CSV_HEADERS = [
+          "作业日期","业务线","任务类型","类型标签","单据分类","单号",
+          "关联状态","客户名","状态",
+          "操作类型/模式","关联工单/计划",
+          "首次作业时间","最后作业时间",
+          summaryMode ? "session数" : "session",
+          "参与人数(V1:session级)","参与工牌列表(V1:session级)",
+          "扫码次数",
+          "箱数","托数","件数","SKU种数",
+          "打包箱数","标签数","照片数",
+          "是否用纸箱","大纸箱数","小纸箱数",
+          "是否换箱","换箱次数",
+          "是否叉车拣货","叉车托数","库位数",
+          "备注","确认工牌","确认人"
+        ];
+        const fmtTime = ms => ms ? new Date(ms).toISOString().replace("T"," ").slice(0,19) : "";
+        const WAVE_KIND_LABEL = {
+          b2c_pick:"B2C拣货", b2c_tally:"B2C理货", b2c_batch_out:"B2C批量出库",
+          b2b_inbound_tally:"B2B入库理货", b2b_workorder:"B2B工单操作", b2b_field_op:"B2B现场记录"
+        };
+
+        const csvRows = [CSV_HEADERS];
+        for (const r of rows) {
+          let status = "";
+          let opMode = "";
+          let relatedDoc = "";
+          if (r.wave_kind === "b2b_workorder") {
+            status = r.result_status || r.wo_status || "";
+            opMode = r.operation_mode || "";
+            relatedDoc = r.internal_workorder_id || "";
+          } else if (r.wave_kind === "b2b_field_op") {
+            status = r.fo_status || "";
+            opMode = r.operation_type || "";
+            relatedDoc = [r.source_plan_id, r.bound_workorder_id].filter(Boolean).join(" / ");
+          }
+          csvRows.push([
+            r.work_day_kst || "",
+            r.biz || "",
+            r.task || "",
+            WAVE_KIND_LABEL[r.wave_kind] || r.wave_kind || "",
+            r.doc_class || "",
+            r.wave_id || "",
+            r.link_status || "",
+            r.customer_name || "",
+            status,
+            opMode,
+            relatedDoc,
+            fmtTime(r.first_ms),
+            fmtTime(r.last_ms),
+            summaryMode ? (r.session_count || 1) : (r.session || ""),
+            r.session_badge_count || 0,
+            r.session_badge_list || "",
+            r.record_count || 0,
+            r.box_count || r.output_box_count || 0,
+            r.pallet_count || r.output_pallet_count || 0,
+            r.packed_qty || 0,
+            r.sku_kind_count || 0,
+            r.packed_box_count || 0,
+            r.label_count || 0,
+            r.photo_count || 0,
+            r.used_carton || 0,
+            r.big_carton_count || 0,
+            r.small_carton_count || 0,
+            r.did_rebox || 0,
+            r.rebox_count || 0,
+            r.needs_forklift_pick || 0,
+            r.forklift_pallet_count || 0,
+            r.rack_pick_location_count || 0,
+            r.remark || "",
+            r.confirm_badge || "",
+            r.confirmed_by || ""
+          ]);
+        }
+
+        const csvContent = csvRows.map(row =>
+          row.map(cell => {
+            const s = String(cell);
+            return s.includes(",") || s.includes('"') || s.includes("\n")
+              ? '"' + s.replace(/"/g, '""') + '"' : s;
+          }).join(",")
+        ).join("\r\n");
+
+        const BOM = "\uFEFF";
+        return new Response(BOM + csvContent, {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": `attachment; filename="doc_ledger_${start_day}_${end_day}.csv"`,
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      }
+
+      // JSON 返回
+      return jsonpOrJson({
+        ok: true,
+        docs: rows,
+        total,
+        page,
+        page_size,
+        has_more: page * page_size < total,
+        badge_note: "V1: session_badge_count/session_badge_list 口径为 session 内 join 事件的 DISTINCT badge，非按 wave 时间窗精确切片"
+      }, callback);
     }
 
     if (action === "b2b_scan_batch_close") {

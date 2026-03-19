@@ -92,6 +92,25 @@
     .wave-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;cursor:pointer;}
     .wave-row:hover{background:#f9f9f9;}
     .wave-detail-box{background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;margin:4px 0 8px;font-size:12px;}
+    .doc-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;}
+    .doc-row:last-child{border-bottom:none;}
+    .doc-row .meta{color:#666;font-size:12px;margin-top:2px;}
+    .doc-kind-tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;margin-right:4px;}
+    .doc-kind-full_doc{background:#e8f5e9;color:#2e7d32;}
+    .doc-kind-wave_only{background:#f5f5f5;color:#888;}
+    .link-tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-left:4px;}
+    .link-completed{background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7;}
+    .link-draft{background:#fff3e0;color:#e65100;border:1px solid #ffcc80;}
+    .link-missing{background:#ffebee;color:#c62828;border:1px solid #ef9a9a;}
+    .link-unlinked{background:#f5f5f5;color:#999;border:1px solid #e0e0e0;}
+    .link-default{background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;}
+    .view-toggle{display:flex;gap:0;margin-bottom:10px;}
+    .view-toggle button{width:auto!important;min-width:0;margin:0;padding:6px 16px;font-size:12px;font-weight:700;border:1px solid #ccc;background:#f5f5f5;color:#666;border-radius:0;cursor:pointer;}
+    .view-toggle button:first-child{border-radius:6px 0 0 6px;}
+    .view-toggle button:last-child{border-radius:0 6px 6px 0;}
+    .view-toggle button.vt-active{background:#1565c0;color:#fff;border-color:#1565c0;}
+    .pager{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:10px;font-size:13px;}
+    .pager button{width:auto!important;min-width:0;padding:4px 14px;font-size:12px;margin:0;border-radius:6px;}
     .cross-ref{border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;margin:10px 0;background:#fafafa;}
     .cross-ref-title{font-size:13px;font-weight:700;margin-bottom:6px;}
     .cross-ref-row{border-bottom:1px solid #f0f0f0;padding:4px 0;font-size:12px;cursor:pointer;}
@@ -407,11 +426,63 @@
     <div class="card" id="sc-detail-card"></div>
   </div>
 
-  <!-- 作业记录（波次/单号） -->
+  <!-- 作业记录：单据台账 -->
+  <div id="v-doc_list" style="display:none;">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <div style="font-size:16px;font-weight:700;">作业记录</div>
+        <div class="view-toggle" id="docViewToggle">
+          <button class="vt-active" onclick="switchDocView('summary')">按单号汇总</button>
+          <button onclick="switchDocView('session')">按Session明细</button>
+          <button onclick="switchDocView('raw')">原始流水</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#999;margin-bottom:10px;">V1口径：参与人数/工牌列表 = session内join事件的DISTINCT badge，非按wave时间窗精确切片</div>
+
+      <!-- 台账筛选 -->
+      <div id="docFilterArea">
+        <div class="row">
+          <div class="form-group"><label>开始日期</label><input id="dl-start" type="date" /></div>
+          <div class="form-group"><label>结束日期</label><input id="dl-end" type="date" /></div>
+          <div class="form-group">
+            <label>类型</label>
+            <select id="dl-kind">
+              <option value="">全部</option>
+              <option value="b2b_workorder">B2B工单操作</option>
+              <option value="b2b_field_op">B2B现场记录</option>
+              <option value="b2c_pick">B2C拣货</option>
+              <option value="b2c_tally">B2C理货</option>
+              <option value="b2c_batch_out">B2C批量出库</option>
+              <option value="b2b_inbound_tally">B2B入库理货</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:4px;">
+            <button class="primary" style="width:auto;min-width:70px;" onclick="loadDocList()">查询</button>
+            <button style="width:auto;min-width:70px;background:#27ae60;color:#fff;" onclick="exportDocCsv()">导出CSV</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <input id="dl-keyword" placeholder="关键词（单号 / session / 客户名）" style="width:100%;box-sizing:border-box;" onkeyup="filterDocListLocal()" />
+        </div>
+      </div>
+
+      <div id="dl-result" style="margin-top:10px;"></div>
+      <div id="dl-pager" class="pager" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- 作业记录：原始波次流水（保留） -->
   <div id="v-wave_list" style="display:none;">
     <div class="card">
-      <div style="font-size:16px;font-weight:700;margin-bottom:4px;">作业记录编号</div>
-      <div style="font-size:12px;color:#888;margin-bottom:10px;">现场已扫过 / 记录过的波次、单号、工单号、FO号</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <div style="font-size:16px;font-weight:700;">原始作业流水</div>
+        <div class="view-toggle">
+          <button onclick="switchDocView('summary')">按单号汇总</button>
+          <button onclick="switchDocView('session')">按Session明细</button>
+          <button class="vt-active" onclick="switchDocView('raw')">原始流水</button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px;">现场已扫过 / 记录过的波次、单号、工单号、FO号（调试用）</div>
       <div class="row">
         <div class="form-group"><label>开始日期</label><input id="hw-start" type="date" /></div>
         <div class="form-group"><label>结束日期</label><input id="hw-end" type="date" /></div>
