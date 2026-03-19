@@ -5,13 +5,24 @@ var B2B_EARLIEST_DAY = "2020-01-01";
 
 // ===== 防重提交 =====
 var _submitting = false;
-var _pendingRequestId = null;
 function genRequestId(){ return "rid-" + Date.now() + "-" + Math.random().toString(36).slice(2,8); }
-function getOrCreateRequestId(){
-  if(!_pendingRequestId) _pendingRequestId = genRequestId();
-  return _pendingRequestId;
+var _planPendingRid = null;
+var _woPendingRid = null;
+var _foPendingRid = null;
+var _scPendingRid = null;
+function getOrCreateRid(kind){
+  if(kind==="plan"){ if(!_planPendingRid) _planPendingRid=genRequestId(); return _planPendingRid; }
+  if(kind==="wo"){ if(!_woPendingRid) _woPendingRid=genRequestId(); return _woPendingRid; }
+  if(kind==="fo"){ if(!_foPendingRid) _foPendingRid=genRequestId(); return _foPendingRid; }
+  if(kind==="sc"){ if(!_scPendingRid) _scPendingRid=genRequestId(); return _scPendingRid; }
+  return genRequestId();
 }
-function clearRequestId(){ _pendingRequestId = null; }
+function clearRid(kind){
+  if(kind==="plan") _planPendingRid=null;
+  else if(kind==="wo") _woPendingRid=null;
+  else if(kind==="fo") _foPendingRid=null;
+  else if(kind==="sc") _scPendingRid=null;
+}
 
 // ===== 工具函数 =====
 function esc(s){ return String(s||"").replace(/[&<>"']/g, function(c){ return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]; }); }
@@ -1094,11 +1105,11 @@ function submitPlan(){
     fetchApi({
       action:"b2b_plan_create", plan_day:day, customer_name:customer, biz_type:biz,
       goods_summary:summary, expected_arrival_time:arrival, purpose_text:purpose,
-      remark:remark, created_by:creator, request_id:getOrCreateRequestId()
+      remark:remark, created_by:creator, request_id:getOrCreateRid("plan")
     }).then(function(res){
       _submitting = false; btn.disabled = false; btn.textContent = "保存";
       if(res && res.ok){
-        clearRequestId();
+        clearRid("plan");
         alert("创建成功！编号: " + res.plan_id);
         _editingPlanId = null;
         _navStack = [];
@@ -1345,11 +1356,11 @@ function submitWo(){
       external_workorder_no:extNo, instruction_text:instr,
       outbound_destination:destination, order_ref_no:orderRef,
       outbound_box_count:boxCount, outbound_pallet_count:palletCount,
-      created_by:creator, lines:lines, request_id:getOrCreateRequestId()
+      created_by:creator, lines:lines, request_id:getOrCreateRid("wo")
     }).then(function(res){
       _submitting = false; btn.disabled = false; btn.textContent = origBtnText;
       if(res && res.ok){
-        clearRequestId();
+        clearRid("wo");
         _editingWoId = null;
         goWoDetail(res.workorder_id, true);
       } else {
@@ -2301,13 +2312,13 @@ function submitFo(){
       goods_summary:summary, operation_type:optype,
       input_box_count:inputBox, output_box_count:outputBox,
       output_pallet_count:outputPallet, instruction_text:instr, created_by:creator,
-      request_id:getOrCreateRequestId()
+      request_id:getOrCreateRid("fo")
     };
     if(_foSourcePlanId) params.source_plan_id = _foSourcePlanId;
     fetchApi(params).then(function(res){
       _submitting = false; foBtn.disabled = false; foBtn.textContent = foOrigText;
       if(res && res.ok){
-        clearRequestId();
+        clearRid("fo");
         alert("创建成功！编号: " + res.record_id);
         goFoDetail(res.record_id, true);
       } else {
@@ -2660,13 +2671,13 @@ function submitSc(){
     action:"b2b_scan_batch_create",
     check_day:day, batch_name:name, created_by:creator,
     items:JSON.stringify(items),
-    request_id:getOrCreateRequestId()
+    request_id:getOrCreateRid("sc")
   }).then(function(res){
     _submitting = false;
     document.getElementById("sc-submit-btn").disabled = false;
     document.getElementById("sc-submit-btn").textContent = "确认创建批次";
     if(res && res.ok){
-      clearRequestId();
+      clearRid("sc");
       alert("创建成功！批次编号: " + res.batch_id + "\n条码: " + res.total_barcodes + " 种\n总箱数: " + res.total_expected_boxes);
       goScDetail(res.batch_id, true);
     } else {

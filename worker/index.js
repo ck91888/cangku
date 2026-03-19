@@ -770,6 +770,23 @@ export default {
           )`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v19_idempotency_keys', ?)`).bind(Date.now()).run();
         }
+
+        // --- v20: 幂等表主键改为 (action, request_id) ---
+        const m20 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v20_idempotency_composite_pk'`).first();
+        if (!m20) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS api_idempotency_keys_v2 (
+            action TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            result_id TEXT NOT NULL DEFAULT '',
+            response_json TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (action, request_id)
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys_v2(action,request_id,result_id,response_json,created_at) SELECT action,request_id,result_id,response_json,created_at FROM api_idempotency_keys`).run();
+          await env.DB.prepare(`DROP TABLE IF EXISTS api_idempotency_keys`).run();
+          await env.DB.prepare(`ALTER TABLE api_idempotency_keys_v2 RENAME TO api_idempotency_keys`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v20_idempotency_composite_pk', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2380,7 +2397,7 @@ export default {
 
       const respPlan = { ok:true, plan_id };
       if (req_id) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(plan_id, JSON.stringify(respPlan), req_id).run();
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_plan_create' AND request_id=?`).bind(plan_id, JSON.stringify(respPlan), req_id).run();
       }
       return jsonpOrJson(respPlan, callback);
     }
@@ -2585,7 +2602,7 @@ export default {
 
       const respWo = { ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm };
       if (req_id_wo) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(workorder_id, JSON.stringify(respWo), req_id_wo).run();
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_wo_create' AND request_id=?`).bind(workorder_id, JSON.stringify(respWo), req_id_wo).run();
       }
       return jsonpOrJson(respWo, callback);
     }
@@ -3046,7 +3063,7 @@ export default {
 
       const respFo = { ok:true, record_id };
       if (req_id_fo) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(record_id, JSON.stringify(respFo), req_id_fo).run();
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_field_op_create' AND request_id=?`).bind(record_id, JSON.stringify(respFo), req_id_fo).run();
       }
       return jsonpOrJson(respFo, callback);
     }
@@ -3528,7 +3545,7 @@ export default {
 
       const respSc = { ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected };
       if (req_id_sc) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE request_id=?`).bind(batch_id, JSON.stringify(respSc), req_id_sc).run();
+        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(batch_id, JSON.stringify(respSc), req_id_sc).run();
       }
       return jsonpOrJson(respSc, callback);
     }
