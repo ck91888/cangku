@@ -518,6 +518,7 @@ function loadDocList(){
   el.innerHTML = '<div class="q-empty">加载中...</div>';
   document.getElementById("dl-pager").style.display = "none";
 
+  var kw = (document.getElementById("dl-keyword").value||"").trim();
   var params = {
     action: "collab_doc_list",
     start_day: s, end_day: e,
@@ -525,6 +526,7 @@ function loadDocList(){
     page: _docPage, page_size: _docPageSize
   };
   if(kind) params.wave_kind = kind;
+  if(kw) params.keyword = kw;
 
   fetchApi(params).then(function(res){
     if(!res || !res.ok){
@@ -539,16 +541,27 @@ function loadDocList(){
   });
 }
 
+function docKeywordKeyup(ev){
+  if(ev && ev.key === "Enter"){
+    // 回车 → 重置页码，走后端搜索
+    _docPage = 1;
+    loadDocList();
+    return;
+  }
+  // 非回车 → 在当前页数据上本地过滤 customer_name（enrichment后字段，后端SQL无法过滤）
+  filterDocListLocal();
+}
+
 function filterDocListLocal(){
   var kw = (document.getElementById("dl-keyword").value||"").trim().toLowerCase();
   if(!kw){
     _docListFiltered = _docListData;
   } else {
+    // 本地只额外过滤 customer_name（后端已用 LIKE 过滤了 wave_id/session）
     _docListFiltered = _docListData.filter(function(d){
-      return (d.wave_id||"").toLowerCase().indexOf(kw)>=0 ||
-             (d.session||"").toLowerCase().indexOf(kw)>=0 ||
-             (d.customer_name||"").toLowerCase().indexOf(kw)>=0 ||
-             (d.work_day_kst||"").indexOf(kw)>=0;
+      return (d.customer_name||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.wave_id||"").toLowerCase().indexOf(kw)>=0 ||
+             (d.session||"").toLowerCase().indexOf(kw)>=0;
     });
   }
   renderDocList(_docListFiltered);
@@ -660,6 +673,7 @@ function exportDocCsv(){
   var e = document.getElementById("dl-end").value;
   if(!s || !e){ alert("请选择日期"); return; }
   var kind = document.getElementById("dl-kind").value;
+  var kw = (document.getElementById("dl-keyword").value||"").trim();
 
   var params = new URLSearchParams();
   params.set("action","collab_doc_export");
@@ -668,6 +682,7 @@ function exportDocCsv(){
   params.set("end_day", e);
   params.set("summary_mode", _docViewMode === "summary" ? "1" : "0");
   if(kind) params.set("wave_kind", kind);
+  if(kw) params.set("keyword", kw);
 
   var url = API_URL + "?" + params.toString();
   // 用隐藏 a 标签触发下载

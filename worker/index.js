@@ -3480,7 +3480,7 @@ export default {
       }, callback);
     }
 
-    // ===== 协同中心：作业记录波次/单号 只读查询 =====
+    // ===== 协同中心：作业记录波次/单号 只读查询（已优化：批量查询+内存merge） =====
     if (action === "collab_wave_list") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const start_day = String(p.start_day || "").trim();
@@ -3493,28 +3493,42 @@ export default {
       const filterTask = String(p.task || "").trim();
       const filterKw   = String(p.keyword || "").trim().toLowerCase();
 
-      let sql = `SELECT biz, task, session, wave_id,
-                        MIN(server_ms) as first_ms, MAX(server_ms) as last_ms,
-                        COUNT(*) as record_count
-                 FROM events
-                 WHERE event='wave' AND ok=1 AND server_ms >= ? AND server_ms <= ?`;
+      // 步骤1: 主聚合查询（含 operator_id 子查询，消灭 N+1）
+      let whereParts = ["e1.event='wave'", "e1.ok=1", "e1.server_ms >= ?", "e1.server_ms <= ?"];
       const binds = [startMs, endMs];
-      if (filterBiz)  { sql += " AND biz=?";  binds.push(filterBiz); }
-      if (filterTask) { sql += " AND task=?"; binds.push(filterTask); }
-      sql += " GROUP BY biz, task, session, wave_id ORDER BY first_ms DESC";
+      if (filterBiz)  { whereParts.push("e1.biz=?");  binds.push(filterBiz); }
+      if (filterTask) { whereParts.push("e1.task=?"); binds.push(filterTask); }
+      if (filterKw) {
+        whereParts.push("(e1.wave_id LIKE ? OR e1.session LIKE ?)");
+        const kwLike = "%" + filterKw + "%";
+        binds.push(kwLike, kwLike);
+      }
+      const wc = whereParts.join(" AND ");
 
-      const rs = await env.DB.prepare(sql).bind(...binds).all();
+      const mainSql = `SELECT e1.biz, e1.task, e1.session, e1.wave_id,
+                              MIN(e1.server_ms) as first_ms, MAX(e1.server_ms) as last_ms,
+                              COUNT(*) as record_count,
+                              (SELECT e2.operator_id FROM events e2
+                               WHERE e2.event='wave' AND e2.ok=1
+                               AND e2.biz=e1.biz AND e2.task=e1.task AND e2.session=e1.session AND e2.wave_id=e1.wave_id
+                               ORDER BY e2.server_ms DESC LIMIT 1) as operator_id
+                       FROM events e1
+                       WHERE ${wc}
+                       GROUP BY e1.biz, e1.task, e1.session, e1.wave_id
+                       ORDER BY first_ms DESC`;
+
+      const rs = await env.DB.prepare(mainSql).bind(...binds).all();
       let waves = (rs.results || []);
 
-      for (let i = 0; i < waves.length; i++) {
-        const w = waves[i];
-        const opRow = await env.DB.prepare(
-          `SELECT operator_id FROM events WHERE event='wave' AND ok=1 AND biz=? AND task=? AND session=? AND wave_id=? ORDER BY server_ms DESC LIMIT 1`
-        ).bind(w.biz, w.task, w.session, w.wave_id).first();
-        w.operator_id = opRow ? (opRow.operator_id || "") : "";
+      // 计算 day_kst
+      for (const w of waves) {
+        w.operator_id = w.operator_id || "";
         w.day_kst = start_day === end_day ? start_day : new Date(w.first_ms + 9*3600*1000).toISOString().slice(0,10);
+        w.detail_type = "generic_wave";
+        w.detail_found = false;
       }
 
+      // keyword 补充过滤 operator_id（子查询结果在主查询后才可用）
       if (filterKw) {
         waves = waves.filter(w =>
           (w.wave_id || "").toLowerCase().includes(filterKw) ||
@@ -3523,18 +3537,43 @@ export default {
         );
       }
 
-      for (let i = 0; i < waves.length; i++) {
-        const w = waves[i];
-        w.detail_type = "generic_wave";
-        w.detail_found = false;
+      // 步骤2: 批量 enrich B2B工单操作
+      const woWaves = waves.filter(w => w.task === "B2B工单操作");
+      if (woWaves.length > 0) {
+        const woIds = [...new Set(woWaves.map(w => w.wave_id))];
+        const woDays = [...new Set(woWaves.map(w => w.day_kst))];
+        // 并行查 workorders + results
+        const woMap = {};
+        const resultMap = {};
+        const pWo = (async () => {
+          for (let i = 0; i < woIds.length; i += 80) {
+            const batch = woIds.slice(i, i + 80);
+            const ph = batch.map(() => "?").join(",");
+            const wrs = await env.DB.prepare(
+              `SELECT workorder_id, status, customer_name, outbound_destination, order_ref_no,
+                      outbound_box_count, outbound_pallet_count, has_update_notice, has_cancel_notice
+               FROM b2b_workorders WHERE workorder_id IN (${ph})`
+            ).bind(...batch).all();
+            for (const wo of (wrs.results || [])) woMap[wo.workorder_id] = wo;
+          }
+        })();
+        const pRes = (async () => {
+          for (let i = 0; i < woIds.length; i += 80) {
+            const batch = woIds.slice(i, i + 80);
+            const ph = batch.map(() => "?").join(",");
+            const dayPh = woDays.map(() => "?").join(",");
+            const rrs = await env.DB.prepare(
+              `SELECT day_kst, source_order_no, status, operation_mode, confirm_badge
+               FROM b2b_operation_results WHERE source_order_no IN (${ph}) AND day_kst IN (${dayPh})`
+            ).bind(...batch, ...woDays).all();
+            for (const r of (rrs.results || [])) resultMap[r.day_kst + "|" + r.source_order_no] = r;
+          }
+        })();
+        await Promise.all([pWo, pRes]);
 
-        if (w.task === "B2B工单操作") {
+        for (const w of woWaves) {
           w.detail_type = "b2b_workorder";
-          const wo = await env.DB.prepare(
-            `SELECT workorder_id, status, customer_name, outbound_destination, order_ref_no,
-                    outbound_box_count, outbound_pallet_count, has_update_notice, has_cancel_notice
-             FROM b2b_workorders WHERE workorder_id=?`
-          ).bind(w.wave_id).first();
+          const wo = woMap[w.wave_id];
           if (wo) {
             w.detail_found = true;
             w.wo_status = wo.status; w.customer_name = wo.customer_name || "";
@@ -3545,21 +3584,33 @@ export default {
             w.has_update_notice = wo.has_update_notice || 0;
             w.has_cancel_notice = wo.has_cancel_notice || 0;
           }
-          const result = await env.DB.prepare(
-            `SELECT status, operation_mode, confirm_badge FROM b2b_operation_results
-             WHERE day_kst=? AND source_order_no=? LIMIT 1`
-          ).bind(w.day_kst, w.wave_id).first();
+          const rk = w.day_kst + "|" + w.wave_id;
+          const result = resultMap[rk];
           if (result) {
             w.result_status = result.status || "";
             w.result_operation_mode = result.operation_mode || "";
             w.result_confirm_badge = result.confirm_badge || "";
           }
-        } else if (w.task === "B2B现场记录") {
-          w.detail_type = "b2b_field_op";
-          const fo = await env.DB.prepare(
+        }
+      }
+
+      // 步骤3: 批量 enrich B2B现场记录
+      const foWaves = waves.filter(w => w.task === "B2B现场记录");
+      if (foWaves.length > 0) {
+        const foIds = [...new Set(foWaves.map(w => w.wave_id))];
+        const foMap = {};
+        for (let i = 0; i < foIds.length; i += 80) {
+          const batch = foIds.slice(i, i + 80);
+          const ph = batch.map(() => "?").join(",");
+          const frs = await env.DB.prepare(
             `SELECT record_id, status, customer_name, source_plan_id, bound_workorder_id, operation_type
-             FROM b2b_field_ops WHERE record_id=?`
-          ).bind(w.wave_id).first();
+             FROM b2b_field_ops WHERE record_id IN (${ph})`
+          ).bind(...batch).all();
+          for (const f of (frs.results || [])) foMap[f.record_id] = f;
+        }
+        for (const w of foWaves) {
+          w.detail_type = "b2b_field_op";
+          const fo = foMap[w.wave_id];
           if (fo) {
             w.detail_found = true;
             w.fo_status = fo.status; w.customer_name = fo.customer_name || "";
@@ -3609,6 +3660,13 @@ export default {
         whereParts.push("biz=?", "task=?");
         binds.push(WAVE_KIND_MAP[filterWaveKind].biz, WAVE_KIND_MAP[filterWaveKind].task);
       }
+      // keyword 下推到 SQL HAVING（wave_id / session 在 GROUP BY 列中可直接过滤）
+      // work_day_kst 是计算列，用 HAVING 过滤
+      if (filterKw) {
+        whereParts.push("(wave_id LIKE ? OR session LIKE ?)");
+        const kwLike = "%" + filterKw + "%";
+        binds.push(kwLike, kwLike);
+      }
       const whereClause = whereParts.join(" AND ");
       const dayExpr = "substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10)";
 
@@ -3653,15 +3711,6 @@ export default {
         r.wave_kind = TASK_TO_KIND[r.biz + "|" + r.task] || "unknown";
         r.doc_class = DOC_CLASS[r.wave_kind] || "wave_only";
         r.link_status = (r.doc_class === "wave_only") ? "unlinked" : "pending_enrich";
-      }
-
-      // keyword 过滤（在分页后的小集合上过滤）
-      if (filterKw) {
-        rows = rows.filter(r =>
-          (r.wave_id || "").toLowerCase().includes(filterKw) ||
-          (r.session || "").toLowerCase().includes(filterKw) ||
-          (r.work_day_kst || "").includes(filterKw)
-        );
       }
 
       // ===== 批量查 session 参与工牌 =====
@@ -3782,7 +3831,8 @@ export default {
           // summary 模式下可能没有 session → 用 wave_id+day 查 binding
         }
 
-        // summary 模式补充：wave_id 直接查 bindings（不按 session）
+        // summary 模式补充：wave_id 直接查 bindings（不按 session），含冲突检测
+        const summaryAmbiguousSet = new Set();  // day_kst|source_order_no 有不一致 binding
         if (summaryMode) {
           const waveIds = [...new Set(woRows.map(r => r.wave_id))];
           const days = [...new Set(woRows.map(r => r.work_day_kst))];
@@ -3797,9 +3847,18 @@ export default {
             for (const b of (brs.results || [])) {
               resultKeys.add(b.day_kst + "|" + b.source_type + "|" + b.source_order_no);
               if (b.source_type === "internal_b2b_workorder") internalWoIds.add(b.source_order_no);
-              // summary 模式存到 wave 级 key
+              // summary 模式：检测同 day+wave_id 是否有不一致的 binding
               const wk = b.day_kst + "|" + b.source_order_no;
-              if (!bindingMap["_wave_" + wk]) bindingMap["_wave_" + wk] = b;
+              const existing = bindingMap["_wave_" + wk];
+              if (!existing) {
+                bindingMap["_wave_" + wk] = b;
+              } else {
+                // 检查 source_type / internal_workorder_id 是否一致
+                if (existing.source_type !== b.source_type ||
+                    (existing.internal_workorder_id || "") !== (b.internal_workorder_id || "")) {
+                  summaryAmbiguousSet.add(wk);
+                }
+              }
             }
           }
         }
@@ -3855,7 +3914,9 @@ export default {
         for (const r of woRows) {
           let binding;
           if (summaryMode) {
-            binding = bindingMap["_wave_" + r.work_day_kst + "|" + r.wave_id];
+            const swk = r.work_day_kst + "|" + r.wave_id;
+            if (summaryAmbiguousSet.has(swk)) { r.link_status = "ambiguous_binding"; continue; }
+            binding = bindingMap["_wave_" + swk];
           } else {
             const bk = (r.session || "") + "|" + r.wave_id;
             if (ambiguousSet.has(bk)) { r.link_status = "ambiguous_binding"; continue; }
