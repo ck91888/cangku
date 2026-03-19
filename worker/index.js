@@ -3462,6 +3462,110 @@ export default {
       }, callback);
     }
 
+    // ===== 协同中心：作业记录波次/单号 只读查询 =====
+    if (action === "collab_wave_list") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const start_day = String(p.start_day || "").trim();
+      const end_day = String(p.end_day || "").trim();
+      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
+
+      // KST 日期范围转 server_ms 范围
+      const startMs = new Date(start_day + "T00:00:00+09:00").getTime();
+      const endMs   = new Date(end_day   + "T23:59:59.999+09:00").getTime();
+
+      // 可选筛选
+      const filterBiz  = String(p.biz || "").trim();
+      const filterTask = String(p.task || "").trim();
+      const filterKw   = String(p.keyword || "").trim().toLowerCase();
+
+      // 按 biz, task, session, wave_id 聚合
+      let sql = `SELECT biz, task, session, wave_id,
+                        MIN(server_ms) as first_ms, MAX(server_ms) as last_ms,
+                        COUNT(*) as record_count
+                 FROM events
+                 WHERE event='wave' AND ok=1 AND server_ms >= ? AND server_ms <= ?`;
+      const binds = [startMs, endMs];
+      if (filterBiz)  { sql += " AND biz=?";  binds.push(filterBiz); }
+      if (filterTask) { sql += " AND task=?"; binds.push(filterTask); }
+      sql += " GROUP BY biz, task, session, wave_id ORDER BY first_ms DESC";
+
+      const rs = await env.DB.prepare(sql).bind(...binds).all();
+      let waves = (rs.results || []);
+
+      // 取每组最新 operator_id（简化：单独查最新一条）
+      for (let i = 0; i < waves.length; i++) {
+        const w = waves[i];
+        const opRow = await env.DB.prepare(
+          `SELECT operator_id FROM events WHERE event='wave' AND ok=1 AND biz=? AND task=? AND session=? AND wave_id=? ORDER BY server_ms DESC LIMIT 1`
+        ).bind(w.biz, w.task, w.session, w.wave_id).first();
+        w.operator_id = opRow ? (opRow.operator_id || "") : "";
+        w.day_kst = start_day === end_day ? start_day : new Date(w.first_ms + 9*3600*1000).toISOString().slice(0,10);
+      }
+
+      // 关键词过滤（前端也可以做，但后端先过滤减少返回量）
+      if (filterKw) {
+        waves = waves.filter(w =>
+          (w.wave_id || "").toLowerCase().includes(filterKw) ||
+          (w.session || "").toLowerCase().includes(filterKw) ||
+          (w.operator_id || "").toLowerCase().includes(filterKw)
+        );
+      }
+
+      // 补详情摘要
+      for (let i = 0; i < waves.length; i++) {
+        const w = waves[i];
+        w.detail_type = "generic_wave";
+        w.detail_found = false;
+        w.detail_summary = "";
+
+        if (w.task === "B2B工单操作") {
+          w.detail_type = "b2b_workorder";
+          const wo = await env.DB.prepare(
+            `SELECT workorder_id, status, customer_name, outbound_destination, order_ref_no,
+                    outbound_box_count, outbound_pallet_count, has_update_notice, has_cancel_notice
+             FROM b2b_workorders WHERE workorder_id=?`
+          ).bind(w.wave_id).first();
+          if (wo) {
+            w.detail_found = true;
+            w.wo_status = wo.status;
+            w.customer_name = wo.customer_name || "";
+            w.outbound_destination = wo.outbound_destination || "";
+            w.order_ref_no = wo.order_ref_no || "";
+            w.outbound_box_count = wo.outbound_box_count || 0;
+            w.outbound_pallet_count = wo.outbound_pallet_count || 0;
+            w.has_update_notice = wo.has_update_notice || 0;
+            w.has_cancel_notice = wo.has_cancel_notice || 0;
+          }
+          // 结果单摘要（按 wave 事件 day_kst + source_order_no = wave_id）
+          const result = await env.DB.prepare(
+            `SELECT status, operation_mode, confirm_badge FROM b2b_operation_results
+             WHERE day_kst=? AND source_order_no=? LIMIT 1`
+          ).bind(w.day_kst, w.wave_id).first();
+          if (result) {
+            w.result_status = result.status || "";
+            w.result_operation_mode = result.operation_mode || "";
+            w.result_confirm_badge = result.confirm_badge || "";
+          }
+        } else if (w.task === "B2B现场记录") {
+          w.detail_type = "b2b_field_op";
+          const fo = await env.DB.prepare(
+            `SELECT record_id, status, customer_name, source_plan_id, bound_workorder_id, operation_type
+             FROM b2b_field_ops WHERE record_id=?`
+          ).bind(w.wave_id).first();
+          if (fo) {
+            w.detail_found = true;
+            w.fo_status = fo.status;
+            w.customer_name = fo.customer_name || "";
+            w.source_plan_id = fo.source_plan_id || "";
+            w.bound_workorder_id = fo.bound_workorder_id || "";
+            w.operation_type = fo.operation_type || "";
+          }
+        }
+      }
+
+      return jsonpOrJson({ ok:true, waves }, callback);
+    }
+
     if (action === "b2b_scan_batch_close") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const batch_id = String(p.batch_id || "").trim();

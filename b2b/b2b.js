@@ -104,13 +104,30 @@ function showMain(){
 }
 
 // ===== 视图切换 =====
-var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail","v-sc_create","v-sc_list","v-sc_detail"];
+var ALL_VIEWS = ["v-home","v-plan_create","v-wo_create","v-plan_list","v-plan_detail","v-wo_list","v-wo_detail","v-fo_create","v-fo_list","v-fo_detail","v-sc_create","v-sc_list","v-sc_detail"];
 function goView(name){
   ALL_VIEWS.forEach(function(v){ document.getElementById(v).style.display = (v === "v-" + name) ? "" : "none"; });
   if(name === "plan_list") initPlanList();
   if(name === "wo_list") initWoList();
   if(name === "fo_list") initFoList();
   if(name === "sc_list") initScList();
+}
+
+// ===== Tab 导航 =====
+var _currentTab = "home";
+function goTab(tab){
+  _currentTab = tab;
+  // 更新 tab-bar active
+  var btns = document.querySelectorAll("#mainTabBar button");
+  var tabOrder = ["home","plan","wo","fo","sc"];
+  for(var i = 0; i < btns.length && i < tabOrder.length; i++){
+    btns[i].className = (tabOrder[i] === tab) ? "tab-active" : "";
+  }
+  if(tab === "home"){ goHome(); return; }
+  if(tab === "plan"){ _planListScope = "today"; goView("plan_list"); return; }
+  if(tab === "wo"){ _woListScope = "today"; goView("wo_list"); return; }
+  if(tab === "fo"){ goView("fo_list"); return; }
+  if(tab === "sc"){ goView("sc_list"); return; }
 }
 function goHome(){
   goView("home");
@@ -145,52 +162,60 @@ var _woListScope = "today";
 
 function loadHome(){
   var today = kstToday();
-  var tmr = kstTomorrow();
-  var yesterday = kstYesterday();
   document.getElementById("todayPill").textContent = today;
 
-  ["ip-today","ip-tmr","wo-today","wo-tmr"].forEach(function(p){
+  ["ip-today","wo-today","fo-today","sc-today"].forEach(function(p){
     document.getElementById(p + "-count").textContent = "--";
     document.getElementById(p + "-body").innerHTML = '<div class="q-empty">加载中...</div>';
   });
+  document.getElementById("home-alerts").innerHTML = "";
+
+  // 默认波次查询日期
+  document.getElementById("hw-start").value = today;
+  document.getElementById("hw-end").value = today;
 
   Promise.all([
-    fetchApi({ action:"b2b_plan_list", start_day:today, end_day:tmr }),
-    fetchApi({ action:"b2b_plan_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday }),
-    fetchApi({ action:"b2b_wo_list", start_day:today, end_day:tmr }),
-    fetchApi({ action:"b2b_wo_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday })
+    fetchApi({ action:"b2b_plan_list", start_day:today, end_day:today }),
+    fetchApi({ action:"b2b_wo_list", start_day:today, end_day:today }),
+    fetchApi({ action:"b2b_field_op_list", start_day:today, end_day:today }),
+    fetchApi({ action:"b2b_scan_batch_list", start_day:today, end_day:today })
   ]).then(function(results){
-    var todayPlans = [], tmrPlans = [];
-    if(results[0] && results[0].ok){
-      (results[0].plans||[]).forEach(function(p){
-        if(p.plan_day === today) todayPlans.push(p);
-        else if(p.plan_day === tmr) tmrPlans.push(p);
-      });
+    var plans = (results[0] && results[0].ok) ? (results[0].plans||[]) : [];
+    var wos = (results[1] && results[1].ok) ? (results[1].workorders||[]) : [];
+    var fos = (results[2] && results[2].ok) ? (results[2].records||[]) : [];
+    var scs = (results[3] && results[3].ok) ? (results[3].batches||[]) : [];
+
+    renderHomeCard("ip-today", plans, null, "plan");
+    renderHomeCard("wo-today", wos, null, "wo");
+    renderHomeCardFo("fo-today", fos);
+    renderHomeCardSc("sc-today", scs);
+
+    // 提醒区
+    var alerts = [];
+    wos.forEach(function(w){
+      if(w.has_cancel_notice) alerts.push({ cls:"alert-cancel", text:"❌ "+w.workorder_id+" 已取消，禁止发出 — "+esc(w.customer_name), id:w.workorder_id, type:"wo" });
+    });
+    wos.forEach(function(w){
+      if(w.has_update_notice && !w.has_cancel_notice) alerts.push({ cls:"alert-update", text:"⚠ "+w.workorder_id+" 操作中已被编辑 — "+esc(w.customer_name), id:w.workorder_id, type:"wo" });
+    });
+    scs.forEach(function(b){
+      if(b.status === "open") alerts.push({ cls:"alert-open", text:"📋 核对批次进行中: "+b.batch_id+" — "+esc(b.batch_name), id:b.batch_id, type:"sc" });
+    });
+    fos.forEach(function(r){
+      if(FO_INCOMPLETE_STATUS[r.status]) alerts.push({ cls:"alert-incomplete", text:"🔧 现场记录未完成: "+r.record_id+" — "+esc(r.customer_name), id:r.record_id, type:"fo" });
+    });
+    var alertEl = document.getElementById("home-alerts");
+    if(alerts.length > 0){
+      alertEl.innerHTML = '<div style="font-size:14px;font-weight:700;margin-bottom:6px;">需要关注</div>' +
+        alerts.map(function(a){
+          var onclick = a.type==="wo" ? "goWoDetail('"+esc(a.id)+"')" : a.type==="sc" ? "goScDetail('"+esc(a.id)+"')" : "goFoDetail('"+esc(a.id)+"')";
+          return '<div class="alert-card '+a.cls+'" onclick="'+onclick+'">'+a.text+'</div>';
+        }).join("");
     }
-    var overduePlans = [];
-    if(results[1] && results[1].ok){
-      (results[1].plans||[]).forEach(function(p){
-        if(PLAN_INCOMPLETE_STATUS[p.status]) overduePlans.push(p);
-      });
-    }
-    var todayWos = [], tmrWos = [];
-    if(results[2] && results[2].ok){
-      (results[2].workorders||[]).forEach(function(w){
-        if(w.plan_day === today) todayWos.push(w);
-        else if(w.plan_day === tmr) tmrWos.push(w);
-      });
-    }
-    var overdueWos = [];
-    if(results[3] && results[3].ok){
-      (results[3].workorders||[]).forEach(function(w){
-        if(WO_INCOMPLETE_STATUS[w.status]) overdueWos.push(w);
-      });
-    }
-    renderHomeCard("ip-today", todayPlans, overduePlans, "plan");
-    renderHomeCard("ip-tmr", tmrPlans, null, "plan");
-    renderHomeCard("wo-today", todayWos, overdueWos, "wo");
-    renderHomeCard("wo-tmr", tmrWos, null, "wo");
   });
+
+  // 加载波次记录
+  loadWaveList();
 }
 
 function renderHomeCard(prefix, items, overdueItems, type){
@@ -228,6 +253,153 @@ function renderHomeCard(prefix, items, overdueItems, type){
   bodyEl.innerHTML = html;
 }
 
+function renderHomeCardFo(prefix, items){
+  var countEl = document.getElementById(prefix + "-count");
+  var bodyEl = document.getElementById(prefix + "-body");
+  countEl.textContent = "共 " + items.length + " 条";
+  var statusCounts = {};
+  items.forEach(function(item){ statusCounts[item.status] = (statusCounts[item.status]||0) + 1; });
+  var order = ["recording","draft","completed","cancelled"];
+  var tags = [];
+  order.forEach(function(s){
+    if(statusCounts[s]) tags.push('<span class="st st-'+s+'">'+esc(FO_STATUS_LABEL[s]||s)+' '+statusCounts[s]+'</span>');
+  });
+  bodyEl.innerHTML = tags.length > 0 ? '<div class="card-status-row">' + tags.join(' ') + '</div>' : '<div class="q-empty">暂无</div>';
+}
+
+function renderHomeCardSc(prefix, items){
+  var countEl = document.getElementById(prefix + "-count");
+  var bodyEl = document.getElementById(prefix + "-body");
+  var openCount = items.filter(function(b){ return b.status === "open"; }).length;
+  countEl.textContent = openCount + " 个进行中";
+  var statusCounts = {};
+  items.forEach(function(item){ statusCounts[item.status] = (statusCounts[item.status]||0) + 1; });
+  var tags = [];
+  ["open","closed","cancelled"].forEach(function(s){
+    if(statusCounts[s]) tags.push('<span class="st st-'+s+'">'+esc(SC_STATUS_LABEL[s]||s)+' '+statusCounts[s]+'</span>');
+  });
+  bodyEl.innerHTML = tags.length > 0 ? '<div class="card-status-row">' + tags.join(' ') + '</div>' : '<div class="q-empty">暂无</div>';
+}
+
+// ===== 今日作业记录编号（波次） =====
+var _waveListData = [];
+function loadWaveList(){
+  var s = document.getElementById("hw-start").value;
+  var e = document.getElementById("hw-end").value;
+  if(!s || !e) return;
+  var biz = document.getElementById("hw-biz").value;
+  var task = document.getElementById("hw-task").value;
+  var el = document.getElementById("hw-result");
+  el.innerHTML = '<div class="q-empty">加载中...</div>';
+  var params = { action:"collab_wave_list", start_day:s, end_day:e };
+  if(biz) params.biz = biz;
+  if(task) params.task = task;
+  fetchApi(params).then(function(res){
+    if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败: '+esc(res&&res.error||"")+'</div>'; return; }
+    _waveListData = res.waves || [];
+    renderWaveList(_waveListData);
+  });
+}
+
+function filterWaveListLocal(){
+  var kw = (document.getElementById("hw-keyword").value||"").trim().toLowerCase();
+  if(!kw){ renderWaveList(_waveListData); return; }
+  var filtered = _waveListData.filter(function(w){
+    return (w.wave_id||"").toLowerCase().indexOf(kw)>=0 ||
+           (w.session||"").toLowerCase().indexOf(kw)>=0 ||
+           (w.operator_id||"").toLowerCase().indexOf(kw)>=0 ||
+           (w.customer_name||"").toLowerCase().indexOf(kw)>=0;
+  });
+  renderWaveList(filtered);
+}
+
+var TASK_LABEL_SHORT = {
+  "B2C拣货":"拣货", "B2C理货":"理货", "B2C批量出库":"批量出库",
+  "B2B入库理货":"B2B理货", "B2B工单操作":"工单操作", "B2B现场记录":"现场记录"
+};
+function renderWaveList(waves){
+  var el = document.getElementById("hw-result");
+  if(!waves.length){ el.innerHTML = '<div class="q-empty">暂无记录</div>'; return; }
+  el.innerHTML = '<div style="font-size:12px;color:#888;margin-bottom:4px;">共 '+waves.length+' 条记录</div>' +
+    waves.map(function(w, idx){
+      var timeStr = new Date(w.first_ms).toLocaleTimeString();
+      var taskLabel = TASK_LABEL_SHORT[w.task] || w.task;
+      var bizCls = w.biz === "B2C" ? "biz biz-b2c" : "biz biz-b2b";
+      var summary = "";
+      if(w.detail_type === "b2b_workorder" && w.detail_found){
+        summary = esc(w.customer_name||"") + " · " + esc(WO_STATUS_LABEL[w.wo_status]||w.wo_status||"");
+        if(w.has_cancel_notice) summary += ' <span class="cancel-notice-tag">已取消</span>';
+        if(w.has_update_notice) summary += ' <span class="notice-tag">已变更</span>';
+      } else if(w.detail_type === "b2b_field_op" && w.detail_found){
+        summary = esc(w.customer_name||"") + " · " + esc(FO_STATUS_LABEL[w.fo_status]||w.fo_status||"");
+      }
+      return '<div class="wave-row" onclick="toggleWaveDetail('+idx+')">' +
+        '<div><span class="'+bizCls+'">'+esc(w.biz)+'</span> <b>'+esc(taskLabel)+'</b> · <code>'+esc(w.wave_id)+'</code></div>' +
+        '<div class="meta">'+timeStr+' · session:'+esc((w.session||"").slice(-8))+' · 操作员:'+esc(w.operator_id||"(无)")+(w.record_count>1?' · ×'+w.record_count:'')+'</div>' +
+        (summary ? '<div class="meta">'+summary+'</div>' : '') +
+        '<div id="wave-detail-'+idx+'" style="display:none;"></div>' +
+      '</div>';
+    }).join("");
+}
+
+function toggleWaveDetail(idx){
+  var el = document.getElementById("wave-detail-"+idx);
+  if(!el) return;
+  if(el.style.display !== "none"){ el.style.display = "none"; return; }
+  el.style.display = "";
+  var w = _waveListData[idx];
+  if(!w){ el.innerHTML = ""; return; }
+
+  var html = '<div class="wave-detail-box">';
+  html += '<div><b>完整 wave_id:</b> '+esc(w.wave_id)+'</div>';
+  html += '<div><b>session:</b> '+esc(w.session)+'</div>';
+  html += '<div><b>biz/task:</b> '+esc(w.biz)+' / '+esc(w.task)+'</div>';
+  html += '<div><b>操作员:</b> '+esc(w.operator_id||"(无)")+'</div>';
+  html += '<div><b>首次记录:</b> '+new Date(w.first_ms).toLocaleString()+'</div>';
+  html += '<div><b>最后记录:</b> '+new Date(w.last_ms).toLocaleString()+'</div>';
+  html += '<div><b>记录次数:</b> '+w.record_count+'</div>';
+
+  if(w.detail_type === "b2b_workorder"){
+    if(w.detail_found){
+      html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
+      html += '<div style="font-weight:700;">工单详情</div>';
+      html += '<div>状态: <span class="st st-'+esc(w.wo_status)+'">'+esc(WO_STATUS_LABEL[w.wo_status]||w.wo_status)+'</span></div>';
+      html += '<div>客户: '+esc(w.customer_name)+'</div>';
+      if(w.outbound_destination) html += '<div>目的地: '+esc(w.outbound_destination)+'</div>';
+      if(w.order_ref_no) html += '<div>발주번호: '+esc(w.order_ref_no)+'</div>';
+      html += '<div>箱:'+w.outbound_box_count+' 托:'+w.outbound_pallet_count+'</div>';
+      if(w.has_cancel_notice) html += '<div style="color:#d32f2f;font-weight:700;">❌ 已取消提醒</div>';
+      if(w.has_update_notice) html += '<div style="color:#e65100;font-weight:700;">⚠ 变更提醒</div>';
+      if(w.result_status){
+        html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
+        html += '<div style="font-weight:700;">现场执行结果</div>';
+        html += '<div>结果状态: '+esc(w.result_status)+'</div>';
+        if(w.result_operation_mode) html += '<div>操作模式: '+esc(w.result_operation_mode)+'</div>';
+        if(w.result_confirm_badge) html += '<div>确认工牌: '+esc(w.result_confirm_badge)+'</div>';
+      }
+      html += '<div style="margin-top:6px;"><button style="width:auto;padding:4px 12px;font-size:12px;" onclick="event.stopPropagation();goWoDetail(\''+esc(w.wave_id)+'\')">查看作业单详情</button></div>';
+    } else {
+      html += '<div class="muted">未找到对应工单</div>';
+    }
+  } else if(w.detail_type === "b2b_field_op"){
+    if(w.detail_found){
+      html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
+      html += '<div style="font-weight:700;">现场记录详情</div>';
+      html += '<div>状态: <span class="st st-'+esc(w.fo_status)+'">'+esc(FO_STATUS_LABEL[w.fo_status]||w.fo_status)+'</span></div>';
+      html += '<div>客户: '+esc(w.customer_name)+'</div>';
+      if(w.source_plan_id) html += '<div>来源计划: '+esc(w.source_plan_id)+'</div>';
+      if(w.bound_workorder_id) html += '<div>绑定作业单: '+esc(w.bound_workorder_id)+'</div>';
+      if(w.operation_type) html += '<div>操作类型: '+esc(FO_OP_TYPE_LABEL[w.operation_type]||w.operation_type)+'</div>';
+      html += '<div style="margin-top:6px;"><button style="width:auto;padding:4px 12px;font-size:12px;" onclick="event.stopPropagation();goFoDetail(\''+esc(w.wave_id)+'\')">查看现场记录详情</button></div>';
+    } else {
+      html += '<div class="muted">未找到对应现场记录</div>';
+    }
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
 function goCardDetail(type, scope){
   if(type === "plan"){
     _planListScope = scope;
@@ -245,7 +417,8 @@ function changePlanStatus(plan_id, status){
   fetchApi({ action:"b2b_plan_update_status", plan_id:plan_id, status:status, updated_by:"" }).then(function(res){
     if(res && res.ok){
       if(document.getElementById("v-home").style.display !== "none") loadHome();
-      if(document.getElementById("v-plan_list").style.display !== "none") loadPlanList(_planListScope);
+      if(document.getElementById("v-plan_list").style.display !== "none") loadPlanListByRange();
+      if(document.getElementById("v-plan_detail").style.display !== "none") goPlanDetail(plan_id);
     } else {
       alert("状态更新失败: " + (res&&res.error||"unknown"));
     }
@@ -254,42 +427,47 @@ function changePlanStatus(plan_id, status){
 
 // ===== 入库计划列表 =====
 function initPlanList(){
-  loadPlanList(_planListScope);
+  var today = kstToday();
+  var scope = _planListScope;
+  _planListScope = "today";
+  var titleEl = document.getElementById("pl-title");
+
+  if(scope === "tomorrow"){
+    var tmr = kstTomorrow();
+    titleEl.textContent = "明日入库计划";
+    document.getElementById("pl-start").value = tmr;
+    document.getElementById("pl-end").value = tmr;
+  } else if(scope === "overdue"){
+    titleEl.textContent = "逾期未完成入库计划";
+    document.getElementById("pl-start").value = B2B_EARLIEST_DAY;
+    document.getElementById("pl-end").value = kstYesterday();
+  } else {
+    titleEl.textContent = "入库计划列表";
+    document.getElementById("pl-start").value = today;
+    document.getElementById("pl-end").value = today;
+  }
+  loadPlanListByRange(scope === "overdue" ? "overdue" : null);
 }
 
-function loadPlanList(scope){
-  var today = kstToday();
-  var tmr = kstTomorrow();
-  var yesterday = kstYesterday();
+function loadPlanListByRange(mode){
+  var s = document.getElementById("pl-start").value;
+  var e = document.getElementById("pl-end").value;
+  if(!s || !e){ alert("请选择日期"); return; }
   var titleEl = document.getElementById("pl-title");
   var resultEl = document.getElementById("pl-result");
   resultEl.innerHTML = '<div class="q-empty">加载中...</div>';
+  if(!mode) titleEl.textContent = "入库计划列表";
 
-  if(scope === "tomorrow"){
-    titleEl.textContent = "明日入库计划";
-    fetchApi({ action:"b2b_plan_list", start_day:tmr, end_day:tmr }).then(function(res){
-      var plans = (res && res.ok) ? (res.plans||[]) : [];
-      renderPlanList(resultEl, plans, []);
-    });
-  } else if(scope === "overdue"){
-    titleEl.textContent = "逾期未完成入库计划";
-    fetchApi({ action:"b2b_plan_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday }).then(function(res){
-      var all = (res && res.ok) ? (res.plans||[]) : [];
+  fetchApi({ action:"b2b_plan_list", start_day:s, end_day:e }).then(function(res){
+    if(!res || !res.ok){ resultEl.innerHTML = '<div class="bad">查询失败</div>'; return; }
+    var all = res.plans || [];
+    if(mode === "overdue"){
       var overdue = all.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
       renderPlanList(resultEl, [], overdue);
-    });
-  } else {
-    titleEl.textContent = "今日入库计划";
-    Promise.all([
-      fetchApi({ action:"b2b_plan_list", start_day:today, end_day:today }),
-      fetchApi({ action:"b2b_plan_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday })
-    ]).then(function(results){
-      var plans = (results[0] && results[0].ok) ? (results[0].plans||[]) : [];
-      var all = (results[1] && results[1].ok) ? (results[1].plans||[]) : [];
-      var overdue = all.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
-      renderPlanList(resultEl, plans, overdue);
-    });
-  }
+    } else {
+      renderPlanList(resultEl, all, []);
+    }
+  });
 }
 
 function renderPlanList(container, plans, overduePlans){
@@ -323,15 +501,97 @@ function renderPlanRow(p){
   }).join("");
   var editBtn = PLAN_EDITABLE[p.status] ? '<button onclick="event.stopPropagation();goEditPlan(\''+esc(p.plan_id)+'\')">编辑</button>' : '';
   var foBtn = (p.status==="arrived"||p.status==="processing") ? '<button onclick="event.stopPropagation();goNewFoFromPlan(\''+esc(p.plan_id)+'\',\''+esc(p.plan_day)+'\',\''+esc(p.customer_name)+'\',\''+esc(p.goods_summary||"")+'\',\''+esc(p.purpose_text||"")+'\')" style="background:#8e24aa;color:#fff;">+ 现场记录</button>' : '';
-  return '<div class="plan-row'+dimClass+'">' +
+  return '<div class="wo-row'+dimClass+'" onclick="goPlanDetail(\''+esc(p.plan_id)+'\')">' +
     '<div><span class="st st-'+esc(p.status)+'">'+esc(PLAN_STATUS_LABEL[p.status]||p.status)+'</span> ' +
     '<b>'+esc(p.customer_name)+'</b> ' + bizBadge(p.biz_type) +
-    ' <span class="muted" style="font-size:11px;">'+esc(p.plan_day)+'</span></div>' +
+    ' <span class="muted" style="font-size:11px;">'+esc(p.plan_id)+' · '+esc(p.plan_day)+'</span></div>' +
     '<div class="meta">'+esc(p.goods_summary) + (p.expected_arrival_time ? ' · 预计'+esc(p.expected_arrival_time) : '') + '</div>' +
     (p.purpose_text ? '<div class="meta">用途: '+esc(p.purpose_text)+'</div>' : '') +
     (p.remark ? '<div class="meta">备注: '+esc(p.remark)+'</div>' : '') +
     '<div class="status-btns">' + btns + editBtn + foBtn + '</div>' +
   '</div>';
+}
+
+// ===== 入库计划详情（含关联） =====
+function goPlanDetail(plan_id){
+  goView("plan_detail");
+  var card = document.getElementById("plan-detail-card");
+  card.innerHTML = '<div class="muted">加载中...</div>';
+
+  // 先拉计划数据
+  fetchApi({ action:"b2b_plan_list", start_day:B2B_EARLIEST_DAY, end_day:"2099-12-31" }).then(function(res){
+    if(!res || !res.ok){ card.innerHTML = '<div class="bad">加载失败</div>'; return; }
+    var found = null;
+    (res.plans||[]).forEach(function(p){ if(p.plan_id === plan_id) found = p; });
+    if(!found){ card.innerHTML = '<div class="bad">未找到计划 '+esc(plan_id)+'</div>'; return; }
+    var p = found;
+
+    // 状态按钮
+    var statusBtns = (PLAN_NEXT_STATUS[p.status]||[]).map(function(s){
+      return '<button onclick="changePlanStatus(\''+esc(p.plan_id)+'\',\''+s+'\')" class="'+(s==="cancelled"?"bad":"primary")+'" style="width:auto;padding:8px 16px;font-size:13px;">'+esc(PLAN_STATUS_LABEL[s]||s)+'</button>';
+    }).join(" ");
+    var editBtn = PLAN_EDITABLE[p.status] ? ' <button onclick="goEditPlan(\''+esc(p.plan_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">编辑</button>' : '';
+    var foBtn = (p.status==="arrived"||p.status==="processing") ?
+      ' <button onclick="goNewFoFromPlan(\''+esc(p.plan_id)+'\',\''+esc(p.plan_day)+'\',\''+esc(p.customer_name)+'\',\''+esc(p.goods_summary||"")+'\',\''+esc(p.purpose_text||"")+'\')" style="width:auto;padding:8px 16px;font-size:13px;background:#8e24aa;color:#fff;">+ 现场记录</button>' : '';
+
+    var html =
+      '<div style="font-size:18px;font-weight:800;margin-bottom:10px;">' +
+        esc(p.plan_id) + ' <span class="st st-'+esc(p.status)+'">'+esc(PLAN_STATUS_LABEL[p.status]||p.status)+'</span> ' + bizBadge(p.biz_type) +
+      '</div>' +
+      '<div class="detail-field"><b>客户:</b> '+esc(p.customer_name)+'</div>' +
+      '<div class="detail-field"><b>计划到货日:</b> '+esc(p.plan_day)+'</div>' +
+      '<div class="detail-field"><b>货物摘要:</b> '+esc(p.goods_summary||"(无)")+'</div>' +
+      (p.expected_arrival_time ? '<div class="detail-field"><b>预计到达:</b> '+esc(p.expected_arrival_time)+'</div>' : '') +
+      (p.purpose_text ? '<div class="detail-field"><b>用途:</b> '+esc(p.purpose_text)+'</div>' : '') +
+      (p.remark ? '<div class="detail-field"><b>备注:</b> '+esc(p.remark)+'</div>' : '') +
+      '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(p.created_by)+' · 创建时间: '+new Date(p.created_at).toLocaleString() +
+      (p.status_updated_at ? ' · 状态更新: '+new Date(p.status_updated_at).toLocaleString() : '') +
+      (p.status_updated_by ? ' · 更新人: '+esc(p.status_updated_by) : '') +
+      '</div>' +
+      '<div style="margin:12px 0;">' + statusBtns + editBtn + foBtn + '</div>' +
+      '<div id="plan-cross-fo" class="cross-ref"><div class="cross-ref-title">关联现场记录 <span class="muted" style="font-size:11px;">source_plan_id = '+esc(p.plan_id)+'</span></div><div class="muted">加载中...</div></div>' +
+      '<div id="plan-cross-wo" class="cross-ref"><div class="cross-ref-title">同日同客户作业单 <span class="weak-label">（弱关联：同日期+同客户名）</span></div><div class="muted">加载中...</div></div>';
+    card.innerHTML = html;
+
+    // 关联现场记录
+    fetchApi({ action:"b2b_field_op_list", start_day:B2B_EARLIEST_DAY, end_day:"2099-12-31" }).then(function(foRes){
+      var el = document.getElementById("plan-cross-fo");
+      if(!el) return;
+      var matched = (foRes && foRes.ok) ? (foRes.records||[]).filter(function(r){ return r.source_plan_id === plan_id; }) : [];
+      if(!matched.length){
+        el.innerHTML = '<div class="cross-ref-title">关联现场记录</div><div class="q-empty">暂无</div>';
+      } else {
+        el.innerHTML = '<div class="cross-ref-title">关联现场记录（'+matched.length+' 条）</div>' +
+          matched.map(function(r){
+            return '<div class="cross-ref-row" onclick="goFoDetail(\''+esc(r.record_id)+'\')">' +
+              '<span class="st st-'+esc(r.status)+'">'+esc(FO_STATUS_LABEL[r.status]||r.status)+'</span> ' +
+              '<b>'+esc(r.record_id)+'</b> · '+esc(r.customer_name)+' · '+esc(r.plan_day)+' · '+esc(FO_OP_TYPE_LABEL[r.operation_type]||r.operation_type) +
+            '</div>';
+          }).join("");
+      }
+    });
+
+    // 同日同客户作业单
+    fetchApi({ action:"b2b_wo_list", start_day:p.plan_day, end_day:p.plan_day }).then(function(woRes){
+      var el = document.getElementById("plan-cross-wo");
+      if(!el) return;
+      var matched = (woRes && woRes.ok) ? (woRes.workorders||[]).filter(function(w){ return w.customer_name === p.customer_name; }) : [];
+      if(!matched.length){
+        el.innerHTML = '<div class="cross-ref-title">同日同客户作业单 <span class="weak-label">（弱关联）</span></div><div class="q-empty">暂无</div>';
+      } else {
+        el.innerHTML = '<div class="cross-ref-title">同日同客户作业单（'+matched.length+' 单）<span class="weak-label">（弱关联：同日期+同客户名）</span></div>' +
+          matched.map(function(w){
+            var noticeTags = '';
+            if(w.has_cancel_notice) noticeTags += ' <span class="cancel-notice-tag">已取消</span>';
+            if(w.has_update_notice) noticeTags += ' <span class="notice-tag">已变更</span>';
+            return '<div class="cross-ref-row" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
+              '<span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
+              '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name)+noticeTags +
+            '</div>';
+          }).join("");
+      }
+    });
+  });
 }
 
 // ===== 入库计划 新建/编辑 =====
@@ -890,6 +1150,38 @@ function goWoDetail(id){
 
     // 渲染附件区
     renderAttachmentSection(w.workorder_id, w.status, res.attachments || []);
+
+    // 现场执行结果摘要（b2b_op_result_list 匹配 workorder_id）
+    fetchApi({ action:"b2b_op_result_list", day_kst:w.plan_day }).then(function(resR){
+      var wrap = document.getElementById("wo-result-summary");
+      if(!wrap) return;
+      if(!resR || !resR.ok){ wrap.innerHTML = '<div class="muted">结果单查询失败</div>'; return; }
+      var matched = (resR.results||[]).filter(function(r){ return r.source_order_no === w.workorder_id; });
+      if(!matched.length){ wrap.innerHTML = '<div class="q-empty">暂无现场执行结果</div>'; return; }
+      wrap.innerHTML = matched.map(function(r){
+        var modeTxt = r.operation_mode || "(未填)";
+        var stLabel = r.status === "completed" ? "已完成" : (r.status === "draft" ? "草稿" : r.status);
+        return '<div style="border-bottom:1px solid #f0f0f0;padding:4px 0;font-size:12px;">' +
+          '<b>'+esc(r.source_order_no)+'</b> · <span class="st st-'+esc(r.status)+'">'+esc(stLabel)+'</span> · '+esc(modeTxt) +
+          (r.outbound_box_count ? ' · 箱:'+r.outbound_box_count : '') +
+          (r.outbound_pallet_count ? ' · 托:'+r.outbound_pallet_count : '') +
+          (r.confirm_badge ? ' · 确认:'+esc(r.confirm_badge) : '') +
+        '</div>';
+      }).join("");
+    });
+
+    // 在明细表前插入结果摘要区容器
+    var detailCard = document.getElementById("wo-detail-card");
+    if(detailCard){
+      var resultDiv = document.createElement("div");
+      resultDiv.id = "wo-result-summary";
+      resultDiv.className = "cross-ref";
+      resultDiv.innerHTML = '<div class="cross-ref-title">现场执行结果</div><div class="muted">加载中...</div>';
+      // 插到附件区后面
+      var attWrap = document.getElementById("att-section-wrap");
+      if(attWrap && attWrap.nextSibling) detailCard.insertBefore(resultDiv, attWrap.nextSibling);
+      else detailCard.appendChild(resultDiv);
+    }
   });
 }
 
@@ -2013,6 +2305,18 @@ function closeScanBatch(batch_id){
 (function(){
   var today = kstToday();
   document.getElementById("todayPill").textContent = today;
+
+  // 填充 wave task 下拉
+  var taskSel = document.getElementById("hw-task");
+  if(taskSel){
+    var tasks = ["B2C拣货","B2C理货","B2C批量出库","B2B入库理货","B2B工单操作","B2B现场记录"];
+    tasks.forEach(function(t){
+      var o = document.createElement("option");
+      o.value = t; o.textContent = t;
+      taskSel.appendChild(o);
+    });
+  }
+
   if(getKey()){
     fetchApi({ action:"b2b_plan_list", start_day:today, end_day:today }).then(function(res){
       if(res && res.ok) showMain();
