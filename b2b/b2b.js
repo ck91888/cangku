@@ -287,7 +287,7 @@ function changePlanStatus(plan_id, status){
   fetchApi({ action:"b2b_plan_update_status", plan_id:plan_id, status:status, updated_by:"" }).then(function(res){
     if(res && res.ok){
       if(document.getElementById("v-home").style.display !== "none") loadHome();
-      if(document.getElementById("v-plan_list").style.display !== "none") loadPlanListByRange();
+      if(document.getElementById("v-plan_list").style.display !== "none") reloadCurrentPlanList();
       if(document.getElementById("v-plan_detail").style.display !== "none") goPlanDetail(plan_id);
     } else {
       alert("状态更新失败: " + (res&&res.error||"unknown"));
@@ -320,6 +320,7 @@ function loadPlanListByRange(mode){
   var s = document.getElementById("pl-start").value;
   var e = document.getElementById("pl-end").value;
   if(!s || !e){ alert("请选择日期"); return; }
+  _currentPlanScope = (mode === "overdue") ? "overdue" : "custom";
   var titleEl = document.getElementById("pl-title");
   var resultEl = document.getElementById("pl-result");
   resultEl.innerHTML = '<div class="q-empty">加载中...</div>';
@@ -1516,11 +1517,14 @@ function setWoAccounted(wo_id, val){
 function refreshAfterAccounted(type, id){
   if(type === "plan"){
     var detailCard = document.getElementById("plan-detail-card");
-    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goPlanDetail(id); } else { loadPlanListByRange(_currentPlanScope === "overdue" ? "overdue" : null); }
+    if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goPlanDetail(id); } else { reloadCurrentPlanList(); }
   } else {
     var detailCard = document.getElementById("wo-detail-card");
     if(detailCard && detailCard.innerHTML.indexOf(id) >= 0){ goWoDetail(id); } else { reloadCurrentWoList(); }
   }
+}
+function reloadCurrentPlanList(){
+  loadPlanListByRange(_currentPlanScope === "overdue" ? "overdue" : null);
 }
 function reloadCurrentWoList(){
   if(_currentWoScope === "next3" || _currentWoScope === "today" || _currentWoScope === "overdue"){
