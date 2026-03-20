@@ -3243,39 +3243,97 @@ function renderB2bWorkorderUI(){
   var c = document.getElementById("b2bWorkorderOrderCount");
   var l = document.getElementById("b2bWorkorderOrderList");
   if(c) c.textContent = String(scannedB2bWorkorders.size);
-  if(l){
-    if(scannedB2bWorkorders.size === 0){
-      l.innerHTML = '<span class="muted">无 / 없음</span>';
-    }else{
-      var arr = Array.from(scannedB2bWorkorders);
-      var show = arr.slice(Math.max(0, arr.length - 30));
-      l.innerHTML = show.map(function(x){
-        var b = b2bWorkorderBindings[x];
-        var r = b2bWorkorderResults[x];
-        var srcIcon = ""; var srcStyle = "";
-        if(b){
-          if(b.source_type === "internal_b2b_workorder"){ srcIcon = "🏠 "; srcStyle = "background:#c8e6c9;"; }
-          else { srcIcon = "📦 "; srcStyle = "background:#fff3e0;"; }
-        }
-        var label = srcIcon + esc(String(x));
-        if(b && b.source_type === "internal_b2b_workorder" && b.wo_summary && b.wo_summary.qty_text){
-          label += " · " + esc(b.wo_summary.qty_text);
-        }
-        if(b && b.source_type === "external_wms_workorder" && !r) label += " · 待WMS匹配";
-
-        var resultLine = "";
-        if(r){
-          var statusTag = r.status === "completed" ? '<span style="color:#2e7d32;">✅</span> ' : '<span style="color:#f57c00;">📝</span> ';
-          resultLine = '<div style="font-size:11px;margin-top:2px;">' + statusTag + esc(fmtResultSummary(r)) + '</div>';
-        }
-        var btn = b ? ' <button onclick="openResultForm(\''+esc(x)+'\')" style="font-size:10px;padding:1px 5px;cursor:pointer;vertical-align:middle;">'+(r?'编辑':'录入')+'</button>' : '';
-        var unbindBtn = ' <button onclick="unbindB2bWorkorder(\''+esc(x)+'\')" style="font-size:10px;padding:1px 5px;cursor:pointer;vertical-align:middle;color:#c00;" title="解绑">✕</button>';
-
-        return '<div style="display:inline-block;margin:2px 4px 2px 0;padding:4px 8px;border-radius:6px;'+srcStyle+'font-size:13px;vertical-align:top;">' +
-          label + btn + unbindBtn + resultLine + '</div>';
-      }).join("");
-    }
+  if(!l) return;
+  if(scannedB2bWorkorders.size === 0){
+    l.innerHTML = '<span class="muted">无 / 없음</span>';
+    return;
   }
+  var arr = Array.from(scannedB2bWorkorders);
+  var show = arr.slice(Math.max(0, arr.length - 30));
+
+  // 按结果状态分组
+  var groups = { completed:[], draft:[], none:[] };
+  show.forEach(function(x){
+    var r = b2bWorkorderResults[x];
+    if(r && r.status === "completed") groups.completed.push(x);
+    else if(r) groups.draft.push(x);
+    else groups.none.push(x);
+  });
+
+  var html = "";
+  var sections = [
+    { key:"completed", label:"已完成", items:groups.completed },
+    { key:"draft",     label:"待补记录", items:groups.draft },
+    { key:"none",      label:"未录结果", items:groups.none }
+  ];
+  sections.forEach(function(sec){
+    if(!sec.items.length) return;
+    html += '<div style="font-size:12px;font-weight:700;color:#555;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:2px;">'+sec.label+'（'+sec.items.length+'）</div>';
+    html += sec.items.map(function(x){ return renderB2bBindCard_(x); }).join("");
+  });
+  l.innerHTML = html;
+}
+
+function renderB2bBindCard_(x){
+  var b = b2bWorkorderBindings[x];
+  var r = b2bWorkorderResults[x];
+
+  // 类型标签
+  var typeTag;
+  if(b && b.source_type === "internal_b2b_workorder"){
+    typeTag = '<span style="display:inline-block;background:#c8e6c9;color:#2e7d32;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;">🏠 本系统工单</span>';
+  } else if(b && b.source_type === "external_wms_workorder"){
+    typeTag = '<span style="display:inline-block;background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;">📦 外部WMS工单</span>';
+  } else {
+    typeTag = '<span style="display:inline-block;background:#e0e0e0;color:#555;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;">📝 待确认</span>';
+  }
+
+  // 结果状态标签
+  var statusTag;
+  if(r && r.status === "completed"){
+    statusTag = '<span style="display:inline-block;background:#e8f5e9;color:#2e7d32;font-size:10px;padding:1px 6px;border-radius:3px;">已完成</span>';
+  } else if(r){
+    statusTag = '<span style="display:inline-block;background:#fff8e1;color:#f57c00;font-size:10px;padding:1px 6px;border-radius:3px;">草稿</span>';
+  } else {
+    statusTag = '<span style="display:inline-block;background:#f5f5f5;color:#999;font-size:10px;padding:1px 6px;border-radius:3px;">未录结果</span>';
+  }
+
+  // 工单号行
+  var line1 = '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:3px;">' + typeTag + statusTag + '</div>';
+  var line2 = '<div style="font-size:14px;font-weight:600;margin-top:3px;">' + esc(String(x)) + '</div>';
+
+  // 工单摘要（内部工单的数量信息）
+  var qtyLine = "";
+  if(b && b.source_type === "internal_b2b_workorder" && b.wo_summary && b.wo_summary.qty_text){
+    qtyLine = '<div style="font-size:11px;color:#666;margin-top:2px;">计划: '+esc(b.wo_summary.qty_text)+'</div>';
+  }
+  if(b && b.source_type === "external_wms_workorder" && !r){
+    qtyLine = '<div style="font-size:11px;color:#e65100;margin-top:2px;">待WMS匹配</div>';
+  }
+
+  // 结果摘要
+  var resultLine = "";
+  if(r){
+    resultLine = '<div style="font-size:11px;color:#444;margin-top:3px;line-height:1.4;">' + esc(fmtResultSummary(r)) + '</div>';
+  } else {
+    resultLine = '<div style="font-size:11px;color:#bbb;margin-top:3px;">暂无结果记录</div>';
+  }
+
+  // 操作按钮
+  var btnLine = '<div style="display:flex;gap:6px;margin-top:5px;">';
+  if(b){
+    btnLine += '<button onclick="openResultForm(\''+esc(x)+'\')" style="font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;background:#1976d2;color:#fff;border:none;">'+(r?'编辑结果':'录入结果')+'</button>';
+  }
+  btnLine += '<button onclick="unbindB2bWorkorder(\''+esc(x)+'\')" style="font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;background:#fff;color:#c62828;border:1px solid #ef9a9a;">解绑</button>';
+  btnLine += '</div>';
+
+  // 卡片背景色
+  var cardBg = "#fff";
+  if(r && r.status === "completed") cardBg = "#f9fdf9";
+  else if(r) cardBg = "#fffdf5";
+
+  return '<div style="background:'+cardBg+';border:1px solid #e0e0e0;border-radius:8px;padding:8px 10px;margin:4px 0;">' +
+    line1 + line2 + qtyLine + resultLine + btnLine + '</div>';
 }
 
 function startPicking(e){ startGeneric_(e, "B2C", "拣货", "b2c_pick", function(){ scannedWaves = new Set(); activePick = new Set(); leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0"); syncLeaderPickUI(); }); }
