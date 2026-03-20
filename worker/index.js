@@ -2385,6 +2385,7 @@ export default {
         }
       }
 
+      let plan_id = null;
       try {
         // 生成 plan_id：IP-YYMMDD-NNN（后端原子生成，避免撞号）
         const dayTag = plan_day.slice(2).replace(/-/g, ""); // "260316"
@@ -2396,7 +2397,7 @@ export default {
           const parts = maxRow.plan_id.split("-");
           seq = (parseInt(parts[2], 10) || 0) + 1;
         }
-        const plan_id = "IP-" + dayTag + "-" + String(seq).padStart(3, "0");
+        plan_id = "IP-" + dayTag + "-" + String(seq).padStart(3, "0");
 
         await env.DB.prepare(
           `INSERT INTO b2b_inbound_plans(plan_id,plan_day,customer_name,biz_type,goods_summary,expected_arrival_time,purpose_text,remark,status,created_by,created_at)
@@ -2409,7 +2410,15 @@ export default {
         }
         return jsonpOrJson(respPlan, callback);
       } catch(e) {
-        if (req_id) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=? AND response_json=''`).bind(req_id).run();
+        if (req_id) {
+          const exists = plan_id && await env.DB.prepare(`SELECT 1 FROM b2b_inbound_plans WHERE plan_id=?`).bind(plan_id).first();
+          if (exists) {
+            const respPlan = { ok:true, plan_id };
+            try { await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_plan_create' AND request_id=?`).bind(plan_id, JSON.stringify(respPlan), req_id).run(); } catch(_){}
+            return jsonpOrJson(respPlan, callback);
+          }
+          await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=? AND response_json=''`).bind(req_id).run();
+        }
         throw e;
       }
     }
@@ -2559,6 +2568,7 @@ export default {
         }
       }
 
+      let workorder_id = null;
       try {
         // 生成 workorder_id：WO-YYMMDD-NNN
         const dayTag = plan_day.slice(2).replace(/-/g, "");
@@ -2570,7 +2580,7 @@ export default {
           const parts = maxRow.workorder_id.split("-");
           seq = (parseInt(parts[2], 10) || 0) + 1;
         }
-        const workorder_id = "WO-" + dayTag + "-" + String(seq).padStart(3, "0");
+        workorder_id = "WO-" + dayTag + "-" + String(seq).padStart(3, "0");
 
         // 汇总明细 + 构造 batch 语句
         let total_qty = 0, total_weight_kg = 0, total_cbm = 0;
@@ -2626,7 +2636,15 @@ export default {
         }
         return jsonpOrJson(respWo, callback);
       } catch(e) {
-        if (req_id_wo) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=? AND response_json=''`).bind(req_id_wo).run();
+        if (req_id_wo) {
+          const exists = workorder_id && await env.DB.prepare(`SELECT 1 FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+          if (exists) {
+            const respWo = { ok:true, workorder_id, lines_count: lines.length };
+            try { await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_wo_create' AND request_id=?`).bind(workorder_id, JSON.stringify(respWo), req_id_wo).run(); } catch(_){}
+            return jsonpOrJson(respWo, callback);
+          }
+          await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=? AND response_json=''`).bind(req_id_wo).run();
+        }
         throw e;
       }
     }
@@ -3065,6 +3083,7 @@ export default {
         }
       }
 
+      let record_id = null;
       try {
         // 生成 record_id：FO-YYMMDD-NNN
         const dayTag = plan_day.slice(2).replace(/-/g, "");
@@ -3076,7 +3095,7 @@ export default {
           const parts = maxRow.record_id.split("-");
           seq = (parseInt(parts[2], 10) || 0) + 1;
         }
-        const record_id = "FO-" + dayTag + "-" + String(seq).padStart(3, "0");
+        record_id = "FO-" + dayTag + "-" + String(seq).padStart(3, "0");
 
         await env.DB.prepare(
           `INSERT INTO b2b_field_ops(record_id,source_plan_id,plan_day,customer_name,goods_summary,operation_type,
@@ -3099,7 +3118,15 @@ export default {
         }
         return jsonpOrJson(respFo, callback);
       } catch(e) {
-        if (req_id_fo) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=? AND response_json=''`).bind(req_id_fo).run();
+        if (req_id_fo) {
+          const exists = record_id && await env.DB.prepare(`SELECT 1 FROM b2b_field_ops WHERE record_id=?`).bind(record_id).first();
+          if (exists) {
+            const respFo = { ok:true, record_id };
+            try { await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_field_op_create' AND request_id=?`).bind(record_id, JSON.stringify(respFo), req_id_fo).run(); } catch(_){}
+            return jsonpOrJson(respFo, callback);
+          }
+          await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=? AND response_json=''`).bind(req_id_fo).run();
+        }
         throw e;
       }
     }
@@ -3550,6 +3577,7 @@ export default {
         }
       }
 
+      let batch_id = null;
       try {
         // 生成 batch_id: SC-YYMMDD-NNN
         const dayTag = check_day.slice(2).replace(/-/g, "");
@@ -3561,7 +3589,7 @@ export default {
           const parts = maxRow.batch_id.split("-");
           seq = (parseInt(parts[2], 10) || 0) + 1;
         }
-        const batch_id = "SC-" + dayTag + "-" + String(seq).padStart(3, "0");
+        batch_id = "SC-" + dayTag + "-" + String(seq).padStart(3, "0");
 
         // 批量写入：batch + items
         const stmts = [];
@@ -3587,7 +3615,15 @@ export default {
         }
         return jsonpOrJson(respSc, callback);
       } catch(e) {
-        if (req_id_sc) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=? AND response_json=''`).bind(req_id_sc).run();
+        if (req_id_sc) {
+          const exists = batch_id && await env.DB.prepare(`SELECT 1 FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
+          if (exists) {
+            const respSc = { ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected };
+            try { await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(batch_id, JSON.stringify(respSc), req_id_sc).run(); } catch(_){}
+            return jsonpOrJson(respSc, callback);
+          }
+          await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=? AND response_json=''`).bind(req_id_sc).run();
+        }
         const msg = String(e && e.message || e);
         if (msg.includes("UNIQUE")) return jsonpOrJson({ ok:false, error:"duplicate barcode in batch" }, callback);
         return jsonpOrJson({ ok:false, error:"batch create failed: " + msg }, callback);
