@@ -81,6 +81,10 @@ var WO_STATUS_BTN_LABEL = {
 var DETAIL_MODE_LABEL = { sku_based: "按SKU", carton_based: "按箱" };
 // operation_mode / outbound_mode 直接存中文，显示时兜底
 function modeDisplay(val){ return val || "(旧单未定义)"; }
+// 结果单 operation_mode（英文枚举）→ 中文
+var RESULT_OP_MODE_LABEL = { pack_outbound:"打包出库", move_and_palletize:"移库打托" };
+// 结果单 status → 中文
+var RESULT_STATUS_LABEL = { draft:"草稿", completed:"已完成" };
 
 var PLAN_NEXT_STATUS = {
   pending: ["arrived","cancelled"],
@@ -923,7 +927,10 @@ function renderDocList(docs){
 
     var line2parts = [];
     line2parts.push(esc(d.work_day_kst || ""));
-    if(d.first_ms) line2parts.push(new Date(d.first_ms).toLocaleTimeString() + '~' + new Date(d.last_ms).toLocaleTimeString());
+    if(d.first_ms){
+      if(d.first_ms === d.last_ms) line2parts.push(new Date(d.first_ms).toLocaleTimeString()+"（单次记录）");
+      else line2parts.push(new Date(d.first_ms).toLocaleTimeString()+"~"+new Date(d.last_ms).toLocaleTimeString());
+    }
     if(isSummary && d.session_count > 1) line2parts.push(d.session_count + ' sessions');
     if(!isSummary && d.session) line2parts.push('session:' + esc((d.session||"").slice(-8)));
     var bc = d.session_badge_count || 0;
@@ -933,7 +940,7 @@ function renderDocList(docs){
     var line3 = "";
     if(d.wave_kind === "b2b_workorder" && d.link_status && d.link_status !== "no_binding"){
       var parts = [];
-      if(d.operation_mode) parts.push(esc(d.operation_mode));
+      if(d.operation_mode) parts.push(esc(RESULT_OP_MODE_LABEL[d.operation_mode]||d.operation_mode));
       if(d.box_count) parts.push('箱:'+d.box_count);
       if(d.pallet_count) parts.push('托:'+d.pallet_count);
       if(d.packed_qty) parts.push('件:'+d.packed_qty);
@@ -1051,8 +1058,8 @@ function showExternalWoDoc(idx){
   if(d.customer_name) rows.push(["客户", d.customer_name]);
   rows.push(["作业日期", d.work_day_kst || "-"]);
   rows.push(["关联状态", LINK_LABEL[d.link_status] || d.link_status || "-"]);
-  if(d.result_status) rows.push(["结果状态", d.result_status]);
-  if(d.operation_mode) rows.push(["作业模式", d.operation_mode]);
+  if(d.result_status) rows.push(["结果状态", RESULT_STATUS_LABEL[d.result_status] || d.result_status]);
+  if(d.operation_mode) rows.push(["作业模式", RESULT_OP_MODE_LABEL[d.operation_mode] || d.operation_mode]);
 
   // 数量
   var qtyParts = [];
@@ -1179,7 +1186,11 @@ function toggleWaveDetail(idx){
   html += '<div><b>session:</b> '+esc(w.session)+'</div>';
   html += '<div><b>biz/task:</b> '+esc(w.biz)+' / '+esc(w.task)+'</div>';
   html += '<div><b>操作员:</b> '+esc(w.operator_id||"(无)")+'</div>';
-  html += '<div><b>首次:</b> '+new Date(w.first_ms).toLocaleString()+' <b>最后:</b> '+new Date(w.last_ms).toLocaleString()+' <b>次数:</b> '+w.record_count+'</div>';
+  if(w.first_ms === w.last_ms){
+    html += '<div><b>时间:</b> '+new Date(w.first_ms).toLocaleString()+'（单次记录）<b>次数:</b> '+w.record_count+'</div>';
+  } else {
+    html += '<div><b>首次:</b> '+new Date(w.first_ms).toLocaleString()+' <b>最后:</b> '+new Date(w.last_ms).toLocaleString()+' <b>次数:</b> '+w.record_count+'</div>';
+  }
 
   if(w.detail_type === "b2b_workorder" && w.detail_found){
     html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
@@ -1191,13 +1202,13 @@ function toggleWaveDetail(idx){
     if(w.has_cancel_notice) html += '<div style="color:#d32f2f;font-weight:700;">❌ 已取消</div>';
     if(w.has_update_notice) html += '<div style="color:#e65100;font-weight:700;">⚠ 已变更</div>';
     if(w.result_status){
-      html += '<div style="margin-top:4px;font-weight:700;">执行结果: '+esc(w.result_status)+(w.result_operation_mode?' · '+esc(w.result_operation_mode):'')+(w.result_confirm_badge?' · 确认:'+esc(w.result_confirm_badge):'')+'</div>';
+      html += '<div style="margin-top:4px;font-weight:700;">执行结果: '+esc(RESULT_STATUS_LABEL[w.result_status]||w.result_status)+(w.result_operation_mode?' · '+esc(RESULT_OP_MODE_LABEL[w.result_operation_mode]||w.result_operation_mode):'')+(w.result_confirm_badge?' · 确认:'+esc(w.result_confirm_badge):'')+'</div>';
     }
     html += '<div style="margin-top:6px;"><button style="width:auto;padding:4px 12px;font-size:12px;" onclick="event.stopPropagation();goWoDetail(\''+esc(w.wave_id)+'\')">查看工单详情</button></div>';
   } else if(w.detail_type === "b2b_workorder" && !w.detail_found && w.result_status){
     html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
     html += '<div style="font-weight:700;"><span style="background:#e0e0e0;color:#666;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:400;">外部工单</span> 结果摘要</div>';
-    html += '<div>执行结果: <b>'+esc(w.result_status)+'</b>'+(w.result_operation_mode?' · '+esc(w.result_operation_mode):'')+'</div>';
+    html += '<div>执行结果: <b>'+esc(RESULT_STATUS_LABEL[w.result_status]||w.result_status)+'</b>'+(w.result_operation_mode?' · '+esc(RESULT_OP_MODE_LABEL[w.result_operation_mode]||w.result_operation_mode):'')+'</div>';
     if(w.result_confirm_badge) html += '<div>确认: '+esc(w.result_confirm_badge)+'</div>';
   } else if(w.detail_type === "b2b_field_op" && w.detail_found){
     html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
@@ -1855,9 +1866,9 @@ function goWoDetail(id, _skipNav){
       if(!matched.length){ resultDiv.innerHTML = '<div class="cross-ref-title">现场执行结果</div><div class="q-empty">暂无</div>'; return; }
       resultDiv.innerHTML = '<div class="cross-ref-title">现场执行结果（'+matched.length+' 条）</div>' +
         matched.map(function(r){
-          var stLabel = r.status === "completed" ? "已完成" : (r.status === "draft" ? "草稿" : r.status);
+          var stLabel = RESULT_STATUS_LABEL[r.status] || r.status;
           return '<div style="border-bottom:1px solid #f0f0f0;padding:4px 0;font-size:12px;">' +
-            '<span class="st st-'+esc(r.status)+'">'+esc(stLabel)+'</span> '+esc(r.operation_mode||"(未填)") +
+            '<span class="st st-'+esc(r.status)+'">'+esc(stLabel)+'</span> '+esc(RESULT_OP_MODE_LABEL[r.operation_mode]||r.operation_mode||"(未填)") +
             (r.outbound_box_count ? ' · 箱:'+r.outbound_box_count : '') +
             (r.outbound_pallet_count ? ' · 托:'+r.outbound_pallet_count : '') +
             (r.confirm_badge ? ' · 确认:'+esc(r.confirm_badge) : '') +
