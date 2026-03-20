@@ -786,6 +786,7 @@ function goPlanDetail(plan_id, _skipNav){
 // ===== 作业记录：单据台账 =====
 var _docListData = [];
 var _docListFiltered = [];
+var _docRendered = [];   // renderDocList 当次渲染的 docs，供 showExternalWoDoc 索引
 var _docViewMode = "summary";  // summary | session | raw
 var _docPage = 1;
 var _docPageSize = 50;
@@ -901,6 +902,7 @@ function filterDocListLocal(){
 
 function renderDocList(docs){
   var el = document.getElementById("dl-result");
+  _docRendered = docs;
   if(!docs.length){
     el.innerHTML = '<div class="q-empty">暂无记录</div>';
     return;
@@ -908,7 +910,7 @@ function renderDocList(docs){
   var isSummary = _docViewMode === "summary";
   var html = '<div style="font-size:12px;color:#888;margin-bottom:4px;">本页 '+docs.length+' 条 / 共 '+_docTotal+' 条</div>';
 
-  html += docs.map(function(d){
+  html += docs.map(function(d, dIdx){
     var kindLabel = WAVE_KIND_LABEL[d.wave_kind] || d.task || "";
     var kindCls = "doc-kind-tag doc-kind-" + (d.doc_class||"wave_only");
     var linkLabel = LINK_STATUS_LABEL[d.link_status] || d.link_status || "";
@@ -966,10 +968,17 @@ function renderDocList(docs){
 
     // 跳转按钮
     var btns = "";
+    var btnSt = 'style="width:auto;padding:2px 10px;font-size:11px;margin:2px 4px 0 0;"';
     if(d.wave_kind === "b2b_workorder"){
-      btns = '<button style="width:auto;padding:2px 10px;font-size:11px;margin:2px 4px 0 0;" onclick="event.stopPropagation();goWoDetail(\''+esc(d.wave_id)+'\')">查看工单</button>';
+      var isInternal = d.source_type === "internal_b2b_workorder" || (!d.source_type && d.internal_workorder_id);
+      if(isInternal){
+        var woId = d.internal_workorder_id || d.wave_id;
+        btns = '<button '+btnSt+' onclick="event.stopPropagation();goWoDetail(\''+esc(woId)+'\')">查看工单</button>';
+      } else {
+        btns = '<button '+btnSt+' onclick="event.stopPropagation();showExternalWoDoc('+dIdx+')">查看记录</button>';
+      }
     } else if(d.wave_kind === "b2b_field_op"){
-      btns = '<button style="width:auto;padding:2px 10px;font-size:11px;margin:2px 4px 0 0;" onclick="event.stopPropagation();goFoDetail(\''+esc(d.wave_id)+'\')">查看记录</button>';
+      btns = '<button '+btnSt+' onclick="event.stopPropagation();goFoDetail(\''+esc(d.wave_id)+'\')">查看记录</button>';
     }
 
     return '<div class="doc-row">' +
@@ -1024,6 +1033,69 @@ function exportDocCsv(){
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+// ===== 外部工单记录浮层 =====
+function showExternalWoDoc(idx){
+  var d = _docRendered[idx];
+  if(!d) return;
+  var srcLabel = d.source_type === "external_wms_workorder" ? "外部 WMS 工单" : "绑定型记录";
+  var LINK_LABEL = LINK_STATUS_LABEL || {};
+  var html = '<div style="max-width:440px;">';
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">';
+  html += '<span style="background:#e0e0e0;color:#555;padding:2px 8px;border-radius:4px;font-size:12px;">'+esc(srcLabel)+'</span>';
+  html += '<b style="font-size:15px;">'+esc(d.wave_id)+'</b>';
+  html += '</div>';
+
+  var rows = [];
+  if(d.customer_name) rows.push(["客户", d.customer_name]);
+  rows.push(["作业日期", d.work_day_kst || "-"]);
+  rows.push(["关联状态", LINK_LABEL[d.link_status] || d.link_status || "-"]);
+  if(d.result_status) rows.push(["结果状态", d.result_status]);
+  if(d.operation_mode) rows.push(["作业模式", d.operation_mode]);
+
+  // 数量
+  var qtyParts = [];
+  if(d.box_count) qtyParts.push("箱:"+d.box_count);
+  if(d.pallet_count) qtyParts.push("托:"+d.pallet_count);
+  if(d.packed_qty) qtyParts.push("件:"+d.packed_qty);
+  if(d.sku_kind_count) qtyParts.push("SKU:"+d.sku_kind_count);
+  if(qtyParts.length) rows.push(["数量", qtyParts.join(" · ")]);
+
+  // 包装
+  var pkParts = [];
+  if(d.label_count) pkParts.push("标签:"+d.label_count);
+  if(d.packed_box_count) pkParts.push("打包箱:"+d.packed_box_count);
+  if(d.did_rebox) pkParts.push("换箱:"+d.rebox_count);
+  if(d.needs_forklift_pick) pkParts.push("叉车托:"+d.forklift_pallet_count);
+  if(pkParts.length) rows.push(["包装/搬运", pkParts.join(" · ")]);
+
+  // 确认
+  if(d.confirm_badge) rows.push(["确认工牌", d.confirm_badge + (d.confirmed_by ? " ("+d.confirmed_by+")" : "")]);
+  if(d.remark) rows.push(["备注", d.remark]);
+
+  // 参与
+  var partParts = [];
+  if(d.session_count > 1) partParts.push("sessions:"+d.session_count);
+  if(d.session_badge_count) partParts.push(d.session_badge_count+"人["+esc(d.session_badge_list||"")+"]");
+  if(partParts.length) rows.push(["参与", partParts.join(" · ")]);
+
+  html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+  for(var i=0;i<rows.length;i++){
+    html += '<tr style="border-bottom:1px solid #eee;"><td style="padding:4px 6px;color:#888;white-space:nowrap;vertical-align:top;">'+esc(rows[i][0])+'</td><td style="padding:4px 6px;">'+esc(rows[i][1])+'</td></tr>';
+  }
+  html += '</table></div>';
+
+  // 浮层
+  var overlay = document.createElement("div");
+  overlay.className = "ext-wo-overlay";
+  overlay.innerHTML = '<div class="ext-wo-modal">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+    '<span style="font-weight:700;font-size:14px;">工单操作记录</span>' +
+    '<button style="width:auto;padding:2px 10px;font-size:13px;" onclick="this.closest(\'.ext-wo-overlay\').remove()">关闭</button>' +
+    '</div>' + html + '</div>';
+  overlay.addEventListener("click", function(e){ if(e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 // ===== 作业记录：原始波次流水（保留） =====
@@ -1122,6 +1194,11 @@ function toggleWaveDetail(idx){
       html += '<div style="margin-top:4px;font-weight:700;">执行结果: '+esc(w.result_status)+(w.result_operation_mode?' · '+esc(w.result_operation_mode):'')+(w.result_confirm_badge?' · 确认:'+esc(w.result_confirm_badge):'')+'</div>';
     }
     html += '<div style="margin-top:6px;"><button style="width:auto;padding:4px 12px;font-size:12px;" onclick="event.stopPropagation();goWoDetail(\''+esc(w.wave_id)+'\')">查看工单详情</button></div>';
+  } else if(w.detail_type === "b2b_workorder" && !w.detail_found && w.result_status){
+    html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
+    html += '<div style="font-weight:700;"><span style="background:#e0e0e0;color:#666;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:400;">外部工单</span> 结果摘要</div>';
+    html += '<div>执行结果: <b>'+esc(w.result_status)+'</b>'+(w.result_operation_mode?' · '+esc(w.result_operation_mode):'')+'</div>';
+    if(w.result_confirm_badge) html += '<div>确认: '+esc(w.result_confirm_badge)+'</div>';
   } else if(w.detail_type === "b2b_field_op" && w.detail_found){
     html += '<hr style="margin:6px 0;border:none;border-top:1px solid #ddd;">';
     html += '<div style="font-weight:700;">现场记录摘要</div>';
