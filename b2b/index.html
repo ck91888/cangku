@@ -308,6 +308,24 @@
       <div class="row">
         <div class="form-group"><label>开始日期</label><input id="pl-start" type="date" /></div>
         <div class="form-group"><label>结束日期</label><input id="pl-end" type="date" /></div>
+        <div class="form-group"><label>操作状态</label>
+          <select id="pl-filter-status" onchange="reloadCurrentPlanList()">
+            <option value="">全部</option>
+            <option value="pending">未到货</option>
+            <option value="arrived">已到货</option>
+            <option value="processing">操作中</option>
+            <option value="completed">已完成</option>
+            <option value="abnormal">异常</option>
+            <option value="cancelled">已作废</option>
+          </select>
+        </div>
+        <div class="form-group"><label>记账状态</label>
+          <select id="pl-filter-acc" onchange="reloadCurrentPlanList()">
+            <option value="">全部</option>
+            <option value="no">未记账</option>
+            <option value="yes">已记账</option>
+          </select>
+        </div>
         <div style="display:flex;align-items:flex-end;">
           <button class="primary" style="width:auto;min-width:80px;" onclick="loadPlanListByRange()">查询</button>
         </div>
@@ -329,6 +347,22 @@
       <div class="row">
         <div class="form-group"><label>开始日期</label><input id="wl-start" type="date" /></div>
         <div class="form-group"><label>结束日期</label><input id="wl-end" type="date" /></div>
+        <div class="form-group"><label>操作状态</label>
+          <select id="wl-filter-status" onchange="reloadCurrentWoList()">
+            <option value="">全部</option>
+            <option value="draft">草稿</option>
+            <option value="issued">操作中</option>
+            <option value="completed">已完成</option>
+            <option value="cancelled">已取消</option>
+          </select>
+        </div>
+        <div class="form-group"><label>记账状态</label>
+          <select id="wl-filter-acc" onchange="reloadCurrentWoList()">
+            <option value="">全部</option>
+            <option value="no">未记账</option>
+            <option value="yes">已记账</option>
+          </select>
+        </div>
         <div style="display:flex;align-items:flex-end;">
           <button class="primary" style="width:auto;min-width:80px;" onclick="loadWoList()">查询</button>
         </div>

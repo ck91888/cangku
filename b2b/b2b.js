@@ -160,12 +160,16 @@ function navCaptureState(){
     entry.state = {
       "pl-start": document.getElementById("pl-start").value,
       "pl-end": document.getElementById("pl-end").value,
+      "pl-filter-status": document.getElementById("pl-filter-status").value,
+      "pl-filter-acc": document.getElementById("pl-filter-acc").value,
       scope: _currentPlanScope
     };
   } else if(v === "wo_list"){
     entry.state = {
       "wl-start": document.getElementById("wl-start").value,
       "wl-end": document.getElementById("wl-end").value,
+      "wl-filter-status": document.getElementById("wl-filter-status").value,
+      "wl-filter-acc": document.getElementById("wl-filter-acc").value,
       scope: _currentWoScope
     };
   } else if(v === "fo_list"){
@@ -229,11 +233,15 @@ function navRestoreState(entry){
   if(v === "plan_list"){
     document.getElementById("pl-start").value = st["pl-start"] || "";
     document.getElementById("pl-end").value = st["pl-end"] || "";
+    document.getElementById("pl-filter-status").value = st["pl-filter-status"] || "";
+    document.getElementById("pl-filter-acc").value = st["pl-filter-acc"] || "";
     _currentPlanScope = st.scope || "unfinished";
     reloadCurrentPlanList();
   } else if(v === "wo_list"){
     document.getElementById("wl-start").value = st["wl-start"] || "";
     document.getElementById("wl-end").value = st["wl-end"] || "";
+    document.getElementById("wl-filter-status").value = st["wl-filter-status"] || "";
+    document.getElementById("wl-filter-acc").value = st["wl-filter-acc"] || "";
     _currentWoScope = st.scope || "today";
     // 恢复标题
     var titleEl = document.getElementById("wl-title");
@@ -551,6 +559,27 @@ function changePlanStatus(plan_id, status){
   });
 }
 
+// ===== 列表筛选辅助 =====
+function applyPlanFilters(list){
+  var fs = document.getElementById("pl-filter-status").value;
+  var fa = document.getElementById("pl-filter-acc").value;
+  if(fs) list = list.filter(function(p){ return p.status === fs; });
+  if(fa === "yes") list = list.filter(function(p){ return p.is_accounted == 1; });
+  else if(fa === "no") list = list.filter(function(p){ return p.is_accounted != 1; });
+  return list;
+}
+function applyWoFilters(list){
+  var fs = document.getElementById("wl-filter-status").value;
+  var fa = document.getElementById("wl-filter-acc").value;
+  if(fs){
+    if(fs === "issued") list = list.filter(function(w){ return w.status === "issued" || w.status === "working"; });
+    else list = list.filter(function(w){ return w.status === fs; });
+  }
+  if(fa === "yes") list = list.filter(function(w){ return w.is_accounted == 1; });
+  else if(fa === "no") list = list.filter(function(w){ return w.is_accounted != 1; });
+  return list;
+}
+
 // ===== 入库计划列表 =====
 function initPlanList(){
   var today = kstToday();
@@ -606,16 +635,17 @@ function loadPlanListByRange(mode){
     if(mode === "unfinished"){
       var today = kstToday();
       var incomplete = all.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
+      incomplete = applyPlanFilters(incomplete);
       var todayInc = incomplete.filter(function(p){ return p.plan_day === today; });
       var historyInc = incomplete.filter(function(p){ return p.plan_day < today; });
       renderPlanList(resultEl, todayInc, historyInc);
     } else if(mode === "next3"){
-      renderPlanNext3List(resultEl, all);
+      renderPlanNext3List(resultEl, applyPlanFilters(all));
     } else if(mode === "overdue"){
       var overdue = all.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
-      renderPlanList(resultEl, [], overdue);
+      renderPlanList(resultEl, [], applyPlanFilters(overdue));
     } else {
-      renderPlanList(resultEl, all, []);
+      renderPlanList(resultEl, applyPlanFilters(all), []);
     }
   });
 }
@@ -1625,7 +1655,7 @@ function loadWoList(){
   el.innerHTML = '<div class="q-empty">加载中...</div>';
   fetchApi({ action:"b2b_wo_list", start_day:s, end_day:e }).then(function(res){
     if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败</div>'; return; }
-    renderWoList(el, res.workorders||[], []);
+    renderWoList(el, applyWoFilters(res.workorders||[]), []);
   });
 }
 
@@ -1640,7 +1670,7 @@ function loadWoListByScope(scope){
     fetchApi({ action:"b2b_wo_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday }).then(function(res){
       var all = (res && res.ok) ? (res.workorders||[]) : [];
       var overdue = all.filter(function(w){ return WO_INCOMPLETE_STATUS[w.status]; });
-      renderWoList(el, [], overdue);
+      renderWoList(el, [], applyWoFilters(overdue));
     });
   } else if(scope === "next3"){
     var endDay = kstDayOffset(2);
@@ -1651,7 +1681,7 @@ function loadWoListByScope(scope){
       var wos = (results[0] && results[0].ok) ? (results[0].workorders||[]) : [];
       var all = (results[1] && results[1].ok) ? (results[1].workorders||[]) : [];
       var overdue = all.filter(function(w){ return WO_INCOMPLETE_STATUS[w.status]; });
-      renderWoList(el, wos, overdue);
+      renderWoList(el, applyWoFilters(wos), applyWoFilters(overdue));
     });
   } else {
     Promise.all([
@@ -1661,7 +1691,7 @@ function loadWoListByScope(scope){
       var wos = (results[0] && results[0].ok) ? (results[0].workorders||[]) : [];
       var all = (results[1] && results[1].ok) ? (results[1].workorders||[]) : [];
       var overdue = all.filter(function(w){ return WO_INCOMPLETE_STATUS[w.status]; });
-      renderWoList(el, wos, overdue);
+      renderWoList(el, applyWoFilters(wos), applyWoFilters(overdue));
     });
   }
 }
