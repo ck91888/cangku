@@ -1029,6 +1029,7 @@ async function submitEventSync_(o, silent){
     client_ms: (o.client_ms || Date.now()),
     note: o.note || ""
   };
+  if(o.temp_switch) params.temp_switch = "1";
 
   var res = await jsonp(LOCK_URL, params, silent ? { skipBusy: true } : undefined);
 
@@ -2913,34 +2914,11 @@ async function tempSwitchToTarget_(kind){
   }
 
   var srcLabel = taskDisplayLabel(srcBiz, srcTask);
-  setStatus("临时切换中... 正在退出" + srcLabel + "（" + badges.length + "人）⏳", true);
 
-  // 1. 逐个 leave 当前任务（释放锁）
-  currentSessionId = srcSid;
-  CUR_CTX = { biz: srcBiz, task: srcTask, page: srcPage };
-  var leftBadges = [];
-  for(var j = 0; j < badges.length; j++){
-    try{
-      var b = badges[j];
-      var evLeave = makeEventId({ event:"leave", biz:srcBiz, task:srcTask, wave_id:"", badgeRaw: b });
-      await submitEventSyncWithRetry_({ event:"leave", event_id: evLeave, biz:srcBiz, task:srcTask, pick_session_id: srcSid, da_id: b });
-      addRecent(evLeave);
-      applyActive(srcTask, "leave", b);
-      leftBadges.push(b);
-    }catch(e){
-      alert("退出失败（" + badgeDisplay(badges[j]) + "）：" + e + "\n\n已成功退出 " + leftBadges.length + " 人，将继续切换。");
-    }
-  }
-  persistState();
-
-  if(leftBadges.length === 0){
-    setStatus("全部退出失败 ❌", false);
-    return;
-  }
-
-  // 2. 自动 start 目标 session + 自动 join 所有人
-  setStatus("正在加入"+kindLabel+"... ⏳", true);
+  // ===== 1. PREFLIGHT：创建/复用目标 session（源任务还没动）=====
+  setStatus("临时切换中... 正在准备"+kindLabel+"环境 ⏳", true);
   var targetSid = getSess_(target.biz, target.task);
+  var targetCreated = false;
   if(targetSid){
     try{
       var sInfo = await jsonp(LOCK_URL, { action:"session_info", session: targetSid }, { skipBusy: true });
@@ -2954,29 +2932,52 @@ async function tempSwitchToTarget_(kind){
     targetSid = makePickSessionId();
     var evStart = makeEventId({ event:"start", biz:target.biz, task:target.task, wave_id:"", badgeRaw:"" });
     try{
-      await submitEventSync_({ event:"start", event_id: evStart, biz:target.biz, task:target.task, pick_session_id: targetSid }, true);
+      await submitEventSync_({ event:"start", event_id: evStart, biz:target.biz, task:target.task, pick_session_id: targetSid, temp_switch: true }, true);
       addRecent(evStart);
+      targetCreated = true;
       var targetReg = taskReg_(target.task);
       if(targetReg) targetReg.set(new Set());
     }catch(e){
-      setStatus("创建"+kindLabel+"趟次失败 ❌ " + e, false);
-      alert("创建"+kindLabel+"趟次失败：" + e + "\n\n已退出原任务，请手动在"+kindLabel+"页加入。");
-      saveTempSwitchCtx_({
-        badges: leftBadges, sourceBiz: srcBiz, sourceTask: srcTask, sourcePage: srcPage,
-        sourceSession: srcSid, scannedItems: getScannedItems_(srcTask),
-        targetKind: kind, targetBiz: target.biz, targetTask: target.task, targetPage: target.page,
-        timestamp: Date.now()
-      });
-      go(target.page); refreshUI(); updateReturnButton_();
+      // 目标 session 创建失败 → 直接中止，源任务完全没动
+      setStatus("切换失败 ❌", false);
+      alert("切换失败：无法创建"+kindLabel+"趟次。\n\n原因：" + (e.message || e) + "\n\n当前任务未受影响，可继续操作。");
       return;
     }
   }
-  currentSessionId = targetSid;
-  CUR_CTX = { biz: target.biz, task: target.task, page: target.page };
   setSess_(target.biz, target.task, targetSid);
 
+  // ===== 2. LEAVE 源任务（目标已确认可用）=====
+  setStatus("正在退出" + srcLabel + "（" + badges.length + "人）⏳", true);
+  currentSessionId = srcSid;
+  CUR_CTX = { biz: srcBiz, task: srcTask, page: srcPage };
+  var leftBadges = [];
+  for(var j = 0; j < badges.length; j++){
+    try{
+      var b = badges[j];
+      var evLeave = makeEventId({ event:"leave", biz:srcBiz, task:srcTask, wave_id:"", badgeRaw: b });
+      await submitEventSyncWithRetry_({ event:"leave", event_id: evLeave, biz:srcBiz, task:srcTask, pick_session_id: srcSid, da_id: b });
+      addRecent(evLeave);
+      applyActive(srcTask, "leave", b);
+      leftBadges.push(b);
+    }catch(e){
+      alert("退出失败（" + badgeDisplay(badges[j]) + "）：" + e + "\n该人员将留在原任务。");
+    }
+  }
+  persistState();
+
+  if(leftBadges.length === 0){
+    setStatus("全部退出失败，切换已取消 ❌", false);
+    alert("切换失败：所有人员退出原任务失败。\n当前任务未受影响，可继续操作。");
+    return;
+  }
+
+  // ===== 3. JOIN 目标任务 =====
+  setStatus("正在加入"+kindLabel+"... ⏳", true);
+  currentSessionId = targetSid;
+  CUR_CTX = { biz: target.biz, task: target.task, page: target.page };
+
   var joinedTarget = [];
-  var joinFailed = [];
+  var joinFailedBadges = [];
   for(var u = 0; u < leftBadges.length; u++){
     try{
       var evJoin = makeEventId({ event:"join", biz:target.biz, task:target.task, wave_id:"", badgeRaw: leftBadges[u] });
@@ -2985,25 +2986,78 @@ async function tempSwitchToTarget_(kind){
       applyActive(target.task, "join", leftBadges[u]);
       joinedTarget.push(leftBadges[u]);
     }catch(e){
-      joinFailed.push(badgeDisplay(leftBadges[u]));
+      joinFailedBadges.push(leftBadges[u]);
     }
   }
-  if(joinFailed.length > 0){
-    alert("以下人员加入"+kindLabel+"失败，请手动加入：\n" + joinFailed.join("\n"));
+
+  // ===== 4. ROLLBACK 处理 join 失败的 badge =====
+  if(joinedTarget.length === 0){
+    // 全部 join 失败 → 整体回滚：把所有 leftBadges rejoin 回源任务
+    setStatus("加入"+kindLabel+"全部失败，正在恢复原任务... ⏳", true);
+    currentSessionId = srcSid;
+    CUR_CTX = { biz: srcBiz, task: srcTask, page: srcPage };
+    var rollbackOk = 0;
+    for(var r = 0; r < leftBadges.length; r++){
+      try{
+        var evRejoin = makeEventId({ event:"join", biz:srcBiz, task:srcTask, wave_id:"", badgeRaw: leftBadges[r] });
+        await submitEventSyncWithRetry_({ event:"join", event_id: evRejoin, biz:srcBiz, task:srcTask, pick_session_id: srcSid, da_id: leftBadges[r] });
+        addRecent(evRejoin);
+        applyActive(srcTask, "join", leftBadges[r]);
+        rollbackOk++;
+      }catch(e){ /* best effort */ }
+    }
+    persistState();
+    if(rollbackOk === leftBadges.length){
+      setStatus("切换失败，已恢复原任务 ❌", false);
+      alert("切换失败：无法加入"+kindLabel+"。\n已自动恢复原任务（" + rollbackOk + "人），可继续操作。");
+    } else if(rollbackOk > 0){
+      setStatus("切换失败，部分恢复 ⚠️", false);
+      alert("切换失败：无法加入"+kindLabel+"。\n\n自动恢复结果：" + rollbackOk + "/" + leftBadges.length + " 人已恢复原任务。\n未恢复的人员请在原任务页手动重新加入。");
+    } else {
+      setStatus("切换失败，恢复也失败 ⚠️", false);
+      alert("切换失败：无法加入"+kindLabel+"，且自动恢复原任务也失败。\n\n请手动操作：\n1. 回到原任务（" + srcLabel + "）页面\n2. 重新加入作业\n\n当前session：" + srcSid);
+    }
+    return;
   }
+
+  // 部分 join 失败 → 失败的 badge 自动回滚到源任务
+  if(joinFailedBadges.length > 0){
+    currentSessionId = srcSid;
+    CUR_CTX = { biz: srcBiz, task: srcTask, page: srcPage };
+    var partialRollbackOk = 0;
+    for(var rp = 0; rp < joinFailedBadges.length; rp++){
+      try{
+        var evRejoinP = makeEventId({ event:"join", biz:srcBiz, task:srcTask, wave_id:"", badgeRaw: joinFailedBadges[rp] });
+        await submitEventSyncWithRetry_({ event:"join", event_id: evRejoinP, biz:srcBiz, task:srcTask, pick_session_id: srcSid, da_id: joinFailedBadges[rp] });
+        addRecent(evRejoinP);
+        applyActive(srcTask, "join", joinFailedBadges[rp]);
+        partialRollbackOk++;
+      }catch(e){ /* best effort */ }
+    }
+    persistState();
+    var failNames = joinFailedBadges.map(function(b){ return badgeDisplay(b); }).join("、");
+    if(partialRollbackOk === joinFailedBadges.length){
+      alert("以下人员加入"+kindLabel+"失败，已自动恢复到原任务：\n" + failNames);
+    } else {
+      alert("以下人员加入"+kindLabel+"失败：\n" + failNames + "\n\n其中 " + partialRollbackOk + "/" + joinFailedBadges.length + " 人已恢复原任务，其余请手动在原任务页重新加入。");
+    }
+    // 恢复上下文到目标（继续为成功的 badge 完成切换）
+    currentSessionId = targetSid;
+    CUR_CTX = { biz: target.biz, task: target.task, page: target.page };
+  }
+
   persistState();
 
-  // 3. 保存上下文到 localStorage
+  // ===== 5. 保存上下文 + 导航 =====
   saveTempSwitchCtx_({
-    badges: leftBadges,
+    badges: joinedTarget,
     sourceBiz: srcBiz, sourceTask: srcTask, sourcePage: srcPage,
     sourceSession: srcSid, scannedItems: getScannedItems_(srcTask),
     targetKind: kind, targetBiz: target.biz, targetTask: target.task, targetPage: target.page,
     timestamp: Date.now()
   });
 
-  // 4. 导航到目标页
-  setStatus("已切换到"+kindLabel+" ✅（" + joinedTarget.length + "/" + leftBadges.length + "人已加入）", false);
+  setStatus("已切换到"+kindLabel+" ✅（" + joinedTarget.length + "/" + badges.length + "人已加入）", false);
   go(target.page);
   refreshUI();
   renderActiveLists();

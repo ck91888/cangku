@@ -982,6 +982,7 @@ export default {
       const operator_id = String(p.operator_id || "").trim();
       const client_ms = Number(p.client_ms || p.ts_ms || 0) || 0;
       const note = String(p.note || "").trim();
+      const temp_switch = String(p.temp_switch || "") === "1";
 
       if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
       if (!event) return jsonpOrJson({ ok:false, error:"missing event" }, callback);
@@ -1021,7 +1022,9 @@ export default {
         ).bind(operator_id).first();
 
         // 反向检查：如果当前要 start 的不是卸货/拣货，也要排除已有的卸货/拣货 session
-        const isExempt = (biz==='B2C' && task==='拣货') || (biz==='B2B' && task==='B2B卸货') || (biz==='进口' && task==='卸货');
+        // 装车任务（B2B出库/装柜出货）仅在 temp_switch=1 时豁免，普通开工仍受限
+        const isExempt = (biz==='B2C' && task==='拣货') || (biz==='B2B' && task==='B2B卸货') || (biz==='进口' && task==='卸货')
+          || (temp_switch && ((biz==='B2B' && task==='B2B出库') || (biz==='进口' && task==='装柜/出货')));
 
         if (open && String(open.session || "") !== session && !isExempt) {
           return jsonpOrJson({
