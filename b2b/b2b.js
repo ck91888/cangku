@@ -449,19 +449,22 @@ function renderHomeNext3Plans(plans, day1){
 
   if(!plans.length){ bodyEl.innerHTML = '<div class="q-empty">暂无</div>'; return; }
 
-  var dayLabels = ["明天","后天","大后天"];
   var byDay = {};
   plans.forEach(function(p){
     if(!byDay[p.plan_day]) byDay[p.plan_day] = [];
     byDay[p.plan_day].push(p);
   });
 
-  var days = Object.keys(byDay).sort();
+  var targets = [
+    { day: kstDayOffset(1), label: "明天" },
+    { day: kstDayOffset(2), label: "后天" },
+    { day: kstDayOffset(3), label: "大后天" }
+  ];
   var html = '';
-  days.forEach(function(day, idx){
-    var label = dayLabels[idx] || day;
-    var items = byDay[day];
-    html += '<div class="next3-day">'+esc(label)+' ('+esc(day)+') — '+items.length+' 单</div>';
+  targets.forEach(function(t){
+    var items = byDay[t.day];
+    if(!items || !items.length) return;
+    html += '<div class="next3-day">'+esc(t.label)+' ('+esc(t.day)+') — '+items.length+' 单</div>';
     var show = items.slice(0, 3);
     show.forEach(function(p){
       html += '<div class="next3-item">· '+esc(p.customer_name)+(p.expected_arrival_time ? ' · '+esc(p.expected_arrival_time) : '')+' · '+esc((p.goods_summary||"").substring(0,20))+'</div>';
