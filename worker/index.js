@@ -2355,19 +2355,7 @@ export default {
     // ===== B2B 入库计划 =====
     if (action === "b2b_plan_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
-      // 幂等检查
       const req_id = String(p.request_id || "").trim();
-      if (req_id) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=?`).bind(req_id).first();
-        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_plan_create',?,?)`).bind(req_id, Date.now()).run();
-        if (!ins.meta?.changes) {
-          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=?`).bind(req_id).first();
-          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
-          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        }
-      }
       const plan_day = String(p.plan_day || "").trim();
       const customer_name = String(p.customer_name || "").trim();
       const biz_type = String(p.biz_type || "").trim();
@@ -2384,28 +2372,46 @@ export default {
       if (!BIZ_NEW.includes(biz_type)) return jsonpOrJson({ ok:false, error:"invalid biz_type, must be: " + BIZ_NEW.join("/") }, callback);
       if (!created_by) return jsonpOrJson({ ok:false, error:"missing created_by" }, callback);
 
-      // 生成 plan_id：IP-YYMMDD-NNN（后端原子生成，避免撞号）
-      const dayTag = plan_day.slice(2).replace(/-/g, ""); // "260316"
-      const maxRow = await env.DB.prepare(
-        `SELECT plan_id FROM b2b_inbound_plans WHERE plan_id LIKE ? ORDER BY plan_id DESC LIMIT 1`
-      ).bind("IP-" + dayTag + "-%").first();
-      let seq = 1;
-      if (maxRow && maxRow.plan_id) {
-        const parts = maxRow.plan_id.split("-");
-        seq = (parseInt(parts[2], 10) || 0) + 1;
-      }
-      const plan_id = "IP-" + dayTag + "-" + String(seq).padStart(3, "0");
-
-      await env.DB.prepare(
-        `INSERT INTO b2b_inbound_plans(plan_id,plan_day,customer_name,biz_type,goods_summary,expected_arrival_time,purpose_text,remark,status,created_by,created_at)
-         VALUES(?,?,?,?,?,?,?,?,'pending',?,?)`
-      ).bind(plan_id, plan_day, customer_name, biz_type, goods_summary, expected_arrival_time, purpose_text, remark, created_by, now).run();
-
-      const respPlan = { ok:true, plan_id };
+      // 幂等 claim（校验通过后才占位）
       if (req_id) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_plan_create' AND request_id=?`).bind(plan_id, JSON.stringify(respPlan), req_id).run();
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=?`).bind(req_id).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_plan_create',?,?)`).bind(req_id, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=?`).bind(req_id).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
-      return jsonpOrJson(respPlan, callback);
+
+      try {
+        // 生成 plan_id：IP-YYMMDD-NNN（后端原子生成，避免撞号）
+        const dayTag = plan_day.slice(2).replace(/-/g, ""); // "260316"
+        const maxRow = await env.DB.prepare(
+          `SELECT plan_id FROM b2b_inbound_plans WHERE plan_id LIKE ? ORDER BY plan_id DESC LIMIT 1`
+        ).bind("IP-" + dayTag + "-%").first();
+        let seq = 1;
+        if (maxRow && maxRow.plan_id) {
+          const parts = maxRow.plan_id.split("-");
+          seq = (parseInt(parts[2], 10) || 0) + 1;
+        }
+        const plan_id = "IP-" + dayTag + "-" + String(seq).padStart(3, "0");
+
+        await env.DB.prepare(
+          `INSERT INTO b2b_inbound_plans(plan_id,plan_day,customer_name,biz_type,goods_summary,expected_arrival_time,purpose_text,remark,status,created_by,created_at)
+           VALUES(?,?,?,?,?,?,?,?,'pending',?,?)`
+        ).bind(plan_id, plan_day, customer_name, biz_type, goods_summary, expected_arrival_time, purpose_text, remark, created_by, now).run();
+
+        const respPlan = { ok:true, plan_id };
+        if (req_id) {
+          await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_plan_create' AND request_id=?`).bind(plan_id, JSON.stringify(respPlan), req_id).run();
+        }
+        return jsonpOrJson(respPlan, callback);
+      } catch(e) {
+        if (req_id) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_plan_create' AND request_id=? AND response_json=''`).bind(req_id).run();
+        throw e;
+      }
     }
 
     if (action === "b2b_plan_list") {
@@ -2502,19 +2508,7 @@ export default {
     // ===== B2B 出库作业单 =====
     if (action === "b2b_wo_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
-      // 幂等检查
       const req_id_wo = String(p.request_id || "").trim();
-      if (req_id_wo) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=?`).bind(req_id_wo).first();
-        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_wo_create',?,?)`).bind(req_id_wo, Date.now()).run();
-        if (!ins.meta?.changes) {
-          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=?`).bind(req_id_wo).first();
-          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
-          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        }
-      }
 
       // 三模式字段（向后兼容：旧前端可能只传 outbound_mode=sku_based/carton_based）
       let detail_mode = String(p.detail_mode || "").trim();
@@ -2552,71 +2546,89 @@ export default {
         if (!Array.isArray(lines) || lines.length === 0) return jsonpOrJson({ ok:false, error:"at least 1 line required" }, callback);
       }
 
-      // 生成 workorder_id：WO-YYMMDD-NNN
-      const dayTag = plan_day.slice(2).replace(/-/g, "");
-      const maxRow = await env.DB.prepare(
-        `SELECT workorder_id FROM b2b_workorders WHERE workorder_id LIKE ? ORDER BY workorder_id DESC LIMIT 1`
-      ).bind("WO-" + dayTag + "-%").first();
-      let seq = 1;
-      if (maxRow && maxRow.workorder_id) {
-        const parts = maxRow.workorder_id.split("-");
-        seq = (parseInt(parts[2], 10) || 0) + 1;
+      // 幂等 claim（校验通过后才占位）
+      if (req_id_wo) {
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=?`).bind(req_id_wo).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_wo_create',?,?)`).bind(req_id_wo, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=?`).bind(req_id_wo).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
-      const workorder_id = "WO-" + dayTag + "-" + String(seq).padStart(3, "0");
 
-      // 汇总明细 + 构造 batch 语句
-      let total_qty = 0, total_weight_kg = 0, total_cbm = 0;
-      const line_type = detail_mode === "carton_based" ? "carton" : "sku";
-      const total_qty_unit = detail_mode === "carton_based" ? "箱" : "件";
-      const batchStmts = [];
+      try {
+        // 生成 workorder_id：WO-YYMMDD-NNN
+        const dayTag = plan_day.slice(2).replace(/-/g, "");
+        const maxRow = await env.DB.prepare(
+          `SELECT workorder_id FROM b2b_workorders WHERE workorder_id LIKE ? ORDER BY workorder_id DESC LIMIT 1`
+        ).bind("WO-" + dayTag + "-%").first();
+        let seq = 1;
+        if (maxRow && maxRow.workorder_id) {
+          const parts = maxRow.workorder_id.split("-");
+          seq = (parseInt(parts[2], 10) || 0) + 1;
+        }
+        const workorder_id = "WO-" + dayTag + "-" + String(seq).padStart(3, "0");
 
-      for (let i = 0; i < lines.length; i++) {
-        const ln = lines[i];
-        const qty = Number(ln.qty || 0);
-        const w = Number(ln.weight_kg || 0);
-        const l = Number(ln.length_cm || 0);
-        const wd = Number(ln.width_cm || 0);
-        const h = Number(ln.height_cm || 0);
-        total_qty += qty;
-        total_weight_kg += w;
-        if (l > 0 && wd > 0 && h > 0) total_cbm += (l * wd * h) / 1000000;
+        // 汇总明细 + 构造 batch 语句
+        let total_qty = 0, total_weight_kg = 0, total_cbm = 0;
+        const line_type = detail_mode === "carton_based" ? "carton" : "sku";
+        const total_qty_unit = detail_mode === "carton_based" ? "箱" : "件";
+        const batchStmts = [];
+
+        for (let i = 0; i < lines.length; i++) {
+          const ln = lines[i];
+          const qty = Number(ln.qty || 0);
+          const w = Number(ln.weight_kg || 0);
+          const l = Number(ln.length_cm || 0);
+          const wd = Number(ln.width_cm || 0);
+          const h = Number(ln.height_cm || 0);
+          total_qty += qty;
+          total_weight_kg += w;
+          if (l > 0 && wd > 0 && h > 0) total_cbm += (l * wd * h) / 1000000;
+
+          batchStmts.push(
+            env.DB.prepare(
+              `INSERT INTO b2b_workorder_lines(workorder_id,line_no,line_type,sku_code,product_name,carton_no,qty,length_cm,width_cm,height_cm,weight_kg,remark)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+            ).bind(
+              workorder_id, i + 1, line_type,
+              String(ln.sku_code || ""), String(ln.product_name || ""), String(ln.carton_no || ""),
+              qty, l, wd, h, w, String(ln.remark || "")
+            )
+          );
+        }
+
+        total_cbm = Math.round(total_cbm * 1000) / 1000;
+        total_weight_kg = Math.round(total_weight_kg * 1000) / 1000;
 
         batchStmts.push(
           env.DB.prepare(
-            `INSERT INTO b2b_workorder_lines(workorder_id,line_no,line_type,sku_code,product_name,carton_no,qty,length_cm,width_cm,height_cm,weight_kg,remark)
-             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+            `INSERT INTO b2b_workorders(workorder_id,external_workorder_no,outbound_mode,detail_mode,operation_mode,status,customer_name,plan_day,planned_start_at,planned_end_at,total_qty,total_qty_unit,total_weight_kg,total_cbm,instruction_text,created_by,created_at,outbound_destination,order_ref_no,outbound_box_count,outbound_pallet_count)
+             VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
           ).bind(
-            workorder_id, i + 1, line_type,
-            String(ln.sku_code || ""), String(ln.product_name || ""), String(ln.carton_no || ""),
-            qty, l, wd, h, w, String(ln.remark || "")
+            workorder_id, external_workorder_no, outbound_mode, detail_mode, operation_mode,
+            customer_name,
+            plan_day, planned_start_at, planned_end_at,
+            total_qty, total_qty_unit, total_weight_kg, total_cbm,
+            instruction_text, created_by, now,
+            outbound_destination, order_ref_no, outbound_box_count, outbound_pallet_count
           )
         );
+
+        await env.DB.batch(batchStmts);
+
+        const respWo = { ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm };
+        if (req_id_wo) {
+          await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_wo_create' AND request_id=?`).bind(workorder_id, JSON.stringify(respWo), req_id_wo).run();
+        }
+        return jsonpOrJson(respWo, callback);
+      } catch(e) {
+        if (req_id_wo) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_wo_create' AND request_id=? AND response_json=''`).bind(req_id_wo).run();
+        throw e;
       }
-
-      total_cbm = Math.round(total_cbm * 1000) / 1000;
-      total_weight_kg = Math.round(total_weight_kg * 1000) / 1000;
-
-      batchStmts.push(
-        env.DB.prepare(
-          `INSERT INTO b2b_workorders(workorder_id,external_workorder_no,outbound_mode,detail_mode,operation_mode,status,customer_name,plan_day,planned_start_at,planned_end_at,total_qty,total_qty_unit,total_weight_kg,total_cbm,instruction_text,created_by,created_at,outbound_destination,order_ref_no,outbound_box_count,outbound_pallet_count)
-           VALUES(?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(
-          workorder_id, external_workorder_no, outbound_mode, detail_mode, operation_mode,
-          customer_name,
-          plan_day, planned_start_at, planned_end_at,
-          total_qty, total_qty_unit, total_weight_kg, total_cbm,
-          instruction_text, created_by, now,
-          outbound_destination, order_ref_no, outbound_box_count, outbound_pallet_count
-        )
-      );
-
-      await env.DB.batch(batchStmts);
-
-      const respWo = { ok:true, workorder_id, lines_count: lines.length, total_qty, total_weight_kg, total_cbm };
-      if (req_id_wo) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_wo_create' AND request_id=?`).bind(workorder_id, JSON.stringify(respWo), req_id_wo).run();
-      }
-      return jsonpOrJson(respWo, callback);
     }
 
     if (action === "b2b_wo_list") {
@@ -2998,19 +3010,7 @@ export default {
 
     if (action === "b2b_field_op_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
-      // 幂等检查
       const req_id_fo = String(p.request_id || "").trim();
-      if (req_id_fo) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=?`).bind(req_id_fo).first();
-        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_field_op_create',?,?)`).bind(req_id_fo, Date.now()).run();
-        if (!ins.meta?.changes) {
-          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=?`).bind(req_id_fo).first();
-          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
-          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        }
-      }
 
       const plan_day = String(p.plan_day || "").trim();
       const customer_name = String(p.customer_name || "").trim();
@@ -3052,38 +3052,56 @@ export default {
         if (!srcPlan) return jsonpOrJson({ ok:false, error:"source_plan_id not found: " + source_plan_id }, callback);
       }
 
-      // 生成 record_id：FO-YYMMDD-NNN
-      const dayTag = plan_day.slice(2).replace(/-/g, "");
-      const maxRow = await env.DB.prepare(
-        `SELECT record_id FROM b2b_field_ops WHERE record_id LIKE ? ORDER BY record_id DESC LIMIT 1`
-      ).bind("FO-" + dayTag + "-%").first();
-      let seq = 1;
-      if (maxRow && maxRow.record_id) {
-        const parts = maxRow.record_id.split("-");
-        seq = (parseInt(parts[2], 10) || 0) + 1;
-      }
-      const record_id = "FO-" + dayTag + "-" + String(seq).padStart(3, "0");
-
-      await env.DB.prepare(
-        `INSERT INTO b2b_field_ops(record_id,source_plan_id,plan_day,customer_name,goods_summary,operation_type,
-         input_box_count,output_box_count,output_pallet_count,instruction_text,
-         packed_qty,packed_box_count,used_carton,big_carton_count,small_carton_count,
-         label_count,photo_count,has_pallet_detail,did_pack,did_rebox,rebox_count,
-         needs_forklift_pick,forklift_pallet_count,rack_pick_location_count,
-         status,created_by,created_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`
-      ).bind(record_id, source_plan_id, plan_day, customer_name, goods_summary, operation_type,
-        input_box_count, output_box_count, output_pallet_count, instruction_text,
-        fo_packed_qty, fo_packed_box_count, fo_used_carton, fo_big_carton_count, fo_small_carton_count,
-        fo_label_count, fo_photo_count, fo_has_pallet_detail, fo_did_pack, fo_did_rebox, fo_rebox_count,
-        fo_needs_forklift_pick, fo_forklift_pallet_count, fo_rack_pick_location_count,
-        created_by, now).run();
-
-      const respFo = { ok:true, record_id };
+      // 幂等 claim（校验通过后才占位）
       if (req_id_fo) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_field_op_create' AND request_id=?`).bind(record_id, JSON.stringify(respFo), req_id_fo).run();
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=?`).bind(req_id_fo).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_field_op_create',?,?)`).bind(req_id_fo, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=?`).bind(req_id_fo).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
-      return jsonpOrJson(respFo, callback);
+
+      try {
+        // 生成 record_id：FO-YYMMDD-NNN
+        const dayTag = plan_day.slice(2).replace(/-/g, "");
+        const maxRow = await env.DB.prepare(
+          `SELECT record_id FROM b2b_field_ops WHERE record_id LIKE ? ORDER BY record_id DESC LIMIT 1`
+        ).bind("FO-" + dayTag + "-%").first();
+        let seq = 1;
+        if (maxRow && maxRow.record_id) {
+          const parts = maxRow.record_id.split("-");
+          seq = (parseInt(parts[2], 10) || 0) + 1;
+        }
+        const record_id = "FO-" + dayTag + "-" + String(seq).padStart(3, "0");
+
+        await env.DB.prepare(
+          `INSERT INTO b2b_field_ops(record_id,source_plan_id,plan_day,customer_name,goods_summary,operation_type,
+           input_box_count,output_box_count,output_pallet_count,instruction_text,
+           packed_qty,packed_box_count,used_carton,big_carton_count,small_carton_count,
+           label_count,photo_count,has_pallet_detail,did_pack,did_rebox,rebox_count,
+           needs_forklift_pick,forklift_pallet_count,rack_pick_location_count,
+           status,created_by,created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`
+        ).bind(record_id, source_plan_id, plan_day, customer_name, goods_summary, operation_type,
+          input_box_count, output_box_count, output_pallet_count, instruction_text,
+          fo_packed_qty, fo_packed_box_count, fo_used_carton, fo_big_carton_count, fo_small_carton_count,
+          fo_label_count, fo_photo_count, fo_has_pallet_detail, fo_did_pack, fo_did_rebox, fo_rebox_count,
+          fo_needs_forklift_pick, fo_forklift_pallet_count, fo_rack_pick_location_count,
+          created_by, now).run();
+
+        const respFo = { ok:true, record_id };
+        if (req_id_fo) {
+          await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_field_op_create' AND request_id=?`).bind(record_id, JSON.stringify(respFo), req_id_fo).run();
+        }
+        return jsonpOrJson(respFo, callback);
+      } catch(e) {
+        if (req_id_fo) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_field_op_create' AND request_id=? AND response_json=''`).bind(req_id_fo).run();
+        throw e;
+      }
     }
 
     if (action === "b2b_field_op_list") {
@@ -3486,19 +3504,7 @@ export default {
 
     if (action === "b2b_scan_batch_create") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
-      // 幂等检查
       const req_id_sc = String(p.request_id || "").trim();
-      if (req_id_sc) {
-        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(req_id_sc).first();
-        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
-        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_scan_batch_create',?,?)`).bind(req_id_sc, Date.now()).run();
-        if (!ins.meta?.changes) {
-          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(req_id_sc).first();
-          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
-          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
-        }
-      }
 
       const check_day = String(p.check_day || "").trim();
       const batch_name = String(p.batch_name || "").trim();
@@ -3531,47 +3537,61 @@ export default {
         totalExpected += cnt;
       }
 
-      // 生成 batch_id: SC-YYMMDD-NNN
-      const dayTag = check_day.slice(2).replace(/-/g, "");
-      const maxRow = await env.DB.prepare(
-        `SELECT batch_id FROM b2b_scan_batches WHERE batch_id LIKE ? ORDER BY batch_id DESC LIMIT 1`
-      ).bind("SC-" + dayTag + "-%").first();
-      let seq = 1;
-      if (maxRow && maxRow.batch_id) {
-        const parts = maxRow.batch_id.split("-");
-        seq = (parseInt(parts[2], 10) || 0) + 1;
-      }
-      const batch_id = "SC-" + dayTag + "-" + String(seq).padStart(3, "0");
-
-      // 批量写入：batch + items
-      const stmts = [];
-      stmts.push(env.DB.prepare(
-        `INSERT INTO b2b_scan_batches(batch_id,check_day,batch_name,status,total_barcodes,total_expected_boxes,created_by,created_at) VALUES(?,?,?,'open',?,?,?,?)`
-      ).bind(batch_id, check_day, batch_name, items.length, totalExpected, created_by, now));
-
-      for (const it of items) {
-        const bc = String(it.outbound_barcode || "").trim();
-        const cnt = parseInt(it.expected_box_count, 10);
-        const cust = String(it.customer_name || "").trim();
-        const summary = String(it.goods_summary || "").trim();
-        stmts.push(env.DB.prepare(
-          `INSERT INTO b2b_scan_items(batch_id,outbound_barcode,expected_box_count,customer_name,goods_summary,scanned_count) VALUES(?,?,?,?,?,0)`
-        ).bind(batch_id, bc, cnt, cust, summary));
+      // 幂等 claim（校验通过后才占位）
+      if (req_id_sc) {
+        const dup = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(req_id_sc).first();
+        if (dup && dup.response_json) return jsonpOrJson(JSON.parse(dup.response_json), callback);
+        if (dup) return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        const ins = await env.DB.prepare(`INSERT OR IGNORE INTO api_idempotency_keys(action,request_id,created_at) VALUES('b2b_scan_batch_create',?,?)`).bind(req_id_sc, Date.now()).run();
+        if (!ins.meta?.changes) {
+          const dup2 = await env.DB.prepare(`SELECT response_json FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(req_id_sc).first();
+          if (dup2 && dup2.response_json) return jsonpOrJson(JSON.parse(dup2.response_json), callback);
+          return jsonpOrJson({ ok:false, error:"request_in_progress", retryable:true }, callback);
+        }
       }
 
       try {
+        // 生成 batch_id: SC-YYMMDD-NNN
+        const dayTag = check_day.slice(2).replace(/-/g, "");
+        const maxRow = await env.DB.prepare(
+          `SELECT batch_id FROM b2b_scan_batches WHERE batch_id LIKE ? ORDER BY batch_id DESC LIMIT 1`
+        ).bind("SC-" + dayTag + "-%").first();
+        let seq = 1;
+        if (maxRow && maxRow.batch_id) {
+          const parts = maxRow.batch_id.split("-");
+          seq = (parseInt(parts[2], 10) || 0) + 1;
+        }
+        const batch_id = "SC-" + dayTag + "-" + String(seq).padStart(3, "0");
+
+        // 批量写入：batch + items
+        const stmts = [];
+        stmts.push(env.DB.prepare(
+          `INSERT INTO b2b_scan_batches(batch_id,check_day,batch_name,status,total_barcodes,total_expected_boxes,created_by,created_at) VALUES(?,?,?,'open',?,?,?,?)`
+        ).bind(batch_id, check_day, batch_name, items.length, totalExpected, created_by, now));
+
+        for (const it of items) {
+          const bc = String(it.outbound_barcode || "").trim();
+          const cnt = parseInt(it.expected_box_count, 10);
+          const cust = String(it.customer_name || "").trim();
+          const summary = String(it.goods_summary || "").trim();
+          stmts.push(env.DB.prepare(
+            `INSERT INTO b2b_scan_items(batch_id,outbound_barcode,expected_box_count,customer_name,goods_summary,scanned_count) VALUES(?,?,?,?,?,0)`
+          ).bind(batch_id, bc, cnt, cust, summary));
+        }
+
         await env.DB.batch(stmts);
+
+        const respSc = { ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected };
+        if (req_id_sc) {
+          await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(batch_id, JSON.stringify(respSc), req_id_sc).run();
+        }
+        return jsonpOrJson(respSc, callback);
       } catch(e) {
+        if (req_id_sc) await env.DB.prepare(`DELETE FROM api_idempotency_keys WHERE action='b2b_scan_batch_create' AND request_id=? AND response_json=''`).bind(req_id_sc).run();
         const msg = String(e && e.message || e);
         if (msg.includes("UNIQUE")) return jsonpOrJson({ ok:false, error:"duplicate barcode in batch" }, callback);
         return jsonpOrJson({ ok:false, error:"batch create failed: " + msg }, callback);
       }
-
-      const respSc = { ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected };
-      if (req_id_sc) {
-        await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(batch_id, JSON.stringify(respSc), req_id_sc).run();
-      }
-      return jsonpOrJson(respSc, callback);
     }
 
     if (action === "b2b_scan_batch_list") {
