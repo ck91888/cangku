@@ -152,7 +152,7 @@ function renderPages(){
   if(cur==="b2b_menu"){ refreshUI(); }
   if(cur==="b2b_unload"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
   if(cur==="b2b_tally"){ restoreState(); renderActiveLists(); renderB2bTallyUI(); refreshUI(); }
-  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); loadB2bResults(); refreshUI(); }
+  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); loadB2bResults(); refreshUI(); if(!currentSessionId) tryRecoverB2bSession_(); }
   if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
   if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_field_op"){ restoreState(); renderActiveLists(); renderB2bFieldOpUI(); refreshUI(); }
@@ -1159,9 +1159,18 @@ async function endSessionGlobal_(){
         var st = o.result_status === "missing" ? "未录入" : (o.result_status === "draft" ? "草稿未提交" : o.result_status);
         return o.source_order_no + " 〔" + st + "〕";
       }).join("\n");
-      var msg = "当前还有未完成提交的工单结果单，不能结束本趟作业。\n\n请先完成以下工单的结果单：\n" + orders;
+      var msg = "当前还有未完成提交的工单结果单，不能结束本趟作业。\n\n请先完成以下工单的结果单：\n" + orders +
+        "\n\n趟次：" + currentSessionId;
       setStatus("有未完成结果单，禁止结束", false);
-      alert(msg);
+      if(getHashPage() !== "b2b_workorder"){
+        msg += "\n\n点【确定】跳转到B2B工单操作页处理。";
+        if(confirm(msg)){
+          setSess_("B2B", "B2B工单操作", currentSessionId);
+          go("b2b_workorder");
+        }
+      } else {
+        alert(msg);
+      }
       return;
     }
     var msg = "还有人员未退出，不能结束。\n\n" + formatActiveListForAlert_(r.active);
@@ -1888,7 +1897,12 @@ async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
           return o.source_order_no + " 〔" + st + "〕";
         }).join("\n");
         setStatus("有未完成结果单，无法开始新任务", false);
-        alert("当前还有未完成提交的工单结果单，不能开始新任务。\n\n请先完成以下工单的结果单：\n" + orders);
+        var goMsg = "当前还有未完成提交的工单结果单，不能开始新任务。\n\n请先完成以下工单的结果单：\n" + orders +
+          "\n\n趟次：" + currentSessionId + "\n\n点【确定】跳转到B2B工单操作页处理。";
+        if(confirm(goMsg)){
+          setSess_("B2B", "B2B工单操作", currentSessionId);
+          go("b2b_workorder");
+        }
       } else {
         setStatus("旧趟次未能释放，无法开始新任务", false);
         alert("旧趟次未能释放（" + (closeRes.reason || "未知原因") + "），请先结束当前趟次。");
@@ -2092,6 +2106,37 @@ function loadB2bResults(){
     (res.results || []).forEach(function(r){ b2bWorkorderResults[r.source_order_no] = r; });
     renderB2bWorkorderUI();
   }).catch(function(){});
+}
+
+async function tryRecoverB2bSession_(){
+  if(currentSessionId) return;
+  if(getHashPage() !== "b2b_workorder") return;
+  var op = getOperatorId();
+  if(!op) return;
+  try{
+    var res = await jsonp(LOCK_URL, { action:"operator_open_sessions", operator_id: op }, { skipBusy: true });
+    if(!res || !res.ok || !res.sessions) return;
+    var found = null;
+    for(var i = 0; i < res.sessions.length; i++){
+      if(res.sessions[i].biz === "B2B" && res.sessions[i].task === "B2B工单操作"){
+        found = res.sessions[i]; break;
+      }
+    }
+    if(!found) return;
+    // 自动恢复
+    currentSessionId = found.session;
+    CUR_CTX = { biz: "B2B", task: "B2B工单操作", page: "b2b_workorder" };
+    setSess_("B2B", "B2B工单操作", found.session);
+    SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
+    restoreState();
+    syncActiveFromServer_();
+    loadB2bBindings();
+    loadB2bResults();
+    renderActiveLists();
+    renderB2bWorkorderUI();
+    refreshUI();
+    setStatus("已自动恢复未结束的作业趟次 ✅ " + found.session, false);
+  }catch(e){ /* silent */ }
 }
 
 function openResultForm(orderNo, seedData){
@@ -2687,7 +2732,12 @@ async function startB2bFieldOp(e){
             return o.source_order_no + " 〔" + st + "〕";
           }).join("\n");
           setStatus("有未完成结果单，无法开始新任务", false);
-          alert("当前还有未完成提交的工单结果单，不能开始新任务。\n\n请先完成以下工单的结果单：\n" + orders);
+          var goMsg2 = "当前还有未完成提交的工单结果单，不能开始新任务。\n\n请先完成以下工单的结果单：\n" + orders +
+            "\n\n趟次：" + currentSessionId + "\n\n点【确定】跳转到B2B工单操作页处理。";
+          if(confirm(goMsg2)){
+            setSess_("B2B", "B2B工单操作", currentSessionId);
+            go("b2b_workorder");
+          }
         } else {
           setStatus("旧趟次未能释放，无法开始新任务", false);
           alert("旧趟次未能释放（" + (closeRes.reason || "未知原因") + "），请先结束当前趟次。");
