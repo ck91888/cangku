@@ -787,6 +787,25 @@ export default {
           await env.DB.prepare(`ALTER TABLE api_idempotency_keys_v2 RENAME TO api_idempotency_keys`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v20_idempotency_composite_pk', ?)`).bind(Date.now()).run();
         }
+
+        // --- v21: 出库作业单车辆信息+发货确认 ---
+        const m21 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v21_wo_pickup_shipment'`).first();
+        if (!m21) {
+          const cols21 = [
+            ["pickup_vehicle_no","TEXT NOT NULL DEFAULT ''"],
+            ["pickup_driver_name","TEXT NOT NULL DEFAULT ''"],
+            ["pickup_driver_phone","TEXT NOT NULL DEFAULT ''"],
+            ["pickup_remark","TEXT NOT NULL DEFAULT ''"],
+            ["pickup_recorded_by","TEXT NOT NULL DEFAULT ''"],
+            ["pickup_recorded_at","INTEGER"],
+            ["shipment_confirmed_by","TEXT NOT NULL DEFAULT ''"],
+            ["shipment_confirmed_at","INTEGER"]
+          ];
+          for (const [col, def] of cols21) {
+            try { await env.DB.prepare(`ALTER TABLE b2b_workorders ADD COLUMN ${col} ${def}`).run(); } catch(e) {}
+          }
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v21_wo_pickup_shipment', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -2890,6 +2909,48 @@ export default {
           .bind(workorder_id).run();
       }
       return jsonpOrJson({ ok:true, workorder_id, is_accounted }, callback);
+    }
+
+    // ===== 车辆信息登记 =====
+    if (action === "b2b_wo_set_pickup_info") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const workorder_id = String(p.workorder_id || "").trim();
+      const pickup_vehicle_no = String(p.pickup_vehicle_no || "").trim();
+      const pickup_driver_name = String(p.pickup_driver_name || "").trim();
+      const pickup_driver_phone = String(p.pickup_driver_phone || "").trim();
+      const pickup_remark = String(p.pickup_remark || "").trim();
+      const pickup_recorded_by = String(p.pickup_recorded_by || "").trim();
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+      if (!pickup_vehicle_no) return jsonpOrJson({ ok:false, error:"missing pickup_vehicle_no" }, callback);
+      if (!pickup_recorded_by) return jsonpOrJson({ ok:false, error:"missing pickup_recorded_by" }, callback);
+
+      const wo = await env.DB.prepare(`SELECT status, shipment_confirmed_at FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!wo) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+      if (wo.status !== "completed") return jsonpOrJson({ ok:false, error:"only completed workorders can set pickup info" }, callback);
+
+      await env.DB.prepare(
+        `UPDATE b2b_workorders SET pickup_vehicle_no=?, pickup_driver_name=?, pickup_driver_phone=?, pickup_remark=?, pickup_recorded_by=?, pickup_recorded_at=? WHERE workorder_id=?`
+      ).bind(pickup_vehicle_no, pickup_driver_name, pickup_driver_phone, pickup_remark, pickup_recorded_by, Date.now(), workorder_id).run();
+      return jsonpOrJson({ ok:true, workorder_id }, callback);
+    }
+
+    // ===== 确认已发货 =====
+    if (action === "b2b_wo_confirm_shipped") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const workorder_id = String(p.workorder_id || "").trim();
+      const shipment_confirmed_by = String(p.shipment_confirmed_by || "").trim();
+      if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+      if (!shipment_confirmed_by) return jsonpOrJson({ ok:false, error:"missing shipment_confirmed_by" }, callback);
+
+      const wo = await env.DB.prepare(`SELECT status, pickup_vehicle_no FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+      if (!wo) return jsonpOrJson({ ok:false, error:"workorder not found" }, callback);
+      if (wo.status !== "completed") return jsonpOrJson({ ok:false, error:"only completed workorders can confirm shipment" }, callback);
+      if (!wo.pickup_vehicle_no) return jsonpOrJson({ ok:false, error:"must set pickup info before confirming shipment" }, callback);
+
+      await env.DB.prepare(
+        `UPDATE b2b_workorders SET shipment_confirmed_by=?, shipment_confirmed_at=? WHERE workorder_id=?`
+      ).bind(shipment_confirmed_by, Date.now(), workorder_id).run();
+      return jsonpOrJson({ ok:true, workorder_id }, callback);
     }
 
     // ===== B2B 附件上传（multipart/form-data） =====

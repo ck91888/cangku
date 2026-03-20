@@ -225,7 +225,7 @@ function navRestoreState(entry){
   if(v === "plan_list"){
     document.getElementById("pl-start").value = st["pl-start"] || "";
     document.getElementById("pl-end").value = st["pl-end"] || "";
-    _currentPlanScope = st.scope || "today";
+    _currentPlanScope = st.scope || "unfinished";
     reloadCurrentPlanList();
   } else if(v === "wo_list"){
     document.getElementById("wl-start").value = st["wl-start"] || "";
@@ -306,7 +306,7 @@ function goTab(tab){
     btns[i].className = (tabOrder[i] === tab) ? "tab-active" : "";
   }
   if(tab === "home"){ goHome(); return; }
-  if(tab === "plan"){ _planListScope = "today"; goView("plan_list"); return; }
+  if(tab === "plan"){ _planListScope = "unfinished"; goView("plan_list"); return; }
   if(tab === "wo"){ _woListScope = "next3"; goView("wo_list"); return; }
   if(tab === "fo"){ goView("fo_list"); return; }
   if(tab === "sc"){ goView("sc_list"); return; }
@@ -350,36 +350,44 @@ function kstDayOffset(days){
 }
 
 // ===== 首页 =====
-var _planListScope = "today";
+var _planListScope = "unfinished";
 var _woListScope = "today";
-var _currentPlanScope = "today";
+var _currentPlanScope = "unfinished";
 var _currentWoScope = "today";
 
 function loadHome(){
   var today = kstToday();
-  var day2 = kstDayOffset(2);
+  var day1 = kstDayOffset(1);
+  var day3 = kstDayOffset(3);
   document.getElementById("todayPill").textContent = today;
 
-  ["ip-today","wo-today","fo-today","sc-today"].forEach(function(p){
+  ["ip-unfinished","ip-next3","wo-today","sc-today"].forEach(function(p){
     document.getElementById(p + "-count").textContent = "--";
     document.getElementById(p + "-body").innerHTML = '<div class="q-empty">加载中...</div>';
   });
   document.getElementById("home-alerts").innerHTML = "";
 
   Promise.all([
-    fetchApi({ action:"b2b_plan_list", start_day:today, end_day:today }),
-    fetchApi({ action:"b2b_wo_list", start_day:today, end_day:day2 }),
-    fetchApi({ action:"b2b_field_op_list", start_day:today, end_day:today }),
+    fetchApi({ action:"b2b_plan_list", start_day:B2B_EARLIEST_DAY, end_day:today }),
+    fetchApi({ action:"b2b_plan_list", start_day:day1, end_day:day3 }),
+    fetchApi({ action:"b2b_wo_list", start_day:today, end_day:day3 }),
     fetchApi({ action:"b2b_scan_batch_list", start_day:today, end_day:today })
   ]).then(function(results){
-    var plans = (results[0] && results[0].ok) ? (results[0].plans||[]) : [];
-    var wos = (results[1] && results[1].ok) ? (results[1].workorders||[]) : [];
-    var fos = (results[2] && results[2].ok) ? (results[2].records||[]) : [];
+    var allPlans = (results[0] && results[0].ok) ? (results[0].plans||[]) : [];
+    var next3Plans = (results[1] && results[1].ok) ? (results[1].plans||[]) : [];
+    var wos = (results[2] && results[2].ok) ? (results[2].workorders||[]) : [];
     var scs = (results[3] && results[3].ok) ? (results[3].batches||[]) : [];
 
-    renderHomeCard("ip-today", plans, null, "plan");
+    // 未完成入库计划（plan_day<=today && 未完成状态）
+    var unfinished = allPlans.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
+    var todayUnfinished = unfinished.filter(function(p){ return p.plan_day === today; });
+    var historyUnfinished = unfinished.filter(function(p){ return p.plan_day < today; });
+    renderHomeUnfinished(unfinished, todayUnfinished, historyUnfinished);
+
+    // 未来三天入库计划
+    renderHomeNext3Plans(next3Plans, day1);
+
     renderHomeCard("wo-today", wos, null, "wo");
-    renderHomeCardSimple("fo-today", fos, FO_STATUS_LABEL, ["recording","draft","completed","cancelled"]);
     renderHomeCardSimple("sc-today", scs, SC_STATUS_LABEL, ["open","closed","cancelled"]);
 
     // 提醒区
@@ -390,11 +398,14 @@ function loadHome(){
     wos.forEach(function(w){
       if(w.has_update_notice && !w.has_cancel_notice) alerts.push({ cls:"alert-update", text:"⚠ "+w.workorder_id+" 已变更 — "+esc(w.customer_name), id:w.workorder_id, type:"wo" });
     });
+    // 待发货确认提醒
+    wos.forEach(function(w){
+      if(w.status==="completed" && w.pickup_vehicle_no && !w.shipment_confirmed_at){
+        alerts.push({ cls:"alert-update", text:"🚚 待发货确认: "+w.workorder_id+" · 车牌 "+esc(w.pickup_vehicle_no)+(w.pickup_driver_name ? " · 司机 "+esc(w.pickup_driver_name) : ""), id:w.workorder_id, type:"wo" });
+      }
+    });
     scs.forEach(function(b){
       if(b.status === "open") alerts.push({ cls:"alert-open", text:"📋 核对进行中: "+b.batch_id+" — "+esc(b.batch_name), id:b.batch_id, type:"sc" });
-    });
-    fos.forEach(function(r){
-      if(FO_INCOMPLETE_STATUS[r.status]) alerts.push({ cls:"alert-incomplete", text:"🔧 现场未完成: "+r.record_id+" — "+esc(r.customer_name), id:r.record_id, type:"fo" });
     });
     var alertEl = document.getElementById("home-alerts");
     if(alerts.length > 0){
@@ -405,6 +416,59 @@ function loadHome(){
         }).join("");
     }
   });
+}
+
+function renderHomeUnfinished(all, todayItems, historyItems){
+  var countEl = document.getElementById("ip-unfinished-count");
+  var bodyEl = document.getElementById("ip-unfinished-body");
+  countEl.textContent = "共 "+all.length+" 单"+(all.length ? "（今日 "+todayItems.length+" + 历史 "+historyItems.length+"）" : "");
+
+  if(!all.length){ bodyEl.innerHTML = '<div class="q-empty">全部已完成 ✓</div>'; return; }
+
+  var statusCounts = {};
+  todayItems.forEach(function(p){ statusCounts[p.status] = (statusCounts[p.status]||0) + 1; });
+  var tags = [];
+  ["abnormal","processing","arrived","pending"].forEach(function(s){
+    if(statusCounts[s]) tags.push('<span class="st st-'+s+'">'+esc(PLAN_STATUS_LABEL[s])+' '+statusCounts[s]+'</span>');
+  });
+  var html = '';
+  if(tags.length) html += '<div class="card-status-row">' + tags.join(' ') + '</div>';
+  if(historyItems.length > 0){
+    var earliest = historyItems[0].plan_day;
+    historyItems.forEach(function(p){ if(p.plan_day < earliest) earliest = p.plan_day; });
+    html += '<div class="overdue-warn" onclick="goCardDetail(\'plan\',\'overdue\');event.stopPropagation();">⚠ 历史未完成 '+historyItems.length+' 单（最早 '+esc(earliest)+'）</div>';
+  }
+  if(!html) html = '<div class="q-empty">暂无</div>';
+  bodyEl.innerHTML = html;
+}
+
+function renderHomeNext3Plans(plans, day1){
+  var countEl = document.getElementById("ip-next3-count");
+  var bodyEl = document.getElementById("ip-next3-body");
+  countEl.textContent = "共 "+plans.length+" 单";
+
+  if(!plans.length){ bodyEl.innerHTML = '<div class="q-empty">暂无</div>'; return; }
+
+  var dayLabels = ["明天","后天","大后天"];
+  var byDay = {};
+  plans.forEach(function(p){
+    if(!byDay[p.plan_day]) byDay[p.plan_day] = [];
+    byDay[p.plan_day].push(p);
+  });
+
+  var days = Object.keys(byDay).sort();
+  var html = '';
+  days.forEach(function(day, idx){
+    var label = dayLabels[idx] || day;
+    var items = byDay[day];
+    html += '<div class="next3-day">'+esc(label)+' ('+esc(day)+') — '+items.length+' 单</div>';
+    var show = items.slice(0, 3);
+    show.forEach(function(p){
+      html += '<div class="next3-item">· '+esc(p.customer_name)+(p.expected_arrival_time ? ' · '+esc(p.expected_arrival_time) : '')+' · '+esc((p.goods_summary||"").substring(0,20))+'</div>';
+    });
+    if(items.length > 3) html += '<div class="next3-item" style="color:#999;">还有 '+(items.length-3)+' 单...</div>';
+  });
+  bodyEl.innerHTML = html;
 }
 
 function renderHomeCard(prefix, items, overdueItems, type){
@@ -484,37 +548,61 @@ function changePlanStatus(plan_id, status){
 function initPlanList(){
   var today = kstToday();
   var scope = _planListScope;
-  _planListScope = "today";
+  _planListScope = "unfinished";
   _currentPlanScope = scope;
 
-  if(scope === "tomorrow"){
+  if(scope === "unfinished"){
+    document.getElementById("pl-start").value = B2B_EARLIEST_DAY;
+    document.getElementById("pl-end").value = today;
+    loadPlanListByRange("unfinished");
+  } else if(scope === "next3"){
+    document.getElementById("pl-start").value = kstDayOffset(1);
+    document.getElementById("pl-end").value = kstDayOffset(3);
+    loadPlanListByRange("next3");
+  } else if(scope === "tomorrow"){
     var tmr = kstTomorrow();
     document.getElementById("pl-start").value = tmr;
     document.getElementById("pl-end").value = tmr;
+    loadPlanListByRange(null);
   } else if(scope === "overdue"){
     document.getElementById("pl-start").value = B2B_EARLIEST_DAY;
     document.getElementById("pl-end").value = kstYesterday();
+    loadPlanListByRange("overdue");
   } else {
     document.getElementById("pl-start").value = today;
     document.getElementById("pl-end").value = today;
+    loadPlanListByRange(null);
   }
-  loadPlanListByRange(scope === "overdue" ? "overdue" : null);
 }
 
 function loadPlanListByRange(mode){
   var s = document.getElementById("pl-start").value;
   var e = document.getElementById("pl-end").value;
   if(!s || !e){ alert("请选择日期"); return; }
-  _currentPlanScope = (mode === "overdue") ? "overdue" : "custom";
+  if(mode === "unfinished" || mode === "overdue" || mode === "next3"){
+    _currentPlanScope = mode;
+  } else {
+    _currentPlanScope = "custom";
+  }
   var titleEl = document.getElementById("pl-title");
   var resultEl = document.getElementById("pl-result");
   resultEl.innerHTML = '<div class="q-empty">加载中...</div>';
-  titleEl.textContent = "入库计划列表";
+
+  if(mode === "unfinished") titleEl.textContent = "未完成入库计划";
+  else if(mode === "next3") titleEl.textContent = "未来三天入库计划";
+  else if(mode === "overdue") titleEl.textContent = "逾期未完成计划";
+  else titleEl.textContent = "入库计划列表";
 
   fetchApi({ action:"b2b_plan_list", start_day:s, end_day:e }).then(function(res){
     if(!res || !res.ok){ resultEl.innerHTML = '<div class="bad">查询失败</div>'; return; }
     var all = res.plans || [];
-    if(mode === "overdue"){
+    if(mode === "unfinished"){
+      var today = kstToday();
+      var incomplete = all.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
+      var todayInc = incomplete.filter(function(p){ return p.plan_day === today; });
+      var historyInc = incomplete.filter(function(p){ return p.plan_day < today; });
+      renderPlanList(resultEl, todayInc, historyInc);
+    } else if(mode === "overdue"){
       var overdue = all.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
       renderPlanList(resultEl, [], overdue);
     } else {
@@ -544,7 +632,7 @@ function renderPlanList(container, plans, overduePlans){
       return (a.is_accounted||0) - (b.is_accounted||0);
     });
     if(overduePlans.length > 0){
-      html += '<div class="list-section-title" style="margin-top:12px;">📥 当日计划（'+plans.length+' 单）</div>';
+      html += '<div class="list-section-title" style="margin-top:12px;">📥 今日未完成（'+plans.length+' 单）</div>';
     }
     html += plans.map(renderPlanRow).join("");
   }
@@ -1509,9 +1597,15 @@ function renderWoRow(w){
   var accBtn = w.is_accounted
     ? '<span class="acc-btn" onclick="event.stopPropagation();setWoAccounted(\''+esc(w.workorder_id)+'\',0)">撤销记帐</span>'
     : '<span class="acc-btn" onclick="event.stopPropagation();setWoAccounted(\''+esc(w.workorder_id)+'\',1)">标记记帐</span>';
+  var shipTag = '';
+  if(w.status==="completed"){
+    if(w.shipment_confirmed_at) shipTag = ' <span class="ship-tag ship-confirmed">已发货</span>';
+    else if(w.pickup_vehicle_no) shipTag = ' <span class="ship-tag ship-pending-confirm">待发货确认</span>';
+    else shipTag = ' <span class="ship-tag ship-pending-vehicle">待录车辆</span>';
+  }
   return '<div class="wo-row'+dimClass+'" onclick="goWoDetail(\''+esc(w.workorder_id)+'\')">' +
     '<div><span class="st st-'+esc(w.status)+'">'+esc(WO_STATUS_LABEL[w.status]||w.status)+'</span> ' +
-    '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name) + noticeTag + accTag + accBtn + '</div>' +
+    '<b>'+esc(w.workorder_id)+'</b> · '+esc(w.customer_name) + noticeTag + shipTag + accTag + accBtn + '</div>' +
     '<div class="meta">'+esc(w.plan_day)+' · '+esc(opLabel)+' · '+esc(obLabel) +
     ' · '+(isCartonNoLine(w,[]) && fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
       ? fmtOutboundQty(w.outbound_box_count, w.outbound_pallet_count)
@@ -1617,6 +1711,8 @@ function goWoDetail(id, _skipNav){
           : '<span class="acc-tag acc-no">未记帐</span> <span class="acc-btn" onclick="setWoAccounted(\''+esc(w.workorder_id)+'\',1)">标记记帐</span>') +
       '</div>' +
 
+      renderWoPickupSection(w) +
+
       '<div style="margin:12px 0;" class="no-print">' + statusBtns + editBtn +
         ' <button onclick="printWo(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">打印</button>' +
       '</div>' +
@@ -1656,6 +1752,78 @@ function goWoDetail(id, _skipNav){
           '</div>';
         }).join("");
     });
+  });
+}
+
+function renderWoPickupSection(w){
+  if(w.status !== "completed") return '';
+  var html = '<div class="pickup-section">';
+  html += '<div class="pickup-title">🚚 提货车辆信息</div>';
+  if(w.pickup_vehicle_no){
+    html += '<div class="detail-field"><b>车牌号:</b> '+esc(w.pickup_vehicle_no)+'</div>';
+    html += '<div class="detail-field"><b>司机姓名:</b> '+esc(w.pickup_driver_name||"(未填)")+'</div>';
+    html += '<div class="detail-field"><b>司机电话:</b> '+esc(w.pickup_driver_phone||"(未填)")+'</div>';
+    if(w.pickup_remark) html += '<div class="detail-field"><b>备注:</b> '+esc(w.pickup_remark)+'</div>';
+    html += '<div class="detail-field muted" style="font-size:12px;"><b>登记人:</b> '+esc(w.pickup_recorded_by)+' · '+(w.pickup_recorded_at ? new Date(w.pickup_recorded_at).toLocaleString() : "")+'</div>';
+
+    if(w.shipment_confirmed_at){
+      html += '<div class="detail-field" style="margin-top:8px;"><span class="ship-tag ship-confirmed">已发货确认</span> <span class="muted" style="font-size:12px;">确认人: '+esc(w.shipment_confirmed_by)+' · '+new Date(w.shipment_confirmed_at).toLocaleString()+'</span></div>';
+    } else {
+      html += '<div style="margin-top:8px;" class="no-print">' +
+        '<button onclick="woSetPickupInfo(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:6px 14px;font-size:13px;">修改车辆信息</button> ' +
+        '<button onclick="woConfirmShipped(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:6px 14px;font-size:13px;background:#27ae60;color:#fff;">确认已发货</button>' +
+        '</div>';
+    }
+  } else {
+    html += '<div class="q-empty">尚未登记车辆信息</div>';
+    html += '<div class="no-print"><button onclick="woSetPickupInfo(\''+esc(w.workorder_id)+'\')" style="width:auto;padding:6px 14px;font-size:13px;">登记车辆信息</button></div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function woSetPickupInfo(id){
+  var vehicleNo = prompt("车牌号（必填）：");
+  if(vehicleNo === null) return;
+  vehicleNo = vehicleNo.trim();
+  if(!vehicleNo){ alert("车牌号不能为空"); return; }
+  var driverName = prompt("司机姓名：") || "";
+  var driverPhone = prompt("司机电话：") || "";
+  var remark = prompt("提货备注（可留空）：") || "";
+  var recordedBy = prompt("登记人（必填）：");
+  if(recordedBy === null) return;
+  recordedBy = recordedBy.trim();
+  if(!recordedBy){ alert("登记人不能为空"); return; }
+
+  fetchApi({
+    action:"b2b_wo_set_pickup_info", workorder_id:id,
+    pickup_vehicle_no:vehicleNo, pickup_driver_name:driverName.trim(),
+    pickup_driver_phone:driverPhone.trim(), pickup_remark:remark.trim(),
+    pickup_recorded_by:recordedBy
+  }).then(function(res){
+    if(res && res.ok){
+      alert("车辆信息已登记");
+      goWoDetail(id, true);
+    } else {
+      alert("登记失败: "+(res&&res.error||"unknown"));
+    }
+  });
+}
+
+function woConfirmShipped(id){
+  var confirmedBy = prompt("确认人姓名（必填）：");
+  if(confirmedBy === null) return;
+  confirmedBy = confirmedBy.trim();
+  if(!confirmedBy){ alert("确认人不能为空"); return; }
+  if(!confirm("确认该作业单已发货？\n确认后首页提醒将消失。")) return;
+
+  fetchApi({ action:"b2b_wo_confirm_shipped", workorder_id:id, shipment_confirmed_by:confirmedBy }).then(function(res){
+    if(res && res.ok){
+      alert("已确认发货");
+      goWoDetail(id, true);
+    } else {
+      alert("确认失败: "+(res&&res.error||"unknown"));
+    }
   });
 }
 
@@ -1741,7 +1909,11 @@ function refreshAfterAccounted(type, id){
   }
 }
 function reloadCurrentPlanList(){
-  loadPlanListByRange(_currentPlanScope === "overdue" ? "overdue" : null);
+  if(_currentPlanScope === "unfinished" || _currentPlanScope === "overdue" || _currentPlanScope === "next3"){
+    loadPlanListByRange(_currentPlanScope);
+  } else {
+    loadPlanListByRange(null);
+  }
 }
 function reloadCurrentWoList(){
   if(_currentWoScope === "next3" || _currentWoScope === "today" || _currentWoScope === "overdue"){

@@ -94,6 +94,14 @@
     .acc-yes{background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7;}
     .acc-btn{display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:600;margin-left:4px;cursor:pointer;border:1px solid #ccc;background:#f5f5f5;color:#666;}
     .acc-btn:hover{background:#eee;}
+    .ship-tag{display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;margin-left:4px;}
+    .ship-pending-vehicle{background:#fff3e0;color:#e65100;border:1px solid #ffb300;}
+    .ship-pending-confirm{background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;}
+    .ship-confirmed{background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7;}
+    .pickup-section{border:1px solid #e0e0e0;border-radius:10px;padding:12px;margin:12px 0;background:#fafafa;}
+    .pickup-title{font-size:14px;font-weight:700;margin-bottom:8px;}
+    .next3-day{font-size:13px;font-weight:700;color:#1565c0;margin-top:8px;margin-bottom:4px;}
+    .next3-item{font-size:12px;color:#444;padding:2px 0;}
     .nav-back{display:inline-block;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;color:#1565c0;background:none;border:1px solid #90caf9;margin-bottom:8px;}
     .nav-back:hover{background:#e3f2fd;}
     .wave-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;cursor:pointer;}
@@ -173,17 +181,17 @@
   <!-- 首页 -->
   <div id="v-home">
     <div class="quadrant">
-      <div class="q-card q-clickable" onclick="goTab('plan')">
-        <div class="q-title">📥 今日入库计划 <span class="count" id="ip-today-count">--</span></div>
-        <div id="ip-today-body"><div class="q-empty">加载中...</div></div>
+      <div class="q-card q-clickable" onclick="goCardDetail('plan','unfinished')">
+        <div class="q-title">📥 未完成入库计划 <span class="count" id="ip-unfinished-count">--</span></div>
+        <div id="ip-unfinished-body"><div class="q-empty">加载中...</div></div>
+      </div>
+      <div class="q-card q-clickable" onclick="goCardDetail('plan','next3')">
+        <div class="q-title">📅 未来三天入库计划 <span class="count" id="ip-next3-count">--</span></div>
+        <div id="ip-next3-body"><div class="q-empty">加载中...</div></div>
       </div>
       <div class="q-card q-clickable" onclick="goTab('wo')">
         <div class="q-title">📦 未来三天出库作业单 <span class="count" id="wo-today-count">--</span></div>
         <div id="wo-today-body"><div class="q-empty">加载中...</div></div>
-      </div>
-      <div class="q-card q-clickable" onclick="goTab('fo')">
-        <div class="q-title">🔧 今日现场动态 <span class="count" id="fo-today-count">--</span></div>
-        <div id="fo-today-body"><div class="q-empty">加载中...</div></div>
       </div>
       <div class="q-card q-clickable" onclick="goTab('sc')">
         <div class="q-title">✅ 进行中核对批次 <span class="count" id="sc-today-count">--</span></div>
