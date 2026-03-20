@@ -2637,9 +2637,10 @@ export default {
         return jsonpOrJson(respWo, callback);
       } catch(e) {
         if (req_id_wo) {
-          const exists = workorder_id && await env.DB.prepare(`SELECT 1 FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
-          if (exists) {
-            const respWo = { ok:true, workorder_id, lines_count: lines.length };
+          const woRow = workorder_id && await env.DB.prepare(`SELECT total_qty, total_weight_kg, total_cbm FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
+          const lineCnt = woRow && await env.DB.prepare(`SELECT COUNT(*) AS c FROM b2b_workorder_lines WHERE workorder_id=?`).bind(workorder_id).first();
+          if (woRow && lineCnt && lineCnt.c === lines.length) {
+            const respWo = { ok:true, workorder_id, lines_count: lines.length, total_qty: woRow.total_qty, total_weight_kg: woRow.total_weight_kg, total_cbm: woRow.total_cbm };
             try { await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_wo_create' AND request_id=?`).bind(workorder_id, JSON.stringify(respWo), req_id_wo).run(); } catch(_){}
             return jsonpOrJson(respWo, callback);
           }
@@ -3616,8 +3617,9 @@ export default {
         return jsonpOrJson(respSc, callback);
       } catch(e) {
         if (req_id_sc) {
-          const exists = batch_id && await env.DB.prepare(`SELECT 1 FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
-          if (exists) {
+          const batchRow = batch_id && await env.DB.prepare(`SELECT 1 FROM b2b_scan_batches WHERE batch_id=?`).bind(batch_id).first();
+          const itemCnt = batchRow && await env.DB.prepare(`SELECT COUNT(*) AS c FROM b2b_scan_items WHERE batch_id=?`).bind(batch_id).first();
+          if (batchRow && itemCnt && itemCnt.c === items.length) {
             const respSc = { ok:true, batch_id, total_barcodes: items.length, total_expected_boxes: totalExpected };
             try { await env.DB.prepare(`UPDATE api_idempotency_keys SET result_id=?, response_json=? WHERE action='b2b_scan_batch_create' AND request_id=?`).bind(batch_id, JSON.stringify(respSc), req_id_sc).run(); } catch(_){}
             return jsonpOrJson(respSc, callback);
