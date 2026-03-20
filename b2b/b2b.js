@@ -620,20 +620,26 @@ function renderPlanNext3List(container, plans){
     if(!byDay[p.plan_day]) byDay[p.plan_day] = [];
     byDay[p.plan_day].push(p);
   });
-  var days = Object.keys(byDay).sort();
-  var dayLabels = ["明天","后天","大后天"];
+  var targets = [
+    { day: kstDayOffset(1), label: "明天" },
+    { day: kstDayOffset(2), label: "后天" },
+    { day: kstDayOffset(3), label: "大后天" }
+  ];
   var html = '';
-  days.forEach(function(day, idx){
-    var label = dayLabels[idx] || day;
-    var items = byDay[day];
+  var first = true;
+  targets.forEach(function(t){
+    var items = byDay[t.day];
+    if(!items || !items.length) return;
     items.sort(function(a,b){
       var sp = (PLAN_STATUS_PRIORITY[a.status]||9) - (PLAN_STATUS_PRIORITY[b.status]||9);
       if(sp !== 0) return sp;
       return (a.is_accounted||0) - (b.is_accounted||0);
     });
-    html += '<div class="list-section-title" style="margin-top:'+(idx?'12':'0')+'px;">📅 '+esc(label)+' ('+esc(day)+') — '+items.length+' 单</div>';
+    html += '<div class="list-section-title" style="margin-top:'+(first?'0':'12')+'px;">📅 '+esc(t.label)+' ('+esc(t.day)+') — '+items.length+' 单</div>';
     html += items.map(renderPlanRow).join("");
+    first = false;
   });
+  if(!html) html = '<div class="q-empty">暂无计划</div>';
   container.innerHTML = html;
 }
 
