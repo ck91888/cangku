@@ -602,6 +602,8 @@ function loadPlanListByRange(mode){
       var todayInc = incomplete.filter(function(p){ return p.plan_day === today; });
       var historyInc = incomplete.filter(function(p){ return p.plan_day < today; });
       renderPlanList(resultEl, todayInc, historyInc);
+    } else if(mode === "next3"){
+      renderPlanNext3List(resultEl, all);
     } else if(mode === "overdue"){
       var overdue = all.filter(function(p){ return PLAN_INCOMPLETE_STATUS[p.status]; });
       renderPlanList(resultEl, [], overdue);
@@ -609,6 +611,30 @@ function loadPlanListByRange(mode){
       renderPlanList(resultEl, all, []);
     }
   });
+}
+
+function renderPlanNext3List(container, plans){
+  if(!plans.length){ container.innerHTML = '<div class="q-empty">暂无计划</div>'; return; }
+  var byDay = {};
+  plans.forEach(function(p){
+    if(!byDay[p.plan_day]) byDay[p.plan_day] = [];
+    byDay[p.plan_day].push(p);
+  });
+  var days = Object.keys(byDay).sort();
+  var dayLabels = ["明天","后天","大后天"];
+  var html = '';
+  days.forEach(function(day, idx){
+    var label = dayLabels[idx] || day;
+    var items = byDay[day];
+    items.sort(function(a,b){
+      var sp = (PLAN_STATUS_PRIORITY[a.status]||9) - (PLAN_STATUS_PRIORITY[b.status]||9);
+      if(sp !== 0) return sp;
+      return (a.is_accounted||0) - (b.is_accounted||0);
+    });
+    html += '<div class="list-section-title" style="margin-top:'+(idx?'12':'0')+'px;">📅 '+esc(label)+' ('+esc(day)+') — '+items.length+' 单</div>';
+    html += items.map(renderPlanRow).join("");
+  });
+  container.innerHTML = html;
 }
 
 function renderPlanList(container, plans, overduePlans){
