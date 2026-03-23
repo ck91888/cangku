@@ -3218,7 +3218,7 @@ export default {
       if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
 
       const rs = await env.DB.prepare(
-        `SELECT * FROM b2b_field_ops WHERE plan_day >= ? AND plan_day <= ? ORDER BY plan_day ASC, created_at ASC`
+        `SELECT *, substr(datetime(created_at/1000,'unixepoch','+9 hours'),1,10) AS created_day_kst FROM b2b_field_ops WHERE substr(datetime(created_at/1000,'unixepoch','+9 hours'),1,10) >= ? AND substr(datetime(created_at/1000,'unixepoch','+9 hours'),1,10) <= ? ORDER BY created_at DESC`
       ).bind(start_day, end_day).all();
       return jsonpOrJson({ ok:true, records: rs.results || [] }, callback);
     }

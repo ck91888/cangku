@@ -2542,8 +2542,12 @@ function renderFoWorkingCard_(r){
   var lines = [];
   if(r.customer_name) lines.push("客户: " + r.customer_name);
   if(r.source_plan_id) lines.push("来源: " + r.source_plan_id);
-  if(r.plan_day) lines.push("作业日期: " + r.plan_day);
   if(r.goods_summary) lines.push("货物: " + r.goods_summary);
+  // 时间行：建单为主，作业日次要，完成可选
+  var timeInfo = [];
+  if(r.created_at) timeInfo.push("建单: " + fmtFoTime_(r.created_at));
+  if(r.plan_day) timeInfo.push("作业日: " + r.plan_day);
+  if(r.completed_at) timeInfo.push("完成: " + fmtFoTime_(r.completed_at));
   // 结果摘要
   var sum = [];
   if(r.sku_kind_count > 0) sum.push(r.sku_kind_count + "品");
@@ -2553,13 +2557,10 @@ function renderFoWorkingCard_(r){
   if(r.output_pallet_count > 0) sum.push(r.output_pallet_count + "托");
   if(r.label_count > 0) sum.push("贴标" + r.label_count);
   if(r.photo_count > 0) sum.push("拍照" + r.photo_count);
-  var timeInfo = [];
-  if(r.created_at) timeInfo.push("建单: " + fmtFoTime_(r.created_at));
-  if(r.completed_at) timeInfo.push("完成: " + fmtFoTime_(r.completed_at));
   var detailEl = document.getElementById("foWorkingDetail");
   detailEl.innerHTML = esc(lines.join(" · ")) +
-    (sum.length ? '<br><span style="font-size:12px;color:#1976d2;font-weight:500;">' + esc(sum.join(" · ")) + '</span>' : '') +
-    (timeInfo.length ? '<br><span class="muted" style="font-size:11px;">' + esc(timeInfo.join(" · ")) + '</span>' : '');
+    (timeInfo.length ? '<br><span class="muted" style="font-size:11px;">' + esc(timeInfo.join(" · ")) + '</span>' : '') +
+    (sum.length ? '<br><span style="font-size:12px;color:#1976d2;font-weight:500;">' + esc(sum.join(" · ")) + '</span>' : '');
 }
 function fmtFoTime_(t){ if(!t) return ""; try{ return new Date(t).toLocaleString(); }catch(e){ return String(t); } }
 function refreshFoFromServer_(recordId){
@@ -2666,11 +2667,12 @@ function onFoRecordSelected(){
 
 function showFoConfirm(r){
   document.getElementById("foConfirmId").textContent = r.record_id + " · " + (FO_OP_LABELS[r.operation_type]||r.operation_type);
-  document.getElementById("foConfirmDetail").textContent =
-    "客户: " + (r.customer_name||"") +
-    " | 来源: " + (r.source_plan_id||"独立新建") +
-    " | 日期: " + (r.plan_day||"") +
-    (r.goods_summary ? " | " + r.goods_summary : "");
+  var confirmText = "客户: " + (r.customer_name||"") +
+    " | 来源: " + (r.source_plan_id||"独立新建");
+  if(r.created_at) confirmText += " | 建单: " + fmtFoTime_(r.created_at);
+  if(r.plan_day) confirmText += " | 作业日: " + r.plan_day;
+  if(r.goods_summary) confirmText += " | " + r.goods_summary;
+  document.getElementById("foConfirmDetail").textContent = confirmText;
   document.getElementById("foConfirmInfo").style.display = "";
   document.getElementById("foStartBtn").style.display = "";
 }
@@ -2713,13 +2715,20 @@ function foQuickCreate(){
         alert("快速新建成功（" + recordId + "）但状态切换失败: " + (res2&&res2.error||"unknown") + "\n不允许继续开工，请在 /b2b/ 页面手动处理。");
         return;
       }
-      // 成功：设置选中并显示确认
+      // 成功：设置选中并显示确认（先用本地快照，再从服务端拉真实 created_at）
       _foSelectedRecord = {
         record_id:recordId, source_plan_id:planId, plan_day:planDay,
         customer_name:customer, goods_summary:summary, operation_type:opType, status:"recording"
       };
       showFoConfirm(_foSelectedRecord);
       setStatus("快速新建成功 ✅ " + recordId, true);
+      // 异步拉真实 created_at 刷新确认卡片
+      jsonp(LOCK_URL, { action:"b2b_field_op_detail", record_id:recordId, k:getFoKey_() }, { skipBusy:true }).then(function(res3){
+        if(res3 && res3.ok && res3.record){
+          _foSelectedRecord = res3.record;
+          showFoConfirm(_foSelectedRecord);
+        }
+      }).catch(function(){});
     });
   });
 }
@@ -2851,7 +2860,8 @@ function openFoResultForm(recordId){
     html += '<div style="font-size:12px;color:#555;margin-bottom:10px;padding:8px 10px;background:#f5f5f5;border-radius:6px;">';
     html += '<div><b>'+esc(r.record_id)+'</b> · '+esc(r.customer_name||"")+'</div>';
     if(r.source_plan_id) html += '<div>来源计划: '+esc(r.source_plan_id)+'</div>';
-    html += '<div>作业日期: '+esc(r.plan_day)+'</div>';
+    if(r.created_at) html += '<div>建单: '+fmtFoTime_(r.created_at)+'</div>';
+    html += '<div>作业日: '+esc(r.plan_day)+'</div>';
     if(r.goods_summary) html += '<div>货物: '+esc(r.goods_summary)+'</div>';
     if(r.input_box_count) html += '<div>入库箱数: '+r.input_box_count+'</div>';
     if(r.instruction_text) html += '<div>作业说明: '+esc(r.instruction_text)+'</div>';

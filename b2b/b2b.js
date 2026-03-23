@@ -2722,8 +2722,8 @@ function renderFoRow(r){
   var dimClass = (r.status==="cancelled") ? " row-dim" : "";
   var boundTag = r.bound_workorder_id ? ' <span class="bound-badge">已绑定 '+esc(r.bound_workorder_id)+'</span>' : '';
   var srcTag = r.source_plan_id ? ' <span class="muted" style="font-size:11px;">← '+esc(r.source_plan_id)+'</span>' : '';
-  var times = '作业日: '+esc(r.plan_day);
-  if(r.created_at) times += ' · 建单: '+fmtShortTime_(r.created_at);
+  var times = r.created_at ? '建单: '+fmtShortTime_(r.created_at) : '';
+  if(r.plan_day) times += (times ? ' · ' : '') + '作业日: '+esc(r.plan_day);
   if(r.completed_at) times += ' · 完成: '+fmtShortTime_(r.completed_at);
   return '<div class="wo-row'+dimClass+'" onclick="goFoDetail(\''+esc(r.record_id)+'\')">' +
     '<div><span class="st st-'+esc(r.status)+'">'+esc(FO_STATUS_LABEL[r.status]||r.status)+'</span>'+boundTag+' ' +
@@ -2771,15 +2771,16 @@ function goFoDetail(id, _skipNav){
       '</div>' +
       (r.source_plan_id ? '<div class="detail-field" style="color:#2e7d32;"><b>来源入库计划:</b> '+esc(r.source_plan_id)+'</div>' : '<div class="detail-field muted"><b>来源:</b> 独立新建</div>') +
       '<div class="detail-field"><b>客户:</b> '+esc(r.customer_name)+'</div>' +
-      '<div class="detail-field"><b>作业日期:</b> '+esc(r.plan_day)+'</div>' +
+      '<div class="detail-field"><b>建单:</b> '+new Date(r.created_at).toLocaleString()+'</div>' +
+      '<div class="detail-field"><b>作业日:</b> '+esc(r.plan_day)+'</div>' +
+      (r.completed_at ? '<div class="detail-field"><b>完成:</b> '+new Date(r.completed_at).toLocaleString()+'</div>' : '') +
       '<div class="detail-field"><b>操作类型:</b> '+esc(FO_OP_TYPE_LABEL[r.operation_type]||r.operation_type)+'</div>' +
       '<div class="detail-field"><b>货物摘要:</b> '+esc(r.goods_summary||"(无)")+'</div>' +
       '<div class="detail-field"><b>输入箱数:</b> '+r.input_box_count+'</div>' +
       '<div class="detail-field"><b>产出箱数:</b> '+r.output_box_count+'</div>' +
       '<div class="detail-field"><b>产出托盘数:</b> '+r.output_pallet_count+'</div>' +
       (r.instruction_text ? '<div class="detail-field"><b>作业说明:</b> '+esc(r.instruction_text)+'</div>' : '') +
-      '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(r.created_by)+' · 创建时间: '+new Date(r.created_at).toLocaleString() +
-      (r.completed_at ? ' · 完成时间: '+new Date(r.completed_at).toLocaleString() : '') + '</div>' +
+      '<div class="detail-field muted" style="font-size:12px;"><b>创建人:</b> '+esc(r.created_by)+'</div>' +
       boundInfo +
       '<div style="margin:12px 0;">' + statusBtns + editBtn + bindBtn + '</div>' +
       '<div id="fo-bind-area"></div>';
