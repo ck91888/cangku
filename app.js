@@ -2935,6 +2935,7 @@ function submitFoResult(){
   var r = _foSelectedRecord;
   if(!r){ alert("记录信息丢失"); return; }
 
+  var _foBadge = parseBadge(getOperatorId());
   var used_carton = _rfChk("fo-rf-carton");
   var did_rebox = _rfChk("fo-rf-did-rebox");
   var needs_forklift = _rfChk("fo-rf-fork");
@@ -2966,8 +2967,8 @@ function submitFoResult(){
     has_pallet_detail: _rfChk("fo-rf-pallet-detail"),
     did_pack: 0,
     remark: (document.getElementById("fo-rf-remark") || {}).value || "",
-    confirm_badge: getOperatorId() || "",
-    confirmed_by: ""
+    confirm_badge: _foBadge.id,
+    confirmed_by: _foBadge.name || _foBadge.id
   };
 
   setStatus("保存结果中... ⏳", true);
