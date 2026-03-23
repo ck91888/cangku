@@ -27,6 +27,7 @@ function clearRid(kind){
 // ===== 工具函数 =====
 function esc(s){ return String(s||"").replace(/[&<>"']/g, function(c){ return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]; }); }
 function pad2(n){ return String(n).padStart(2,"0"); }
+function fmtShortTime_(t){ if(!t) return ""; try{ var d=new Date(t); return pad2(d.getMonth()+1)+"-"+pad2(d.getDate())+" "+pad2(d.getHours())+":"+pad2(d.getMinutes()); }catch(e){ return String(t); } }
 function getKey(){ try{ return localStorage.getItem(KEY_STORAGE)||""; }catch(e){ return ""; } }
 function setKey(k){ try{ localStorage.setItem(KEY_STORAGE, k); }catch(e){} }
 function clearKey(){ try{ localStorage.removeItem(KEY_STORAGE); }catch(e){} }
@@ -1192,7 +1193,9 @@ function renderWaveList(waves){
         if(w.has_cancel_notice) summary += ' <span class="cancel-notice-tag">已取消</span>';
         if(w.has_update_notice) summary += ' <span class="notice-tag">已变更</span>';
       } else if(w.detail_type === "b2b_field_op" && w.detail_found){
-        summary = esc(w.customer_name||"") + " · " + esc(FO_STATUS_LABEL[w.fo_status]||w.fo_status||"");
+        summary = esc(w.customer_name||"") + " · " + esc(FO_STATUS_LABEL[w.fo_status]||w.fo_status||"") +
+          (w.fo_created_at ? " · 建单:"+fmtShortTime_(w.fo_created_at) : "") +
+          (w.fo_completed_at ? " · 完成:"+fmtShortTime_(w.fo_completed_at) : "");
       }
       return '<div class="wave-row" onclick="toggleWaveDetail('+idx+')">' +
         '<div><span class="'+bizCls+'">'+esc(w.biz)+'</span> <b>'+esc(taskLabel)+'</b> · <code>'+esc(w.wave_id)+'</code></div>' +
@@ -1247,6 +1250,10 @@ function toggleWaveDetail(idx){
     if(w.source_plan_id) html += '<div>来源计划: '+esc(w.source_plan_id)+'</div>';
     if(w.bound_workorder_id) html += '<div>绑定作业单: '+esc(w.bound_workorder_id)+'</div>';
     if(w.operation_type) html += '<div>类型: '+esc(FO_OP_TYPE_LABEL[w.operation_type]||w.operation_type)+'</div>';
+    var foTimes = [];
+    if(w.fo_created_at) foTimes.push('建单: '+fmtShortTime_(w.fo_created_at));
+    if(w.fo_completed_at) foTimes.push('完成: '+fmtShortTime_(w.fo_completed_at));
+    if(foTimes.length) html += '<div class="muted" style="font-size:11px;">'+foTimes.join(' · ')+'</div>';
     html += '<div style="margin-top:6px;"><button style="width:auto;padding:4px 12px;font-size:12px;" onclick="event.stopPropagation();goFoDetail(\''+esc(w.wave_id)+'\')">查看记录详情</button></div>';
   }
 
@@ -2715,10 +2722,13 @@ function renderFoRow(r){
   var dimClass = (r.status==="cancelled") ? " row-dim" : "";
   var boundTag = r.bound_workorder_id ? ' <span class="bound-badge">已绑定 '+esc(r.bound_workorder_id)+'</span>' : '';
   var srcTag = r.source_plan_id ? ' <span class="muted" style="font-size:11px;">← '+esc(r.source_plan_id)+'</span>' : '';
+  var times = '作业日: '+esc(r.plan_day);
+  if(r.created_at) times += ' · 建单: '+fmtShortTime_(r.created_at);
+  if(r.completed_at) times += ' · 完成: '+fmtShortTime_(r.completed_at);
   return '<div class="wo-row'+dimClass+'" onclick="goFoDetail(\''+esc(r.record_id)+'\')">' +
     '<div><span class="st st-'+esc(r.status)+'">'+esc(FO_STATUS_LABEL[r.status]||r.status)+'</span>'+boundTag+' ' +
     '<b>'+esc(r.record_id)+'</b> · '+esc(r.customer_name)+srcTag+'</div>' +
-    '<div class="meta">'+esc(r.plan_day)+' · '+esc(FO_OP_TYPE_LABEL[r.operation_type]||r.operation_type) +
+    '<div class="meta">'+times+' · '+esc(FO_OP_TYPE_LABEL[r.operation_type]||r.operation_type) +
     ' · 入'+r.input_box_count+'箱 → 出'+r.output_box_count+'箱 / '+r.output_pallet_count+'托</div>' +
   '</div>';
 }

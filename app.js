@@ -2519,19 +2519,16 @@ function renderB2bFieldOpUI(){
   if(hasSession){
     selArea.style.display = "none";
     workArea.style.display = "";
-    // 从本地恢复 FO 信息
+    // 从本地恢复 FO 信息（先显示本地快照，再异步拉最新）
     var r = _foSelectedRecord || loadFoRecord();
     if(r){
       _foSelectedRecord = r;
-      document.getElementById("foWorkingId").textContent = r.record_id + " · " + (FO_OP_LABELS[r.operation_type] || r.operation_type);
-      document.getElementById("foWorkingDetail").textContent =
-        (r.customer_name || "") +
-        (r.source_plan_id ? " · ← " + r.source_plan_id : "") +
-        (r.plan_day ? " · " + r.plan_day : "") +
-        (r.goods_summary ? " · " + r.goods_summary : "");
+      renderFoWorkingCard_(r);
+      // 异步从服务端刷新最新数据
+      if(r.record_id) refreshFoFromServer_(r.record_id);
     } else {
       document.getElementById("foWorkingId").textContent = "(FO 信息不可用)";
-      document.getElementById("foWorkingDetail").textContent = "";
+      document.getElementById("foWorkingDetail").innerHTML = "";
     }
   } else {
     selArea.style.display = "";
@@ -2539,6 +2536,29 @@ function renderB2bFieldOpUI(){
     _foSelectedRecord = null;
     loadFoPlans();
   }
+}
+function renderFoWorkingCard_(r){
+  document.getElementById("foWorkingId").textContent = r.record_id + " · " + (FO_OP_LABELS[r.operation_type] || r.operation_type);
+  var lines = [];
+  if(r.customer_name) lines.push("客户: " + r.customer_name);
+  if(r.source_plan_id) lines.push("来源: " + r.source_plan_id);
+  if(r.plan_day) lines.push("作业日期: " + r.plan_day);
+  if(r.goods_summary) lines.push("货物: " + r.goods_summary);
+  var timeInfo = [];
+  if(r.created_at) timeInfo.push("建单: " + fmtFoTime_(r.created_at));
+  if(r.completed_at) timeInfo.push("完成: " + fmtFoTime_(r.completed_at));
+  var detailEl = document.getElementById("foWorkingDetail");
+  detailEl.innerHTML = esc(lines.join(" · ")) + (timeInfo.length ? '<br><span class="muted" style="font-size:11px;">' + esc(timeInfo.join(" · ")) + '</span>' : '');
+}
+function fmtFoTime_(t){ if(!t) return ""; try{ return new Date(t).toLocaleString(); }catch(e){ return String(t); } }
+function refreshFoFromServer_(recordId){
+  jsonp(LOCK_URL, { action:"b2b_field_op_detail", record_id:recordId, k:getFoKey_() }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok || !res.record) return;
+    var fresh = res.record;
+    _foSelectedRecord = fresh;
+    saveFoRecord(fresh);
+    renderFoWorkingCard_(fresh);
+  }).catch(function(){});
 }
 
 // 加载入库计划下拉
@@ -2793,6 +2813,68 @@ async function endB2bFieldOp(){
   }finally{
     releaseBusy_();
   }
+}
+
+function foEditDetail(){
+  var r = _foSelectedRecord;
+  if(!r || !r.record_id){ alert("没有选中的记录"); return; }
+  if(r.status !== "draft" && r.status !== "recording"){ alert("当前状态不允许编辑（仅草稿/记录中可编辑）"); return; }
+
+  var opTypes = [
+    { v:"box_op", l:"箱子操作" }, { v:"palletize", l:"打托" },
+    { v:"bulk_in_out", l:"整进整出" }, { v:"unload", l:"卸货" }, { v:"other", l:"其他" }
+  ];
+  var opSel = opTypes.map(function(t){ return t.v + "=" + t.l; }).join(" / ");
+  var cur = r.operation_type || "box_op";
+
+  var input = prompt(
+    "编辑现场记录明细 / 수정\n\n" +
+    "操作类型 (" + opSel + ")\n当前: " + (FO_OP_LABELS[cur]||cur) + "\n" +
+    "输入新类型代码（留空不改）：", "");
+  if(input === null) return;
+  var newOp = input.trim() || cur;
+  if(!FO_OP_LABELS[newOp]){ alert("无效的操作类型: " + newOp); return; }
+
+  var newSummary = prompt("货物摘要（留空不改）：\n当前: " + (r.goods_summary||"(无)"), r.goods_summary || "");
+  if(newSummary === null) return;
+
+  var newInBox = prompt("输入箱数（留空不改）：\n当前: " + (r.input_box_count||0), String(r.input_box_count||0));
+  if(newInBox === null) return;
+
+  var newOutBox = prompt("产出箱数（留空不改）：\n当前: " + (r.output_box_count||0), String(r.output_box_count||0));
+  if(newOutBox === null) return;
+
+  var newOutPallet = prompt("产出托盘数（留空不改）：\n当前: " + (r.output_pallet_count||0), String(r.output_pallet_count||0));
+  if(newOutPallet === null) return;
+
+  var newInstruction = prompt("作业说明（留空不改）：\n当前: " + (r.instruction_text||"(无)"), r.instruction_text || "");
+  if(newInstruction === null) return;
+
+  if(!confirm("确认更新明细？\n\n操作类型: " + (FO_OP_LABELS[newOp]||newOp) +
+    "\n货物摘要: " + (newSummary||"(无)") +
+    "\n入箱: " + newInBox + " → 出箱: " + newOutBox + " / 出托: " + newOutPallet +
+    "\n说明: " + (newInstruction||"(无)"))) return;
+
+  setStatus("更新明细中... ⏳", true);
+  jsonp(LOCK_URL, {
+    action:"b2b_field_op_update", k:getFoKey_(),
+    record_id: r.record_id, sub:"edit",
+    plan_day: r.plan_day, customer_name: r.customer_name,
+    operation_type: newOp, goods_summary: newSummary,
+    input_box_count: newInBox, output_box_count: newOutBox,
+    output_pallet_count: newOutPallet, instruction_text: newInstruction
+  }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){
+      setStatus("更新失败 ❌", false);
+      alert("更新失败: " + (res&&res.error||"unknown"));
+      return;
+    }
+    setStatus("更新成功 ✅", true);
+    refreshFoFromServer_(r.record_id);
+  }).catch(function(e){
+    setStatus("更新失败 ❌ " + e, false);
+    alert("更新失败: " + e);
+  });
 }
 
 /** ===== 通用临时去卸货 / 返回原任务 ===== */
