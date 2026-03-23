@@ -901,6 +901,14 @@
     </div>
   </div>
 
+  <!-- B2B 现场记录结果单弹窗 -->
+  <div id="foResultModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:999;justify-content:center;align-items:center;">
+    <div style="background:#fff;border-radius:12px;padding:20px;max-width:420px;width:92%;max-height:85vh;overflow:auto;position:relative;">
+      <button onclick="closeFoResultForm()" style="position:absolute;top:10px;right:14px;background:none;border:none;font-size:22px;cursor:pointer;">&times;</button>
+      <div id="foResultBody"></div>
+    </div>
+  </div>
+
   <!-- B2B SCAN CHECK -->
   <div id="page-b2b_scan_check" class="page" style="display:none;">
     <div class="topbar">

@@ -806,6 +806,21 @@ export default {
           }
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v21_wo_pickup_shipment', ?)`).bind(Date.now()).run();
         }
+
+        // v22: 现场记录结果字段统一——补齐 sku_kind_count / remark / confirm_badge / confirmed_by
+        const m22 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v22_field_op_result_unify'`).first();
+        if (!m22) {
+          const foCols22 = [
+            ["sku_kind_count","INTEGER NOT NULL DEFAULT 0"],
+            ["remark","TEXT NOT NULL DEFAULT ''"],
+            ["confirm_badge","TEXT NOT NULL DEFAULT ''"],
+            ["confirmed_by","TEXT NOT NULL DEFAULT ''"]
+          ];
+          for (const [col, def] of foCols22) {
+            try { await env.DB.prepare(`ALTER TABLE b2b_field_ops ADD COLUMN ${col} ${def}`).run(); } catch(e) {}
+          }
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v22_field_op_result_unify', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -3258,6 +3273,12 @@ export default {
         const e_forklift_pallet_count = e_needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
         const e_rack_pick_location_count = e_needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
 
+        // v22 新增字段
+        const e_sku_kind_count = Math.max(0, Math.round(Number(p.sku_kind_count || 0)));
+        const e_remark = String(p.remark || "").trim();
+        const e_confirm_badge = String(p.confirm_badge || "").trim();
+        const e_confirmed_by = String(p.confirmed_by || "").trim();
+
         if (!plan_day || !/^\d{4}-\d{2}-\d{2}$/.test(plan_day)) return jsonpOrJson({ ok:false, error:"invalid plan_day" }, callback);
         if (!customer_name) return jsonpOrJson({ ok:false, error:"missing customer_name" }, callback);
         if (!operation_type) return jsonpOrJson({ ok:false, error:"missing operation_type" }, callback);
@@ -3270,13 +3291,15 @@ export default {
            input_box_count=?, output_box_count=?, output_pallet_count=?, instruction_text=?,
            packed_qty=?, packed_box_count=?, used_carton=?, big_carton_count=?, small_carton_count=?,
            label_count=?, photo_count=?, has_pallet_detail=?, did_pack=?, did_rebox=?, rebox_count=?,
-           needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?
+           needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?,
+           sku_kind_count=?, remark=?, confirm_badge=?, confirmed_by=?
            WHERE record_id=?`
         ).bind(plan_day, customer_name, goods_summary, operation_type,
           input_box_count, output_box_count, output_pallet_count, instruction_text,
           e_packed_qty, e_packed_box_count, e_used_carton, e_big_carton_count, e_small_carton_count,
           e_label_count, e_photo_count, e_has_pallet_detail, e_did_pack, e_did_rebox, e_rebox_count,
           e_needs_forklift_pick, e_forklift_pallet_count, e_rack_pick_location_count,
+          e_sku_kind_count, e_remark, e_confirm_badge, e_confirmed_by,
           record_id).run();
 
         return jsonpOrJson({ ok:true, record_id }, callback);

@@ -2544,11 +2544,22 @@ function renderFoWorkingCard_(r){
   if(r.source_plan_id) lines.push("来源: " + r.source_plan_id);
   if(r.plan_day) lines.push("作业日期: " + r.plan_day);
   if(r.goods_summary) lines.push("货物: " + r.goods_summary);
+  // 结果摘要
+  var sum = [];
+  if(r.sku_kind_count > 0) sum.push(r.sku_kind_count + "品");
+  if(r.packed_qty > 0) sum.push(r.packed_qty + "件");
+  if(r.output_box_count > 0) sum.push("出" + r.output_box_count + "箱");
+  if(r.packed_box_count > 0) sum.push("封" + r.packed_box_count + "箱");
+  if(r.output_pallet_count > 0) sum.push(r.output_pallet_count + "托");
+  if(r.label_count > 0) sum.push("贴标" + r.label_count);
+  if(r.photo_count > 0) sum.push("拍照" + r.photo_count);
   var timeInfo = [];
   if(r.created_at) timeInfo.push("建单: " + fmtFoTime_(r.created_at));
   if(r.completed_at) timeInfo.push("完成: " + fmtFoTime_(r.completed_at));
   var detailEl = document.getElementById("foWorkingDetail");
-  detailEl.innerHTML = esc(lines.join(" · ")) + (timeInfo.length ? '<br><span class="muted" style="font-size:11px;">' + esc(timeInfo.join(" · ")) + '</span>' : '');
+  detailEl.innerHTML = esc(lines.join(" · ")) +
+    (sum.length ? '<br><span style="font-size:12px;color:#1976d2;font-weight:500;">' + esc(sum.join(" · ")) + '</span>' : '') +
+    (timeInfo.length ? '<br><span class="muted" style="font-size:11px;">' + esc(timeInfo.join(" · ")) + '</span>' : '');
 }
 function fmtFoTime_(t){ if(!t) return ""; try{ return new Date(t).toLocaleString(); }catch(e){ return String(t); } }
 function refreshFoFromServer_(recordId){
@@ -2819,61 +2830,159 @@ function foEditDetail(){
   var r = _foSelectedRecord;
   if(!r || !r.record_id){ alert("没有选中的记录"); return; }
   if(r.status !== "draft" && r.status !== "recording"){ alert("当前状态不允许编辑（仅草稿/记录中可编辑）"); return; }
+  openFoResultForm(r.record_id);
+}
 
-  var opTypes = [
-    { v:"box_op", l:"箱子操作" }, { v:"palletize", l:"打托" },
-    { v:"bulk_in_out", l:"整进整出" }, { v:"unload", l:"卸货" }, { v:"other", l:"其他" }
-  ];
-  var opSel = opTypes.map(function(t){ return t.v + "=" + t.l; }).join(" / ");
-  var cur = r.operation_type || "box_op";
+function openFoResultForm(recordId){
+  var modal = document.getElementById("foResultModal");
+  var body = document.getElementById("foResultBody");
+  if(!modal || !body) return;
+  modal.style.display = "flex";
+  body.innerHTML = '<div class="muted">加载中...</div>';
 
-  var input = prompt(
-    "编辑现场记录明细 / 수정\n\n" +
-    "操作类型 (" + opSel + ")\n当前: " + (FO_OP_LABELS[cur]||cur) + "\n" +
-    "输入新类型代码（留空不改）：", "");
-  if(input === null) return;
-  var newOp = input.trim() || cur;
-  if(!FO_OP_LABELS[newOp]){ alert("无效的操作类型: " + newOp); return; }
+  jsonp(LOCK_URL, { action:"b2b_field_op_detail", record_id:recordId, k:getFoKey_() }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ body.innerHTML = '<div style="color:red;">'+esc(res&&res.error||"加载失败")+'</div>'; return; }
+    var r = res.record;
+    var ot = r.operation_type || "box_op";
 
-  var newSummary = prompt("货物摘要（留空不改）：\n当前: " + (r.goods_summary||"(无)"), r.goods_summary || "");
-  if(newSummary === null) return;
+    var html = '<div style="font-size:16px;font-weight:800;margin-bottom:6px;">现场记录结果单</div>';
 
-  var newInBox = prompt("输入箱数（留空不改）：\n当前: " + (r.input_box_count||0), String(r.input_box_count||0));
-  if(newInBox === null) return;
+    // 只读信息块
+    html += '<div style="font-size:12px;color:#555;margin-bottom:10px;padding:8px 10px;background:#f5f5f5;border-radius:6px;">';
+    html += '<div><b>'+esc(r.record_id)+'</b> · '+esc(r.customer_name||"")+'</div>';
+    if(r.source_plan_id) html += '<div>来源计划: '+esc(r.source_plan_id)+'</div>';
+    html += '<div>作业日期: '+esc(r.plan_day)+'</div>';
+    if(r.goods_summary) html += '<div>货物: '+esc(r.goods_summary)+'</div>';
+    if(r.input_box_count) html += '<div>入库箱数: '+r.input_box_count+'</div>';
+    if(r.instruction_text) html += '<div>作业说明: '+esc(r.instruction_text)+'</div>';
+    html += '</div>';
 
-  var newOutBox = prompt("产出箱数（留空不改）：\n当前: " + (r.output_box_count||0), String(r.output_box_count||0));
-  if(newOutBox === null) return;
+    // 操作类型下拉
+    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">操作类型</label>' +
+      '<select id="fo-rf-optype" style="width:100%;margin-top:2px;">' +
+        '<option value="box_op"'+(ot==="box_op"?' selected':'')+'>箱子操作</option>' +
+        '<option value="palletize"'+(ot==="palletize"?' selected':'')+'>打托</option>' +
+        '<option value="bulk_in_out"'+(ot==="bulk_in_out"?' selected':'')+'>整进整出</option>' +
+        '<option value="unload"'+(ot==="unload"?' selected':'')+'>卸货</option>' +
+        '<option value="other"'+(ot==="other"?' selected':'')+'>其他</option>' +
+      '</select></div>';
 
-  var newOutPallet = prompt("产出托盘数（留空不改）：\n当前: " + (r.output_pallet_count||0), String(r.output_pallet_count||0));
-  if(newOutPallet === null) return;
+    // 结果字段（复用 _rfField / _rfSwitch）
+    html += _rfField("品项数", "fo-rf-sku", "number", r.sku_kind_count, "0", "1");
+    html += _rfField("打包件数", "fo-rf-packed-qty", "number", r.packed_qty, "0", "1");
+    html += _rfField("产出箱数", "fo-rf-out-box", "number", r.output_box_count, "0", "0.5");
+    html += _rfField("打包箱数", "fo-rf-packed-box", "number", r.packed_box_count, "0", "0.5");
+    html += _rfSwitch("fo-rf-carton", "是否用了纸箱", r.used_carton, "foRfToggleCarton()");
+    html += '<div id="fo-rf-carton-fields" style="'+(r.used_carton?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
+      _rfField("大箱数", "fo-rf-big-carton", "number", r.big_carton_count, "0", "1") +
+      _rfField("小箱数", "fo-rf-small-carton", "number", r.small_carton_count, "0", "1") +
+    '</div>';
+    html += _rfSwitch("fo-rf-did-rebox", "是否换箱", r.did_rebox, "foRfToggleRebox()");
+    html += '<div id="fo-rf-rebox-fields" style="'+(r.did_rebox?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
+      _rfField("换箱数", "fo-rf-rebox-count", "number", r.rebox_count, "0", "1") +
+    '</div>';
+    html += _rfField("产出托数", "fo-rf-out-pallet", "number", r.output_pallet_count, "0", "0.5");
+    html += _rfSwitch("fo-rf-fork", "需要叉车找货", r.needs_forklift_pick, "foRfToggleFork()");
+    html += '<div id="fo-rf-fork-fields" style="'+(r.needs_forklift_pick?"":"display:none;")+'padding-left:12px;border-left:3px solid #ff9800;margin-bottom:8px;">' +
+      _rfField("叉车取货托数", "fo-rf-fork-pallet", "number", r.forklift_pallet_count, "0", "0.5") +
+      _rfField("涉及货位数", "fo-rf-fork-loc", "number", r.rack_pick_location_count, "0", "1") +
+    '</div>';
+    html += _rfField("贴标数量", "fo-rf-label", "number", r.label_count, "0", "1");
+    html += _rfField("拍照数量", "fo-rf-photo", "number", r.photo_count, "0", "1");
+    html += _rfSwitch("fo-rf-pallet-detail", "是否制作了打托明细", r.has_pallet_detail);
 
-  var newInstruction = prompt("作业说明（留空不改）：\n当前: " + (r.instruction_text||"(无)"), r.instruction_text || "");
-  if(newInstruction === null) return;
+    // 备注
+    html += '<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:700;">结果备注</label>' +
+      '<textarea id="fo-rf-remark" rows="2" style="width:100%;margin-top:2px;">'+esc(r.remark||"")+'</textarea></div>';
 
-  if(!confirm("确认更新明细？\n\n操作类型: " + (FO_OP_LABELS[newOp]||newOp) +
-    "\n货物摘要: " + (newSummary||"(无)") +
-    "\n入箱: " + newInBox + " → 出箱: " + newOutBox + " / 出托: " + newOutPallet +
-    "\n说明: " + (newInstruction||"(无)"))) return;
+    // 隐藏字段
+    html += '<input type="hidden" id="fo-rf-record-id" value="'+esc(recordId)+'" />';
 
-  setStatus("更新明细中... ⏳", true);
-  jsonp(LOCK_URL, {
-    action:"b2b_field_op_update", k:getFoKey_(),
-    record_id: r.record_id, sub:"edit",
+    // 按钮
+    html += '<div style="display:flex;gap:8px;">' +
+      '<button onclick="submitFoResult()" style="flex:1;padding:10px;font-size:14px;background:#1976d2;color:#fff;border:none;border-radius:6px;">保存结果</button>' +
+    '</div>';
+
+    body.innerHTML = html;
+  }).catch(function(){ body.innerHTML = '<div style="color:red;">网络错误</div>'; });
+}
+
+function closeFoResultForm(){
+  var modal = document.getElementById("foResultModal");
+  if(modal) modal.style.display = "none";
+}
+
+// 现场记录结果单 toggle 函数
+function foRfToggleCarton(){
+  var cb = document.getElementById("fo-rf-carton");
+  var f = document.getElementById("fo-rf-carton-fields");
+  if(cb && f){ f.style.display = cb.checked ? "" : "none"; if(!cb.checked) _rfClear(["fo-rf-big-carton","fo-rf-small-carton"]); }
+}
+function foRfToggleRebox(){
+  var cb = document.getElementById("fo-rf-did-rebox");
+  var f = document.getElementById("fo-rf-rebox-fields");
+  if(cb && f){ f.style.display = cb.checked ? "" : "none"; if(!cb.checked) _rfClear(["fo-rf-rebox-count"]); }
+}
+function foRfToggleFork(){
+  var cb = document.getElementById("fo-rf-fork");
+  var f = document.getElementById("fo-rf-fork-fields");
+  if(cb && f){ f.style.display = cb.checked ? "" : "none"; if(!cb.checked) _rfClear(["fo-rf-fork-pallet","fo-rf-fork-loc"]); }
+}
+
+function submitFoResult(){
+  var recordId = (document.getElementById("fo-rf-record-id") || {}).value || "";
+  if(!recordId) return;
+  var r = _foSelectedRecord;
+  if(!r){ alert("记录信息丢失"); return; }
+
+  var used_carton = _rfChk("fo-rf-carton");
+  var did_rebox = _rfChk("fo-rf-did-rebox");
+  var needs_forklift = _rfChk("fo-rf-fork");
+
+  var payload = {
+    action: "b2b_field_op_update", k: getFoKey_(),
+    record_id: recordId, sub: "edit",
+    // 主记录字段保持原值
     plan_day: r.plan_day, customer_name: r.customer_name,
-    operation_type: newOp, goods_summary: newSummary,
-    input_box_count: newInBox, output_box_count: newOutBox,
-    output_pallet_count: newOutPallet, instruction_text: newInstruction
-  }, { skipBusy:true }).then(function(res){
+    goods_summary: r.goods_summary || "", instruction_text: r.instruction_text || "",
+    input_box_count: r.input_box_count || 0,
+    // 结果字段从表单取
+    operation_type: (document.getElementById("fo-rf-optype") || {}).value || "box_op",
+    sku_kind_count: _rfVal("fo-rf-sku"),
+    packed_qty: _rfVal("fo-rf-packed-qty"),
+    output_box_count: _rfVal("fo-rf-out-box"),
+    packed_box_count: _rfVal("fo-rf-packed-box"),
+    used_carton: used_carton,
+    big_carton_count: used_carton ? _rfVal("fo-rf-big-carton") : 0,
+    small_carton_count: used_carton ? _rfVal("fo-rf-small-carton") : 0,
+    did_rebox: did_rebox,
+    rebox_count: did_rebox ? _rfVal("fo-rf-rebox-count") : 0,
+    output_pallet_count: _rfVal("fo-rf-out-pallet"),
+    needs_forklift_pick: needs_forklift,
+    forklift_pallet_count: needs_forklift ? _rfVal("fo-rf-fork-pallet") : 0,
+    rack_pick_location_count: needs_forklift ? _rfVal("fo-rf-fork-loc") : 0,
+    label_count: _rfVal("fo-rf-label"),
+    photo_count: _rfVal("fo-rf-photo"),
+    has_pallet_detail: _rfChk("fo-rf-pallet-detail"),
+    did_pack: 0,
+    remark: (document.getElementById("fo-rf-remark") || {}).value || "",
+    confirm_badge: getOperatorId() || "",
+    confirmed_by: ""
+  };
+
+  setStatus("保存结果中... ⏳", true);
+  jsonp(LOCK_URL, payload, { skipBusy:true }).then(function(res){
     if(!res || !res.ok){
-      setStatus("更新失败 ❌", false);
-      alert("更新失败: " + (res&&res.error||"unknown"));
+      setStatus("保存失败 ❌", false);
+      alert("保存失败: " + (res&&res.error||"unknown"));
       return;
     }
-    setStatus("更新成功 ✅", true);
-    refreshFoFromServer_(r.record_id);
+    setStatus("结果已保存 ✅", true);
+    closeFoResultForm();
+    refreshFoFromServer_(recordId);
   }).catch(function(e){
-    setStatus("更新失败 ❌ " + e, false);
-    alert("更新失败: " + e);
+    setStatus("保存失败 ❌ " + e, false);
+    alert("保存失败: " + e);
   });
 }
 
