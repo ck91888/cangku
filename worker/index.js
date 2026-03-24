@@ -334,6 +334,9 @@ async function recalcSessionStatus_(env, session, operator_id) {
   // 1) 按 badge 统计 join - leave，判断是否还有人在岗
   const badgeCounts = {};
   let maxLeaveMs = 0;
+  // 1b) 按 (biz,task) 统计 join - leave 净计数，判断该 task 是否仍有人在岗
+  const taskJoinNet = {};    // "biz|task" → join_count - leave_count
+  const taskEarliestJoinMs = {}; // "biz|task" → earliest join server_ms
   // 2) 按 (biz,task) 计数 start/end，判断 task 级别状态
   const taskStartCount = {};  // "biz|task" → start 次数
   const taskEndCount = {};    // "biz|task" → end 次数
@@ -346,11 +349,16 @@ async function recalcSessionStatus_(env, session, operator_id) {
     if (r.event === "join") {
       if (!badgeCounts[r.badge]) badgeCounts[r.badge] = 0;
       badgeCounts[r.badge]++;
+      const jtk = (r.biz || "") + "|" + (r.task || "");
+      taskJoinNet[jtk] = (taskJoinNet[jtk] || 0) + 1;
+      if (!taskEarliestJoinMs[jtk] || r.server_ms < taskEarliestJoinMs[jtk]) taskEarliestJoinMs[jtk] = r.server_ms;
     }
     if (r.event === "leave") {
       if (!badgeCounts[r.badge]) badgeCounts[r.badge] = 0;
       badgeCounts[r.badge]--;
       if (r.server_ms > maxLeaveMs) maxLeaveMs = r.server_ms;
+      const ltk = (r.biz || "") + "|" + (r.task || "");
+      taskJoinNet[ltk] = (taskJoinNet[ltk] || 0) - 1;
     }
     if (r.event === "start") {
       if (r.task === "SESSION") {
@@ -395,14 +403,19 @@ async function recalcSessionStatus_(env, session, operator_id) {
       `UPDATE sessions SET status='OPEN', closed_ms=NULL, closed_by_operator=NULL WHERE session=?`
     ).bind(sid).run();
 
-    // 同步 task_state：stillOpen → OPEN，否则显式 CLOSE
-    for (const tk of allTaskKeys) {
+    // 同步 task_state：基于 start/end 和 join/leave 两个维度
+    // 合并所有出现过的 biz|task 键（start/end + join/leave）
+    const allKeys = new Set([...allTaskKeys, ...Object.keys(taskJoinNet)]);
+    for (const tk of allKeys) {
       const parts = tk.split("|");
       const biz = parts[0], task = parts[1];
-      if (taskStillOpen[tk]) {
-        await taskStateOpen_(env, sid, biz, task, taskStartMs[tk] || 0, op);
+      const openByStartEnd = !!taskStillOpen[tk];
+      const openByJoinLeave = (taskJoinNet[tk] || 0) > 0;
+      if (openByStartEnd || openByJoinLeave) {
+        const startMs = taskStartMs[tk] || taskEarliestJoinMs[tk] || 0;
+        await taskStateOpen_(env, sid, biz, task, startMs, op);
       } else {
-        await taskStateClose_(env, sid, biz, task, maxTaskEndMs || Date.now(), op);
+        await taskStateClose_(env, sid, biz, task, maxTaskEndMs || maxLeaveMs || Date.now(), op);
       }
     }
   } else {
