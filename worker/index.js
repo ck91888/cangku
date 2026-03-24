@@ -1567,14 +1567,32 @@ export default {
       const existing = await env.DB.prepare(`SELECT event_id,event,badge,biz,task,session FROM events WHERE event_id=?`).bind(event_id).first();
       if (!existing) return jsonpOrJson({ ok:false, error:"event_id not found" }, callback);
       const deletedSession = existing.session || "";
-      await env.DB.prepare(`DELETE FROM events WHERE event_id=?`).bind(event_id).run();
+
+      // mc-* 成对补录：联动删除配对事件，不留半条
+      let pairEventId = null;
+      let pairDetail = null;
+      if (event_id.startsWith("mc-join-")) {
+        pairEventId = "mc-leave-" + event_id.slice("mc-join-".length);
+      } else if (event_id.startsWith("mc-leave-")) {
+        pairEventId = "mc-join-" + event_id.slice("mc-leave-".length);
+      }
+      if (pairEventId) {
+        pairDetail = await env.DB.prepare(`SELECT event_id,event,badge,biz,task,session FROM events WHERE event_id=?`).bind(pairEventId).first();
+        // batch 删除：两条一起删
+        await env.DB.batch([
+          env.DB.prepare(`DELETE FROM events WHERE event_id=?`).bind(event_id),
+          env.DB.prepare(`DELETE FROM events WHERE event_id=?`).bind(pairEventId)
+        ]);
+      } else {
+        await env.DB.prepare(`DELETE FROM events WHERE event_id=?`).bind(event_id).run();
+      }
 
       // 重算被删事件所属 session 的状态
       if (deletedSession) {
         await recalcSessionStatus_(env, deletedSession, String(p.operator_id || "").trim());
       }
 
-      return jsonpOrJson({ ok:true, deleted:true, event_id, detail: existing }, callback);
+      return jsonpOrJson({ ok:true, deleted:true, event_id, pair_event_id: pairEventId || undefined, pair_found: !!pairDetail, detail: existing }, callback);
     }
 
     if (action === "admin_sessions_list") {
