@@ -1138,6 +1138,24 @@ export default {
           }, callback);
         }
 
+        // exempt 任务同类去重：同一 operator + 同一 biz/task 最多 1 个 OPEN session
+        if (isExempt) {
+          const dupExempt = await env.DB.prepare(
+            `SELECT session, biz, task FROM sessions
+             WHERE status='OPEN' AND created_by_operator=? AND biz=? AND task=?
+             LIMIT 1`
+          ).bind(operator_id, biz, task).first();
+          if (dupExempt && String(dupExempt.session || "") !== session) {
+            return jsonpOrJson({
+              ok:false,
+              error:"duplicate_exempt_session",
+              open_session: String(dupExempt.session),
+              open_biz: String(dupExempt.biz||""),
+              open_task: String(dupExempt.task||"")
+            }, callback);
+          }
+        }
+
         await ensureSessionOpen(env, session, operator_id, biz, task);
 
         // ✅✅ 关键修复：start 时把该任务标记为 OPEN，join 才不会说"没开始"
@@ -2215,6 +2233,25 @@ export default {
           };
         }
         return featureMap[k];
+      }
+
+      // 预生成关键任务种子行：即使当天完全无数据也保证有全 0 行
+      {
+        const seedTasks = [
+          { biz: "B2C", task: "B2C拣货" },
+          { biz: "B2C", task: "B2C打包" },
+          { biz: "进口", task: "过机扫描码托" },
+          { biz: "B2C", task: "换单" },
+          { biz: "B2C", task: "退件入库" },
+          { biz: "B2C", task: "质检" }
+        ];
+        const sd = new Date(start_date + "T00:00:00Z");
+        const ed = new Date(end_date + "T00:00:00Z");
+        while (sd <= ed) {
+          const ds = sd.getUTCFullYear() + "-" + String(sd.getUTCMonth()+1).padStart(2,"0") + "-" + String(sd.getUTCDate()).padStart(2,"0");
+          for (const st of seedTasks) getOrCreate(ds, st.biz, st.task);
+          sd.setUTCDate(sd.getUTCDate() + 1);
+        }
       }
 
       // join/leave 配对计算工时（按 KST 自然日切片）
@@ -4849,10 +4886,10 @@ export default {
       if (!batch) return jsonpOrJson({ ok:false, error:"batch_id not found" }, callback);
       if (batch.status !== "open") return jsonpOrJson({ ok:false, error:"batch is not open, cannot undo" }, callback);
 
-      // 找最近一条有效日志
+      // 找当前操作员最近一条有效日志
       const lastLog = await env.DB.prepare(
-        `SELECT * FROM b2b_scan_logs WHERE batch_id=? AND undone=0 ORDER BY log_id DESC LIMIT 1`
-      ).bind(batch_id).first();
+        `SELECT * FROM b2b_scan_logs WHERE batch_id=? AND undone=0 AND scanned_by=? ORDER BY log_id DESC LIMIT 1`
+      ).bind(batch_id, operator_id).first();
       if (!lastLog) return jsonpOrJson({ ok:false, error:"nothing to undo" }, callback);
 
       if (lastLog.is_planned === 1) {
