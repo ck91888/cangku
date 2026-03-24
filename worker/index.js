@@ -1457,11 +1457,24 @@ export default {
         }
       }
 
-      const event_id = "manual-" + event + "-" + badge + "-" + custom_ms + "-" + now;
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+      // deterministic event_id：同一组参数永远相同，防止重复提交
+      const event_id = "me-" + [event, badge, biz, task, session, custom_ms].join("|");
+
+      // 前置重复检测
+      const dupEv = await env.DB.prepare(
+        `SELECT event_id FROM events WHERE event_id=? LIMIT 1`
+      ).bind(event_id).first();
+      if (dupEv) {
+        return jsonpOrJson({ ok:false, error:"duplicate manual event: this event already exists", event_id }, callback);
+      }
+
+      const insResult = await env.DB.prepare(
+        `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(custom_ms, custom_ms, event_id, event, badge, biz, task, session, "", operator_id, 1, note).run();
+      if ((insResult?.meta?.changes ?? 0) !== 1) {
+        return jsonpOrJson({ ok:false, error:"insert failed", event_id }, callback);
+      }
 
       // 基于全部 events 重算 session 状态（status / closed_ms）
       if (session) {
@@ -2260,12 +2273,12 @@ export default {
          GROUP BY day_kst, biz, task`
       ).bind(startMs, endMs).all();
 
-      // correction_count：统计补录事件（原子接口 mc-* event_id + 旧单条 note='manual_correction'）
+      // correction_count：统计补录事件（mc-*原子接口 + me-*单条接口 + 旧note='manual_correction'）
       const corrRs = await env.DB.prepare(
         `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
                 biz, task, COUNT(*) as correction_count
          FROM events WHERE event IN ('join','leave') AND ok=1
-           AND (event_id LIKE 'mc-join-%' OR event_id LIKE 'mc-leave-%' OR note='manual_correction')
+           AND (event_id LIKE 'mc-%' OR event_id LIKE 'me-%' OR note='manual_correction')
            AND server_ms >= ? AND server_ms <= ?
          GROUP BY day_kst, biz, task`
       ).bind(startMs, endMs).all();
