@@ -4667,7 +4667,7 @@ async function openScannerCommon(){
           setStatus("提交失败 ❌ " + e, false);
           alert("提交失败，请重试。\n" + e);
         }
-      } finally { scanBusy = false; _justCreatedAutoSid = null; }
+      } finally { scanBusy = false; _justCreatedAutoSid = null; await closeScanner(); }
       return;
     }
 
