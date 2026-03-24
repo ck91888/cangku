@@ -404,11 +404,13 @@ var _pendingAutoSession = null; // { biz, task } — auto-session 延迟创建�
 var _justCreatedAutoSid = null; // 刚兑现的 auto-session id，join 失败时用于回滚
 var _laborDedupMap = {}; // { semanticKey: { state:"inflight"|"done", ts:ms } }
 var LABOR_DEDUP_TTL = 4000;
+var LABOR_INFLIGHT_TTL = 10000; // inflight 最长有效期，超时自动过期
 function _laborDedupKey(action,biz,task,sid,badge){ return action+"|"+biz+"|"+task+"|"+(sid||"")+"|"+badge; }
 function _laborDedupCheck(key){
   var e=_laborDedupMap[key]; if(!e) return null;
-  if(e.state==="inflight") return "inflight";
-  if(e.state==="done" && (Date.now()-e.ts)<LABOR_DEDUP_TTL) return "done";
+  var age=Date.now()-e.ts;
+  if(e.state==="inflight" && age<LABOR_INFLIGHT_TTL) return "inflight";
+  if(e.state==="done" && age<LABOR_DEDUP_TTL) return "done";
   delete _laborDedupMap[key]; return null;
 }
 function _laborDedupMarkInflight(key){ _laborDedupMap[key]={state:"inflight",ts:Date.now()}; }
@@ -4512,8 +4514,10 @@ async function openScannerCommon(){
         persistState(); refreshUI();
         _justCreatedAutoSid = newSid;
         _pendingAutoSession = null;
-        // auto-session 兑现后 currentSessionId 已变，重算去重键
+        // auto-session 兑现后 currentSessionId 已变，清旧键+重算新键
+        _laborDedupClear(_ddKey);
         _ddKey = _laborDedupKey(laborAction, laborBiz, laborTask, currentSessionId, p2.raw);
+        _laborDedupMarkInflight(_ddKey);
       }
 
       try{
