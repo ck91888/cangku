@@ -4542,10 +4542,19 @@ async function openScannerCommon(){
           if(CUR_CTX) clearSess_(CUR_CTX.biz, CUR_CTX.task);
           currentSessionId = null;
           persistState(); refreshUI();
-          // 关服务端空 session（best-effort）
-          try{ await jsonp(LOCK_URL, { action:"session_close", session: rollSid, operator_id: getOperatorId() || "" }); }catch(_){}
-          setStatus("加入失败，已自动撤销空趟次 ❌ " + e, false);
-          alert("加入失败，已自动撤销刚创建的趟次。\n" + e);
+          // 关服务端空 session
+          var rollOk = false;
+          try{
+            var rr = await jsonp(LOCK_URL, { action:"session_close", session: rollSid, operator_id: getOperatorId() || "" });
+            rollOk = !!(rr && rr.ok);
+          }catch(_){}
+          if(rollOk){
+            setStatus("加入失败，已自动撤销空趟次 ❌ " + e, false);
+            alert("加入失败，已自动撤销刚创建的趟次。\n" + e);
+          } else {
+            setStatus("加入失败，服务端趟次关闭失败 ❌", false);
+            alert("加入失败。\n\n本地已清理，但服务端趟次关闭失败，请刷新后重试或联系管理员。\n\n趟次ID: " + rollSid + "\n原因: " + e);
+          }
         } else {
           setStatus("提交失败 ❌ " + e, false);
           alert("提交失败，请重试。\n" + e);
