@@ -3371,10 +3371,10 @@ export default {
 
       // 检查是否已绑定
       const existing = await env.DB.prepare(
-        `SELECT id, source_type, match_status FROM b2b_operation_bindings WHERE session_id=? AND source_order_no=?`
+        `SELECT id, source_type, match_status, day_kst, internal_workorder_id FROM b2b_operation_bindings WHERE session_id=? AND source_order_no=?`
       ).bind(session_id, source_order_no).first();
       if (existing) {
-        return jsonpOrJson({ ok:true, duplicate:true, source_type: existing.source_type, match_status: existing.match_status, msg:"该工单已绑定" }, callback);
+        return jsonpOrJson({ ok:true, duplicate:true, source_type: existing.source_type, match_status: existing.match_status, day_kst: existing.day_kst, internal_workorder_id: existing.internal_workorder_id || null, msg:"该工单已绑定" }, callback);
       }
 
       // 查本系统工单
@@ -3405,7 +3405,7 @@ export default {
          VALUES(?,?,?,?,?,?,?,?,'',?,?)`
       ).bind(session_id, badge, bound_task, source_type, source_order_no, internal_workorder_id, day_kst, match_status, now, now).run();
 
-      return jsonpOrJson({ ok:true, source_type, match_status, source_order_no, wo_summary }, callback);
+      return jsonpOrJson({ ok:true, source_type, match_status, source_order_no, day_kst, internal_workorder_id, wo_summary }, callback);
     }
 
     if (action === "b2b_op_bind_list") {
@@ -3613,6 +3613,28 @@ export default {
         `SELECT * FROM b2b_operation_results WHERE day_kst=? ORDER BY created_at ASC`
       ).bind(day_kst).all();
       return jsonpOrJson({ ok:true, results: rs.results || [] }, callback);
+    }
+
+    // ===== 按 session 拉取该 session 所有绑定对应的结果单 =====
+    if (action === "b2b_op_result_list_by_session") {
+      const session_id = String(p.session_id || "").trim();
+      if (!session_id) return jsonpOrJson({ ok:false, error:"missing session_id" }, callback);
+
+      // 查该 session 的所有 binding 的 (day_kst, source_type, source_order_no)
+      const bindings = await env.DB.prepare(
+        `SELECT DISTINCT day_kst, source_type, source_order_no FROM b2b_operation_bindings WHERE session_id=?`
+      ).bind(session_id).all();
+      const bRows = bindings.results || [];
+      if (bRows.length === 0) return jsonpOrJson({ ok:true, results:[] }, callback);
+
+      const results = [];
+      for (const b of bRows) {
+        const row = await env.DB.prepare(
+          `SELECT * FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+        ).bind(b.day_kst, b.source_type, b.source_order_no).first();
+        if (row) results.push(row);
+      }
+      return jsonpOrJson({ ok:true, results }, callback);
     }
 
     // ===== 出库扫码核对 =====
