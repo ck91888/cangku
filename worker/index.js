@@ -1366,47 +1366,68 @@ export default {
       const joinEventId = "mc-join-" + idBase;
       const leaveEventId = "mc-leave-" + idBase;
 
-      // 前置重复检测：任一 event_id 已存在则拦截
-      const dupCheck = await env.DB.prepare(
-        `SELECT event_id FROM events WHERE event_id IN (?, ?) LIMIT 1`
-      ).bind(joinEventId, leaveEventId).first();
-      if (dupCheck) {
+      // 前置重复检测：分别检查 join / leave 是否已存在
+      const dupRs = await env.DB.prepare(
+        `SELECT event_id FROM events WHERE event_id IN (?, ?)`
+      ).bind(joinEventId, leaveEventId).all();
+      const existingIds = new Set((dupRs.results || []).map(r => r.event_id));
+      const joinExists = existingIds.has(joinEventId);
+      const leaveExists = existingIds.has(leaveEventId);
+
+      if (joinExists && leaveExists) {
+        // 完整重复 → 拦截
         return jsonpOrJson({ ok:false, error:"duplicate manual correction: this join/leave pair already exists" }, callback);
       }
 
-      // D1 batch：同一事务内写入 join + leave，普通 INSERT
-      // 重复 event_id → UNIQUE 约束报错 → batch 整体回滚（兜底）
-      let batchResults;
-      try {
-        batchResults = await env.DB.batch([
-          env.DB.prepare(
+      if (!joinExists && !leaveExists) {
+        // 全新 → 原子 batch 写入两条
+        let batchResults;
+        try {
+          batchResults = await env.DB.batch([
+            env.DB.prepare(
+              `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+            ).bind(join_ms, join_ms, joinEventId, "join", badge, biz, task, session, "", operator_id, 1, note),
+            env.DB.prepare(
+              `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+            ).bind(leave_ms, leave_ms, leaveEventId, "leave", badge, biz, task, session, "", operator_id, 1, note)
+          ]);
+        } catch (batchErr) {
+          return jsonpOrJson({ ok:false, error:"atomic insert failed: " + String(batchErr.message || batchErr) }, callback);
+        }
+        const joinChanges = batchResults[0]?.meta?.changes ?? 0;
+        const leaveChanges = batchResults[1]?.meta?.changes ?? 0;
+        if (joinChanges !== 1 || leaveChanges !== 1) {
+          return jsonpOrJson({ ok:false, error:"insert incomplete: join=" + joinChanges + " leave=" + leaveChanges }, callback);
+        }
+      } else {
+        // 半条残留 → 自动补齐缺失的那一条
+        const missingEvent = joinExists ? "leave" : "join";
+        const missingId = joinExists ? leaveEventId : joinEventId;
+        const missingMs = joinExists ? leave_ms : join_ms;
+        try {
+          const repairResult = await env.DB.prepare(
             `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(join_ms, join_ms, joinEventId, "join", badge, biz, task, session, "", operator_id, 1, note),
-          env.DB.prepare(
-            `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
-             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(leave_ms, leave_ms, leaveEventId, "leave", badge, biz, task, session, "", operator_id, 1, note)
-        ]);
-      } catch (batchErr) {
-        return jsonpOrJson({ ok:false, error:"atomic insert failed: " + String(batchErr.message || batchErr) }, callback);
+          ).bind(missingMs, missingMs, missingId, missingEvent, badge, biz, task, session, "", operator_id, 1, note).run();
+          if ((repairResult?.meta?.changes ?? 0) !== 1) {
+            return jsonpOrJson({ ok:false, error:"partial repair failed: " + missingEvent + " not inserted" }, callback);
+          }
+        } catch (repairErr) {
+          return jsonpOrJson({ ok:false, error:"partial repair failed: " + String(repairErr.message || repairErr) }, callback);
+        }
       }
 
-      // 显式校验两条都真正写入（changes === 1）
-      const joinChanges = batchResults[0]?.meta?.changes ?? 0;
-      const leaveChanges = batchResults[1]?.meta?.changes ?? 0;
-      if (joinChanges !== 1 || leaveChanges !== 1) {
-        return jsonpOrJson({ ok:false, error:"insert incomplete: join=" + joinChanges + " leave=" + leaveChanges }, callback);
-      }
-
-      // 事件已原子落库，再处理 session/task_state 副作用
+      // 事件已落库，处理 session/task_state 副作用
       if (session) {
         await ensureSessionOpen(env, session, operator_id, biz, task, join_ms, "manual_correction");
         await taskStateOpen_(env, session, biz, task, join_ms, operator_id);
         await recalcSessionStatus_(env, session, operator_id);
       }
 
-      return jsonpOrJson({ ok:true, inserted:true, join_event_id: joinEventId, leave_event_id: leaveEventId, badge, join_ms, leave_ms }, callback);
+      const repaired = joinExists || leaveExists;
+      return jsonpOrJson({ ok:true, inserted:true, repaired, join_event_id: joinEventId, leave_event_id: leaveEventId, badge, join_ms, leave_ms }, callback);
     }
 
     // ===== 补录修正：管理员手动插入单条 join/leave 事件（指定自定义时间戳） =====
