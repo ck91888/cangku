@@ -2260,11 +2260,12 @@ export default {
          GROUP BY day_kst, biz, task`
       ).bind(startMs, endMs).all();
 
-      // correction_count：统计 admin_event_insert 补录的 join/leave 事件（note='manual_correction'）
+      // correction_count：统计补录事件（原子接口 mc-* event_id + 旧单条 note='manual_correction'）
       const corrRs = await env.DB.prepare(
         `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
                 biz, task, COUNT(*) as correction_count
-         FROM events WHERE event IN ('join','leave') AND ok=1 AND note='manual_correction'
+         FROM events WHERE event IN ('join','leave') AND ok=1
+           AND (event_id LIKE 'mc-join-%' OR event_id LIKE 'mc-leave-%' OR note='manual_correction')
            AND server_ms >= ? AND server_ms <= ?
          GROUP BY day_kst, biz, task`
       ).bind(startMs, endMs).all();
