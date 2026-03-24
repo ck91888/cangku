@@ -1660,16 +1660,20 @@ export default {
       const locksData = await locksR.json();
       const activeLocks = locksData.active || [];
       const released = [];
-      // 1) 释放仍有 active lock 的 badge
+      // 1) 释放仍属于该 session 的 active lock（带 session 条件，不误删新 session 的锁）
       for (const lk of activeLocks) {
         const badge = String(lk.badge || "").trim();
         if (!badge) continue;
-        await stub.fetch("https://locks/do", {
-          method: "POST",
-          headers: { "content-type":"application/json" },
-          body: JSON.stringify({ action:"lock_force_release", badge })
-        }).catch(() => {});
-        released.push(badge);
+        try {
+          const relR = await stub.fetch("https://locks/do", {
+            method: "POST",
+            headers: { "content-type":"application/json" },
+            body: JSON.stringify({ action:"lock_release", badge, session })
+          });
+          const relData = await relR.json();
+          if (relData.released) released.push(badge);
+          // different_session / not_found → 不释放，不报错
+        } catch (_) {}
       }
 
       // 2) 检查所有 join/leave 未配平的 badge（含锁已过期但未 leave 的）
