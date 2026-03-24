@@ -1298,6 +1298,12 @@ export default {
 
       binds.push(event_id);
       await env.DB.prepare(`UPDATE events SET ${sets.join(",")} WHERE event_id=?`).bind(...binds).run();
+
+      // 重算该事件所属 session 的状态
+      if (existing.session) {
+        await recalcSessionStatus_(env, existing.session, String(p.operator_id || "").trim());
+      }
+
       return jsonpOrJson({ ok:true, updated:true, event_id, fields: sets.length }, callback);
     }
 
@@ -1306,9 +1312,16 @@ export default {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const event_id = String(p.event_id || "").trim();
       if (!event_id) return jsonpOrJson({ ok:false, error:"missing event_id" }, callback);
-      const existing = await env.DB.prepare(`SELECT event_id,event,badge,biz,task FROM events WHERE event_id=?`).bind(event_id).first();
+      const existing = await env.DB.prepare(`SELECT event_id,event,badge,biz,task,session FROM events WHERE event_id=?`).bind(event_id).first();
       if (!existing) return jsonpOrJson({ ok:false, error:"event_id not found" }, callback);
+      const deletedSession = existing.session || "";
       await env.DB.prepare(`DELETE FROM events WHERE event_id=?`).bind(event_id).run();
+
+      // 重算被删事件所属 session 的状态
+      if (deletedSession) {
+        await recalcSessionStatus_(env, deletedSession, String(p.operator_id || "").trim());
+      }
+
       return jsonpOrJson({ ok:true, deleted:true, event_id, detail: existing }, callback);
     }
 
