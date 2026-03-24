@@ -395,12 +395,14 @@ async function recalcSessionStatus_(env, session, operator_id) {
       `UPDATE sessions SET status='OPEN', closed_ms=NULL, closed_by_operator=NULL WHERE session=?`
     ).bind(sid).run();
 
-    // 同步 task_state：把 start_count > end_count 的任务恢复为 OPEN
+    // 同步 task_state：stillOpen → OPEN，否则显式 CLOSE
     for (const tk of allTaskKeys) {
       const parts = tk.split("|");
       const biz = parts[0], task = parts[1];
       if (taskStillOpen[tk]) {
         await taskStateOpen_(env, sid, biz, task, taskStartMs[tk] || 0, op);
+      } else {
+        await taskStateClose_(env, sid, biz, task, maxTaskEndMs || Date.now(), op);
       }
     }
   } else {
@@ -1011,6 +1013,22 @@ export default {
       const active = lockInfo.active || [];
       if (active.length > 0) {
         return jsonpOrJson({ ok:true, blocked:true, reason:"still_active", session, active }, callback);
+      }
+
+      // ★ join/leave 配平检查：有未 leave 的 badge 时也拦截
+      const jlRs = await env.DB.prepare(
+        `SELECT badge, event FROM events
+         WHERE session=? AND event IN ('join','leave') AND ok=1
+         ORDER BY server_ms ASC`
+      ).bind(session).all();
+      const badgeJLCount = {};
+      for (const r of (jlRs.results || [])) {
+        if (!badgeJLCount[r.badge]) badgeJLCount[r.badge] = 0;
+        badgeJLCount[r.badge] += (r.event === 'join' ? 1 : -1);
+      }
+      const unpairedBadges = Object.entries(badgeJLCount).filter(([_, c]) => c > 0).map(([b]) => b);
+      if (unpairedBadges.length > 0) {
+        return jsonpOrJson({ ok:true, blocked:true, reason:"unpaired_joins", session, badges: unpairedBadges }, callback);
       }
 
       // B2B工单操作: 未完成结果单拦截
@@ -2051,16 +2069,43 @@ export default {
       }
 
       // Step1: 劳动数据 — join/leave 事件
-      // 扩大查询范围：join 可能在 startMs 之前 24h（跨天），leave 可能在 endMs 之后 24h
-      const laborQueryStart = startMs - 24 * 3600 * 1000;
+      // 主查询：range 内 + leave 后扩 24h（跨天 leave 滞后）
       const laborQueryEnd = endMs + 24 * 3600 * 1000;
       const evRs = await env.DB.prepare(
         `SELECT biz, task, badge, session, event, server_ms
          FROM events
          WHERE event IN ('join','leave') AND ok=1 AND server_ms >= ? AND server_ms <= ?
          ORDER BY badge, session, server_ms`
-      ).bind(laborQueryStart, laborQueryEnd).all();
+      ).bind(startMs, laborQueryEnd).all();
       const evRows = evRs.results || [];
+
+      // 补查：检测 orphan leave（首个事件即 leave，说明 join 在 startMs 之前）
+      // 按 badge+session+biz+task 精确匹配补回最近一条 join
+      const bsFirstEvent = {}; // "badge|session|biz|task" → first event type
+      for (const e of evRows) {
+        const k = e.badge + "|" + e.session + "|" + e.biz + "|" + e.task;
+        if (!(k in bsFirstEvent)) bsFirstEvent[k] = e.event;
+      }
+      const orphanKeys = Object.entries(bsFirstEvent)
+        .filter(([_, ev]) => ev === 'leave')
+        .map(([k]) => k.split("|")); // [badge, session, biz, task]
+      for (const [badge, session, biz, task] of orphanKeys) {
+        const sup = await env.DB.prepare(
+          `SELECT biz, task, badge, session, event, server_ms
+           FROM events
+           WHERE event='join' AND ok=1 AND badge=? AND session=? AND biz=? AND task=? AND server_ms < ?
+           ORDER BY server_ms DESC LIMIT 1`
+        ).bind(badge, session, biz, task, startMs).first();
+        if (sup) evRows.push(sup);
+      }
+      // 重排序
+      if (orphanKeys.length > 0) {
+        evRows.sort((a, b) => {
+          if (a.badge < b.badge) return -1; if (a.badge > b.badge) return 1;
+          if (a.session < b.session) return -1; if (a.session > b.session) return 1;
+          return a.server_ms - b.server_ms;
+        });
+      }
 
       // Step2: session_count（按 overlap 统计，跨天 session 每天都计入）, event_wave_count, anomaly_count
       // 从 sessions 表查与日期范围有 overlap 的 session，再按 KST 天切分
@@ -2282,6 +2327,18 @@ export default {
               }
             }
             pendingJoin = null;
+          }
+        }
+        // ★ open session：join 无对应 leave，视为在岗到 endMs，按 endMs 截止切片
+        if (pendingJoin) {
+          const mappedTask = mapTask(pendingJoin.biz, pendingJoin.task);
+          const slices = sliceLaborByDay_(pendingJoin.server_ms, endMs, startMs, endMs);
+          for (const sl of slices) {
+            const f = getOrCreate(sl.day_kst, pendingJoin.biz, mappedTask);
+            f.total_person_minutes += sl.minutes;
+            const wk = sl.day_kst + "|" + pendingJoin.biz + "|" + mappedTask;
+            if (!workersByDayBizTask[wk]) workersByDayBizTask[wk] = new Set();
+            workersByDayBizTask[wk].add(pendingJoin.badge);
           }
         }
       }

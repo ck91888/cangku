@@ -4881,13 +4881,16 @@ function reportLoadRange(){
   var endMs = kstDayEndMs_(dayTo);
   var rangeLabel = dayFrom + " ~ " + dayTo + " (KST)";
 
+  // 前扩 7 天拉取，保证区间前 join + 区间内 leave 的 overlap 不丢
+  var fetchSinceMs = startMs - 7 * 24 * 3600 * 1000;
+
   setStatus("拉取区间数据中... ⏳", true);
 
   fetchApi({
     action: "admin_events_tail",
     k: k,
     limit: 20000,
-    since_ms: String(startMs),
+    since_ms: String(fetchSinceMs),
     until_ms: String(endMs)
   }).then(function(res){
     if(!res || res.ok !== true){
@@ -5067,7 +5070,7 @@ function buildReportSummary_(){
   Object.keys(active).forEach(function(b){
     anomalies.open++;
     var capMs = reportUntilMs;
-    var durOpen = Math.max(0, capMs - active[b].t);
+    var durOpen = Math.max(0, capMs - Math.max(active[b].t, reportSinceMs));
     addDur(b, active[b].biz, active[b].task, durOpen);
     addTimeline(b, active[b].biz, active[b].task, active[b].t, capMs, "OPEN", active[b].session, active[b].note);
     addAnomaly("open_not_left", b, active[b].biz, active[b].task, capMs, "统计截止时仍在岗");
