@@ -741,20 +741,31 @@ async function syncActiveFromServer_(){
     serverLocks.forEach(function(lk){
       var t = lk.task || "";
       if(!byTask[t]) byTask[t] = [];
-      byTask[t].push(lk.badge);
+      byTask[t].push(lk);
     });
     var changed = false;
     TASK_REGISTRY.forEach(function(reg){
-      var serverBadges = byTask[reg.task] || [];
-      var serverSet = new Set(serverBadges);
+      var serverItems = byTask[reg.task] || [];
+      var serverSet = new Set(serverItems.map(function(lk){ return lk.badge; }));
       var localSet = reg.get();
       // 添加服务器有但本地没有的
-      serverBadges.forEach(function(b){
-        if(!localSet.has(b)){ localSet.add(b); changed = true; }
+      serverItems.forEach(function(lk){
+        if(!localSet.has(lk.badge)){ localSet.add(lk.badge); changed = true; }
       });
       // 移除本地有但服务器已不存在的（已在其他设备leave）
       Array.from(localSet).forEach(function(b){
-        if(!serverSet.has(b)){ localSet.delete(b); changed = true; }
+        if(!serverSet.has(b)){
+          localSet.delete(b); changed = true;
+          // leave 清备注
+          if(reg.task === "取/送货") delete importPickupNotes[b];
+          if(reg.task === "问题处理") delete importProblemNotes[b];
+        }
+      });
+      // 恢复 join_note 备注
+      serverItems.forEach(function(lk){
+        if(!lk.join_note) return;
+        if(reg.task === "取/送货" && !importPickupNotes[lk.badge]){ importPickupNotes[lk.badge] = lk.join_note; changed = true; }
+        if(reg.task === "问题处理" && !importProblemNotes[lk.badge]){ importProblemNotes[lk.badge] = lk.join_note; changed = true; }
       });
     });
     if(changed){

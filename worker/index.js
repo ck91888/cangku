@@ -982,6 +982,24 @@ export default {
         body: JSON.stringify({ action:"locks_by_session", session })
       });
       const lockInfo = await r.json();
+      const activeList = lockInfo.active || [];
+
+      // 为 active 人员附带最近一次 join 的 note（用于取/送货、问题处理备注恢复）
+      if (activeList.length > 0) {
+        const noteRows = await env.DB.prepare(
+          `SELECT badge, task, note FROM events
+           WHERE session=? AND event='join' AND ok=1 AND note IS NOT NULL AND note!=''
+           ORDER BY server_ms DESC`
+        ).bind(session).all();
+        const noteMap = {}; // badge|task -> note (取最新一条)
+        for (const nr of (noteRows.results || [])) {
+          const nk = nr.badge + "|" + nr.task;
+          if (!noteMap[nk]) noteMap[nk] = nr.note;
+        }
+        for (const lk of activeList) {
+          lk.join_note = noteMap[lk.badge + "|" + lk.task] || "";
+        }
+      }
 
       return jsonpOrJson({
         ok:true,
@@ -994,7 +1012,7 @@ export default {
         closed_by_operator: s?.closed_by_operator || "",
         biz: s?.biz || "",
         task: s?.task || "",
-        active: lockInfo.active || []
+        active: activeList
       }, callback);
     }
 
