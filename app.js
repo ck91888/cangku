@@ -4549,8 +4549,13 @@ async function openScannerCommon(){
           }catch(_){}
 
           if(joinActuallyOk){
-            // join 实际已成功：恢复本地状态，不回滚
+            // join 实际已成功：补齐正常成功路径的本地副作用
+            addRecent(evId);
             applyActive(laborTask, "join", p2.raw);
+            if(tripNote){
+              if(laborTask === "取/送货") importPickupNotes[p2.raw] = tripNote;
+              if(laborTask === "问题处理") importProblemNotes[p2.raw] = tripNote;
+            }
             renderActiveLists(); persistState();
             setStatus("网络异常，但已确认加入成功 ✅ " + p2.raw, true);
             alert("网络波动，但服务端确认已成功加入 ✅\n" + p2.raw);
