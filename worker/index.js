@@ -1660,6 +1660,7 @@ export default {
       const locksData = await locksR.json();
       const activeLocks = locksData.active || [];
       const released = [];
+      // 1) 释放仍有 active lock 的 badge
       for (const lk of activeLocks) {
         const badge = String(lk.badge || "").trim();
         if (!badge) continue;
@@ -1668,13 +1669,34 @@ export default {
           headers: { "content-type":"application/json" },
           body: JSON.stringify({ action:"lock_force_release", badge })
         }).catch(() => {});
-        const evId = "admin-force-end-" + badge + "-" + now;
+        released.push(badge);
+      }
+
+      // 2) 检查所有 join/leave 未配平的 badge（含锁已过期但未 leave 的）
+      const jlRs = await env.DB.prepare(
+        `SELECT badge, biz, task, event FROM events
+         WHERE session=? AND event IN ('join','leave') AND ok=1
+         ORDER BY server_ms ASC`
+      ).bind(session).all();
+      const badgeNet = {};   // "badge|biz|task" → join_count - leave_count
+      const badgeMeta = {};  // "badge|biz|task" → {badge, biz, task}
+      for (const r of (jlRs.results || [])) {
+        const k = r.badge + "|" + r.biz + "|" + r.task;
+        if (!badgeNet[k]) { badgeNet[k] = 0; badgeMeta[k] = { badge: r.badge, biz: r.biz, task: r.task }; }
+        badgeNet[k] += (r.event === "join" ? 1 : -1);
+      }
+      const autoLeaved = [];
+      for (const [k, net] of Object.entries(badgeNet)) {
+        if (net <= 0) continue; // 已配平
+        const m = badgeMeta[k];
+        const evId = "admin-force-leave-" + m.badge + "-" + m.biz + "-" + m.task + "-" + session + "-" + now;
         await env.DB.prepare(
           `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(now, now, evId, "leave", badge, String(lk.biz||""), String(lk.task||""), session, "", String(lk.operator_id||""), 1, "admin_force_end").run();
-        released.push(badge);
+        ).bind(now, now, evId, "leave", m.badge, m.biz, m.task, session, "", "", 1, "admin_force_end").run();
+        autoLeaved.push(m.badge);
       }
+
       await env.DB.prepare(
         `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator='admin' WHERE session=?`
       ).bind(now, session).run();
@@ -1685,7 +1707,7 @@ export default {
         `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(now, now, endEvId, "end", "", "ADMIN", "SESSION", session, "", "", 1, "admin_force_end_session").run();
-      return jsonpOrJson({ ok:true, released, session }, callback);
+      return jsonpOrJson({ ok:true, released, auto_leaved: autoLeaved, session }, callback);
     }
 
     // ===== WMS 数据导入 =====
