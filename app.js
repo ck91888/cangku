@@ -402,6 +402,11 @@ var laborBiz = null;
 var laborTask = null;
 var _pendingAutoSession = null; // { biz, task } — auto-session 延迟创建上下文
 var _justCreatedAutoSid = null; // 刚兑现的 auto-session id，join 失败时用于回滚
+var _laborDedupMap = {}; // { semanticKey: timestampMs } — labor 扫码语义去重
+var LABOR_DEDUP_TTL = 4000; // 4秒内同一badge+action+task+session视为重复
+function _laborDedupKey(action,biz,task,sid,badge){ return action+"|"+biz+"|"+task+"|"+(sid||"")+"|"+badge; }
+function _laborDedupCheck(key){ var t=_laborDedupMap[key]; return t && (Date.now()-t)<LABOR_DEDUP_TTL; }
+function _laborDedupMark(key){ _laborDedupMap[key]=Date.now(); }
 
 var activePick = new Set();
 var activeRelabel = new Set();
@@ -4421,6 +4426,13 @@ async function openScannerCommon(){
       if(!isOperatorBadge(code)){ setStatus("无效工牌（DA-... / DAF-...|名字 / EMP-...|名字）", false); return; }
       var p2 = parseBadge(code);
 
+      // ✅ 语义去重：同一badge+action+task+session 在 TTL 内不重复请求
+      var _ddKey = _laborDedupKey(laborAction, laborBiz, laborTask, currentSessionId, p2.raw);
+      if(_laborDedupCheck(_ddKey)){
+        setStatus("重复扫描已忽略 ⏭️ " + p2.raw, false);
+        return;
+      }
+
       if(laborAction === "leave" && !isAlreadyActive(laborTask, p2.raw)){
         // ✅ 本地列表可能不准（刷新/换设备），不再硬拦截，改为确认后继续
         var goOn = confirm("该工牌不在本机名单中（可能是刷新或换设备导致）。\n\n仍要尝试退出并释放服务器锁吗？");
@@ -4486,6 +4498,8 @@ async function openScannerCommon(){
         persistState(); refreshUI();
         _justCreatedAutoSid = newSid;
         _pendingAutoSession = null;
+        // auto-session 兑现后 currentSessionId 已变，重算去重键
+        _ddKey = _laborDedupKey(laborAction, laborBiz, laborTask, currentSessionId, p2.raw);
       }
 
       try{
@@ -4506,6 +4520,7 @@ async function openScannerCommon(){
 
         _justCreatedAutoSid = null; // join 成功，不再需要回滚
         addRecent(evId);
+        _laborDedupMark(_ddKey);
 
         applyActive(laborTask, laborAction, p2.raw);
 
@@ -4551,6 +4566,7 @@ async function openScannerCommon(){
           if(joinActuallyOk){
             // join 实际已成功：补齐正常成功路径的本地副作用
             addRecent(evId);
+            _laborDedupMark(_ddKey);
             applyActive(laborTask, "join", p2.raw);
             if(tripNote){
               if(laborTask === "取/送货") importPickupNotes[p2.raw] = tripNote;
