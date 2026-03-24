@@ -2195,8 +2195,8 @@ export default {
         ).bind(badge, session, biz, task, startMs).first();
         if (sup) evRows.push(sup);
       }
-      // 补查：silent badge+task — 区间前已 join、区间内无任何事件（按 badge+session+biz+task 粒度）
-      // 即使同 session 同 badge 的另一个 task 有事件，当前 task 无事件也要补回
+      // 补查：silent badge+task — 区间前已 join 且 startMs 时仍未配平（按 badge+session+biz+task 粒度）
+      // 必须检查 join_count > leave_count，不能把已 leave 的人误补成 silent open
       const sessOverlapRs = await env.DB.prepare(
         `SELECT session, biz, task, created_ms, closed_ms
          FROM sessions
@@ -2207,21 +2207,33 @@ export default {
       const bsbtInEvRows = new Set(evRows.map(e => e.badge + "|" + e.session + "|" + e.biz + "|" + e.task));
       let silentSupCount = 0;
       for (const s of (sessOverlapRs.results || [])) {
-        // 查该 session 区间前所有 join（找哪些 badge+biz+task 曾 join）
-        const joinRs = await env.DB.prepare(
+        // 查该 session 区间前所有 join/leave（判断 startMs 时的 open 状态）
+        const jlRs = await env.DB.prepare(
           `SELECT biz, task, badge, session, event, server_ms
            FROM events
-           WHERE event='join' AND ok=1 AND session=? AND server_ms < ?
-           ORDER BY badge, biz, task, server_ms DESC`
+           WHERE event IN ('join','leave') AND ok=1 AND session=? AND server_ms < ?
+           ORDER BY badge, biz, task, server_ms ASC`
         ).bind(s.session, startMs).all();
-        const seenBadgeTasks = new Set();
-        for (const r of (joinRs.results || [])) {
+        // 按 badge|biz|task 统计净计数 + 记录最后一条 join
+        const btNet = {};    // "badge|biz|task" → join_count - leave_count
+        const btLastJoin = {}; // "badge|biz|task" → 最近 join 行
+        for (const r of (jlRs.results || [])) {
           const btk = r.badge + "|" + r.biz + "|" + r.task;
-          if (seenBadgeTasks.has(btk)) continue;
-          seenBadgeTasks.add(btk);
-          // 跳过已在 evRows 中有事件的 badge+session+biz+task（orphan leave 已处理）
-          if (bsbtInEvRows.has(r.badge + "|" + r.session + "|" + r.biz + "|" + r.task)) continue;
-          evRows.push(r);
+          if (!btNet[btk]) btNet[btk] = 0;
+          if (r.event === "join") {
+            btNet[btk]++;
+            btLastJoin[btk] = r;
+          } else {
+            btNet[btk]--;
+          }
+        }
+        // 只补 join_count > leave_count（startMs 时仍 open）的 badge+biz+task
+        for (const [btk, net] of Object.entries(btNet)) {
+          if (net <= 0) continue; // 已配平或 leave 多于 join，不补
+          const lastJoin = btLastJoin[btk];
+          if (!lastJoin) continue;
+          if (bsbtInEvRows.has(lastJoin.badge + "|" + lastJoin.session + "|" + lastJoin.biz + "|" + lastJoin.task)) continue;
+          evRows.push(lastJoin);
           silentSupCount++;
         }
       }
