@@ -1144,7 +1144,7 @@ function cleanupLocalSession_(){
 }
 
 async function endSessionGlobal_(){
-  if(!currentSessionId){ setStatus("没有未结束趟次", false); return; }
+  if(!currentSessionId){ setStatus("没有未结束趟次", false); return "no_session"; }
 
   // 最多重试3次（lock释放可能有延迟）
   var r;
@@ -1171,18 +1171,18 @@ async function endSessionGlobal_(){
       } else {
         alert(msg);
       }
-      return;
+      return "blocked";
     }
     var msg = "还有人员未退出，不能结束。\n\n" + formatActiveListForAlert_(r.active);
     setStatus("还有人员未退出，禁止结束", false);
     alert(msg);
-    return;
+    return "blocked";
   }
   if(r.already_closed){
     alert("该趟次已结束（无需重复结束）");
     setStatus("该趟次已结束（无需重复结束）", true);
     cleanupLocalSession_();
-    return;
+    return "already_closed";
   }
 
   var endBiz = (CUR_CTX && CUR_CTX.biz) ? String(CUR_CTX.biz) : "B2C"; // ✅ 用当前任务的 biz
@@ -1199,6 +1199,7 @@ async function endSessionGlobal_(){
 
   setStatus("趟次已结束 ✅", true);
   cleanupLocalSession_();
+  return "closed";
 }
 
 async function endAllTask(biz, task){
@@ -2855,9 +2856,19 @@ async function startB2bFieldOp(e){
 async function endB2bFieldOp(){
   if(!acquireBusy_()) return;
   try{
-    await endSessionGlobal_();
-    clearFoRecord();
-    _foSelectedRecord = null;
+    var recordId = _foSelectedRecord && _foSelectedRecord.record_id;
+    var result = await endSessionGlobal_();
+    if(result === "closed" || result === "already_closed"){
+      // session 真正关闭后，把现场记录状态改为 completed
+      if(recordId && result === "closed"){
+        try{
+          await jsonp(LOCK_URL, { action:"b2b_field_op_update", sub:"status", record_id: recordId, status:"completed" }, { skipBusy:true });
+        }catch(e){ console.error("fo status→completed error", e); }
+      }
+      clearFoRecord();
+      _foSelectedRecord = null;
+    }
+    // blocked / no_session: 不清理本地 FO，保留页面可用
   }finally{
     releaseBusy_();
   }

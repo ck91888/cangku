@@ -1744,10 +1744,13 @@ export default {
                 w.total_weight_kg, w.total_cbm, w.detail_mode
          FROM (
            SELECT internal_workorder_id,
-                  day_kst as first_day_kst,
                   MIN(bound_at) as first_bound_at,
-                  COUNT(*) as binding_count
-           FROM b2b_operation_bindings
+                  COUNT(*) as binding_count,
+                  (SELECT day_kst FROM b2b_operation_bindings b2
+                   WHERE b2.internal_workorder_id = b1.internal_workorder_id
+                     AND b2.source_type='internal_b2b_workorder'
+                   ORDER BY b2.bound_at ASC LIMIT 1) as first_day_kst
+           FROM b2b_operation_bindings b1
            WHERE source_type='internal_b2b_workorder'
              AND match_status='direct_internal'
              AND internal_workorder_id IS NOT NULL
@@ -1795,9 +1798,12 @@ export default {
                 w.customer_name, w.status
          FROM (
            SELECT internal_workorder_id,
-                  day_kst as first_day_kst,
-                  MIN(bound_at) as first_bound_at
-           FROM b2b_operation_bindings
+                  MIN(bound_at) as first_bound_at,
+                  (SELECT day_kst FROM b2b_operation_bindings b2
+                   WHERE b2.internal_workorder_id = b1.internal_workorder_id
+                     AND b2.source_type='internal_b2b_workorder'
+                   ORDER BY b2.bound_at ASC LIMIT 1) as first_day_kst
+           FROM b2b_operation_bindings b1
            WHERE source_type='internal_b2b_workorder'
              AND match_status='direct_internal'
              AND internal_workorder_id IS NOT NULL
@@ -2212,8 +2218,13 @@ export default {
           `SELECT sub.internal_workorder_id, sub.first_day_kst,
                   w.outbound_box_count, w.outbound_pallet_count, w.total_weight_kg, w.total_cbm
            FROM (
-             SELECT internal_workorder_id, day_kst as first_day_kst, MIN(bound_at)
-             FROM b2b_operation_bindings
+             SELECT internal_workorder_id,
+                    MIN(bound_at) as first_bound_at,
+                    (SELECT day_kst FROM b2b_operation_bindings b2
+                     WHERE b2.internal_workorder_id = b1.internal_workorder_id
+                       AND b2.source_type='internal_b2b_workorder'
+                     ORDER BY b2.bound_at ASC LIMIT 1) as first_day_kst
+             FROM b2b_operation_bindings b1
              WHERE source_type='internal_b2b_workorder'
                AND match_status='direct_internal'
                AND internal_workorder_id IS NOT NULL
