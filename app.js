@@ -764,8 +764,8 @@ async function syncActiveFromServer_(){
       // 恢复 join_note 备注
       serverItems.forEach(function(lk){
         if(!lk.join_note) return;
-        if(reg.task === "取/送货" && !importPickupNotes[lk.badge]){ importPickupNotes[lk.badge] = lk.join_note; changed = true; }
-        if(reg.task === "问题处理" && !importProblemNotes[lk.badge]){ importProblemNotes[lk.badge] = lk.join_note; changed = true; }
+        if(reg.task === "取/送货" && importPickupNotes[lk.badge] !== lk.join_note){ importPickupNotes[lk.badge] = lk.join_note; changed = true; }
+        if(reg.task === "问题处理" && importProblemNotes[lk.badge] !== lk.join_note){ importProblemNotes[lk.badge] = lk.join_note; changed = true; }
       });
     });
     if(changed){
