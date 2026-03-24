@@ -314,41 +314,93 @@ async function recalcSessionStatus_(env, session, operator_id) {
   const sid = String(session || "").trim();
   if (!sid) return;
 
+  // 查该 session 的所有有效事件（join/leave/start/end）
   const rs = await env.DB.prepare(
-    `SELECT badge, event, server_ms FROM events
-     WHERE session=? AND event IN ('join','leave') AND ok=1
+    `SELECT badge, event, biz, task, server_ms FROM events
+     WHERE session=? AND event IN ('join','leave','start','end') AND ok=1
      ORDER BY server_ms ASC`
   ).bind(sid).all();
   const rows = rs.results || [];
 
-  if (rows.length === 0) return; // 无事件，不动
+  if (rows.length === 0) {
+    // 无任何事件 → CLOSED（无人无操作）
+    await env.DB.prepare(
+      `UPDATE sessions SET status='CLOSED', closed_ms=0, closed_by_operator=? WHERE session=?`
+    ).bind(String(operator_id || "manual_correction"), sid).run();
+    await taskStateCloseAll_(env, sid, 0, String(operator_id || "manual_correction"));
+    return;
+  }
 
-  // 按 badge 统计 join 次数 - leave 次数
+  // 1) 按 badge 统计 join - leave，判断是否还有人在岗
   const badgeCounts = {};
   let maxLeaveMs = 0;
+  // 2) 按 (biz,task) 统计 start/end，判断 task 级别状态
+  const taskStarted = {};  // "biz|task" → true if started and not ended
+  const taskStartMs = {};  // "biz|task" → earliest start server_ms
+  let hasSessionEnd = false;
+  let sessionEndMs = 0;
+
   for (const r of rows) {
-    if (!badgeCounts[r.badge]) badgeCounts[r.badge] = 0;
-    if (r.event === "join") badgeCounts[r.badge]++;
+    if (r.event === "join") {
+      if (!badgeCounts[r.badge]) badgeCounts[r.badge] = 0;
+      badgeCounts[r.badge]++;
+    }
     if (r.event === "leave") {
+      if (!badgeCounts[r.badge]) badgeCounts[r.badge] = 0;
       badgeCounts[r.badge]--;
       if (r.server_ms > maxLeaveMs) maxLeaveMs = r.server_ms;
     }
+    if (r.event === "start") {
+      if (r.task === "SESSION") {
+        // session 级 start 不影响 task_state，仅表示 session 开始
+      } else {
+        const tk = (r.biz || "") + "|" + (r.task || "");
+        taskStarted[tk] = true;
+        if (!taskStartMs[tk] || r.server_ms < taskStartMs[tk]) taskStartMs[tk] = r.server_ms;
+      }
+    }
+    if (r.event === "end") {
+      if (r.task === "SESSION") {
+        hasSessionEnd = true;
+        if (r.server_ms > sessionEndMs) sessionEndMs = r.server_ms;
+      } else {
+        const tk = (r.biz || "") + "|" + (r.task || "");
+        taskStarted[tk] = false;
+      }
+    }
   }
 
-  // 任意一个 badge 的 join 次数 > leave 次数 → 仍有人在岗 → OPEN
-  const anyOpen = Object.values(badgeCounts).some(c => c > 0);
+  // 任意 badge 的 join > leave → 仍有人在岗
+  const anyPersonOpen = Object.values(badgeCounts).some(c => c > 0);
+  // session 未被 end 事件关闭
+  const notSessionEnded = !hasSessionEnd;
 
-  if (anyOpen) {
+  // session 应为 OPEN 条件：有人在岗 或 有任务仍 started（且没被 SESSION end 关闭）
+  const shouldOpen = notSessionEnded && (anyPersonOpen || Object.values(taskStarted).some(v => v));
+
+  const op = String(operator_id || "manual_correction");
+
+  if (shouldOpen) {
     await env.DB.prepare(
       `UPDATE sessions SET status='OPEN', closed_ms=NULL, closed_by_operator=NULL WHERE session=?`
     ).bind(sid).run();
+
+    // 同步 task_state：把仍有 start 且未 end 的任务恢复为 OPEN
+    for (const tk of Object.keys(taskStarted)) {
+      const parts = tk.split("|");
+      const biz = parts[0], task = parts[1];
+      if (taskStarted[tk]) {
+        await taskStateOpen_(env, sid, biz, task, taskStartMs[tk] || 0, op);
+      }
+    }
   } else {
-    // 所有人都已 leave → CLOSED
+    // CLOSED：取 sessionEndMs 或 maxLeaveMs 中较大的作为 closed_ms
+    const closedMs = Math.max(sessionEndMs, maxLeaveMs) || 0;
     await env.DB.prepare(
       `UPDATE sessions SET status='CLOSED', closed_ms=?, closed_by_operator=? WHERE session=?`
-    ).bind(maxLeaveMs, String(operator_id || "manual_correction"), sid).run();
-    // 同步关闭 task_state
-    await taskStateCloseAll_(env, sid, maxLeaveMs, String(operator_id || "manual_correction"));
+    ).bind(closedMs, op, sid).run();
+    // 同步关闭所有 task_state
+    await taskStateCloseAll_(env, sid, closedMs, op);
   }
 }
 
