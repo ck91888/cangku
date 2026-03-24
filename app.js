@@ -2862,8 +2862,14 @@ async function endB2bFieldOp(){
       // session 真正关闭后，把现场记录状态改为 completed
       if(recordId && result === "closed"){
         try{
-          await jsonp(LOCK_URL, { action:"b2b_field_op_update", sub:"status", record_id: recordId, status:"completed" }, { skipBusy:true });
-        }catch(e){ console.error("fo status→completed error", e); }
+          var foRes = await jsonp(LOCK_URL, { action:"b2b_field_op_update", k:getFoKey_(), sub:"status", record_id: recordId, status:"completed" }, { skipBusy:true });
+          if(!foRes || !foRes.ok){
+            alert("现场记录状态更新失败: " + (foRes && foRes.error || "unknown") + "\n请在B2B管理页手动改为completed");
+          }
+        }catch(e){
+          console.error("fo status→completed error", e);
+          alert("现场记录状态更新失败（网络错误），请在B2B管理页手动改为completed");
+        }
       }
       clearFoRecord();
       _foSelectedRecord = null;

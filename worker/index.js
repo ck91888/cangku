@@ -3304,7 +3304,7 @@ export default {
       if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
 
       const rs = await env.DB.prepare(
-        `SELECT *, substr(datetime(created_at/1000,'unixepoch','+9 hours'),1,10) AS created_day_kst FROM b2b_field_ops WHERE substr(datetime(created_at/1000,'unixepoch','+9 hours'),1,10) >= ? AND substr(datetime(created_at/1000,'unixepoch','+9 hours'),1,10) <= ? ORDER BY created_at DESC`
+        `SELECT *, substr(datetime(created_at/1000,'unixepoch','+9 hours'),1,10) AS created_day_kst FROM b2b_field_ops WHERE plan_day >= ? AND plan_day <= ? ORDER BY created_at DESC`
       ).bind(start_day, end_day).all();
       return jsonpOrJson({ ok:true, records: rs.results || [] }, callback);
     }
@@ -3532,16 +3532,26 @@ export default {
       if (!source_type) return jsonpOrJson({ ok:false, error:"missing source_type" }, callback);
       if (!source_order_no) return jsonpOrJson({ ok:false, error:"missing source_order_no" }, callback);
 
+      // 删前先查出真实 day_kst
+      const bindRow = await env.DB.prepare(
+        `SELECT day_kst FROM b2b_operation_bindings WHERE session_id=? AND source_type=? AND source_order_no=? LIMIT 1`
+      ).bind(session_id, source_type, source_order_no).first();
+      const binding_day_kst = bindRow ? bindRow.day_kst : "";
+
       const del = await env.DB.prepare(
         `DELETE FROM b2b_operation_bindings WHERE session_id=? AND source_type=? AND source_order_no=?`
       ).bind(session_id, source_type, source_order_no).run();
 
-      // 查询该工单剩余绑定数
-      const remain = await env.DB.prepare(
-        `SELECT COUNT(*) as cnt FROM b2b_operation_bindings WHERE source_type=? AND source_order_no=? AND day_kst=?`
-      ).bind(source_type, source_order_no, new Date(now + 9*60*60*1000).toISOString().slice(0,10)).first();
+      // 按真实 day_kst 查剩余绑定数
+      let remaining = 0;
+      if (binding_day_kst) {
+        const remain = await env.DB.prepare(
+          `SELECT COUNT(*) as cnt FROM b2b_operation_bindings WHERE source_type=? AND source_order_no=? AND day_kst=?`
+        ).bind(source_type, source_order_no, binding_day_kst).first();
+        remaining = (remain && remain.cnt) || 0;
+      }
 
-      return jsonpOrJson({ ok:true, deleted: del.meta && del.meta.changes || 0, remaining_bindings: (remain && remain.cnt) || 0 }, callback);
+      return jsonpOrJson({ ok:true, deleted: del.meta && del.meta.changes || 0, remaining_bindings: remaining, binding_day_kst }, callback);
     }
 
     // ===== 现场结果单 =====
