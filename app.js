@@ -3984,9 +3984,10 @@ async function leaveWork_(biz, task){
       cleanupLocalSession_();
       return;
     }
-    var endIt = confirm("当前没有人在" + task + "作业中，无需退出。\n\n如果您想结束本趟次，请点【确定】；\n返回继续作业请点【取消】。");
-    if(endIt) await endSessionGlobal_();
-    return;
+    // session 未关闭但本地为空 → 可能刷新/换设备导致未同步，允许扫码尝试释放锁
+    var choice = confirm("本机名单为空（可能未同步），但趟次仍在进行中。\n\n【确定】→ 打开扫码器，扫工牌尝试退出并释放服务器锁\n【取消】→ 返回");
+    if(!choice) return;
+    // 放行到下面的扫码流程
   }
 
   laborAction = "leave"; laborBiz = biz; laborTask = task;
