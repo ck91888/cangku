@@ -2861,15 +2861,16 @@ async function endB2bFieldOp(){
     if(result === "closed" || result === "already_closed"){
       // session 关闭（含已关闭）后，把现场记录状态改为 completed
       if(recordId){
+        var foOk = false;
         try{
           var foRes = await jsonp(LOCK_URL, { action:"b2b_field_op_update", k:getFoKey_(), sub:"status", record_id: recordId, status:"completed" }, { skipBusy:true });
-          if(!foRes || !foRes.ok){
-            alert("现场记录状态更新失败: " + (foRes && foRes.error || "unknown") + "\n请在B2B管理页手动改为completed");
-          }
+          if(foRes && foRes.ok) foOk = true;
+          else alert("现场记录状态更新失败: " + (foRes && foRes.error || "unknown") + "\nSession已关闭，但FO记录未完成，请在B2B管理页手动改为completed");
         }catch(e){
           console.error("fo status→completed error", e);
-          alert("现场记录状态更新失败（网络错误），请在B2B管理页手动改为completed");
+          alert("现场记录状态更新失败（网络错误）\nSession已关闭，但FO记录未完成，请在B2B管理页手动改为completed");
         }
+        if(!foOk) return; // FO更新失败：保留本地上下文，不清理
       }
       clearFoRecord();
       _foSelectedRecord = null;
