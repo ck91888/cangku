@@ -1703,15 +1703,34 @@ export default {
       return jsonpOrJson({ ok:true, inserted, skipped, total: rows.length, import_batch_id, source_type, summary }, callback);
     }
 
-    // ===== WMS 导入记录查询（按批次聚合） =====
+    // ===== WMS 导入记录查询（优先 wms_import_batches，旧数据 fallback wms_outputs） =====
     if (action === "wms_list") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const limit = Math.min(Math.max(parseInt(p.limit || "30", 10) || 30, 1), 200);
-      const rs = await env.DB.prepare(
-        `SELECT import_batch_id, source_file, sheet_name, COUNT(*) as row_count, MAX(created_ms) as created_ms
-         FROM wms_outputs GROUP BY import_batch_id ORDER BY created_ms DESC LIMIT ?`
+      // 新表：有状态的批次
+      const rs1 = await env.DB.prepare(
+        `SELECT import_batch_id, source_file, sheet_name, source_type, total_rows, inserted_rows, status, created_ms, updated_ms
+         FROM wms_import_batches ORDER BY updated_ms DESC LIMIT ?`
       ).bind(limit).all();
-      return jsonpOrJson({ ok:true, batches: rs.results || [] }, callback);
+      const newBatches = rs1.results || [];
+      const seenIds = new Set(newBatches.map(b => b.import_batch_id));
+      // 旧表 fallback：补充没有 batch 表记录的历史批次
+      const remaining = limit - newBatches.length;
+      let legacyBatches = [];
+      if (remaining > 0) {
+        const rs2 = await env.DB.prepare(
+          `SELECT import_batch_id, source_file, sheet_name, source_type, COUNT(*) as row_count, MAX(created_ms) as created_ms
+           FROM wms_outputs GROUP BY import_batch_id ORDER BY created_ms DESC LIMIT ?`
+        ).bind(limit).all();
+        for (const b of (rs2.results || [])) {
+          if (!seenIds.has(b.import_batch_id)) {
+            legacyBatches.push({ ...b, total_rows: b.row_count, inserted_rows: b.row_count, status: "completed", updated_ms: b.created_ms });
+            if (legacyBatches.length >= remaining) break;
+          }
+        }
+      }
+      const batches = newBatches.concat(legacyBatches);
+      return jsonpOrJson({ ok:true, batches }, callback);
     }
 
     // ===== WMS 重复检测（文件名规则 + 内容指纹） =====
