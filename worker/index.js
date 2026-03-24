@@ -883,6 +883,31 @@ export default {
           }
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v22_field_op_result_unify', ?)`).bind(Date.now()).run();
         }
+
+        // v23: WMS 导入批次跟踪（支持部分成功后重试）
+        const m23 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v23_wms_import_batches'`).first();
+        if (!m23) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS wms_import_batches (
+            import_batch_id TEXT PRIMARY KEY,
+            content_fingerprint TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL DEFAULT '',
+            source_file TEXT NOT NULL DEFAULT '',
+            sheet_name TEXT NOT NULL DEFAULT '',
+            total_rows INTEGER NOT NULL DEFAULT 0,
+            inserted_rows INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'partial',
+            created_ms INTEGER NOT NULL DEFAULT 0,
+            updated_ms INTEGER NOT NULL DEFAULT 0
+          )`).run();
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS wms_import_batch_chunks (
+            import_batch_id TEXT NOT NULL,
+            row_offset INTEGER NOT NULL,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            created_ms INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (import_batch_id, row_offset)
+          )`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v23_wms_import_batches', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -1653,6 +1678,27 @@ export default {
         else skipped++;
       }
 
+      // ── chunk 跟踪 & 批次状态 ──
+      const total_rows = parseInt(p.total_rows || "0", 10) || 0;
+      await env.DB.prepare(
+        `INSERT OR REPLACE INTO wms_import_batch_chunks(import_batch_id, row_offset, row_count, created_ms)
+         VALUES(?,?,?,?)`
+      ).bind(import_batch_id, row_offset, rows.length, now).run();
+      // 汇总已覆盖行数（每个 chunk 按 row_offset 去重）
+      const chunkSum = await env.DB.prepare(
+        `SELECT COALESCE(SUM(row_count),0) as processed FROM wms_import_batch_chunks WHERE import_batch_id=?`
+      ).bind(import_batch_id).first();
+      const processedRows = chunkSum ? (chunkSum.processed || 0) : 0;
+      const batchStatus = (total_rows > 0 && processedRows >= total_rows) ? "completed" : "partial";
+      await env.DB.prepare(
+        `INSERT INTO wms_import_batches(import_batch_id, content_fingerprint, source_type, source_file, sheet_name, total_rows, inserted_rows, status, created_ms, updated_ms)
+         VALUES(?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(import_batch_id) DO UPDATE SET
+           inserted_rows = inserted_rows + excluded.inserted_rows,
+           status = excluded.status,
+           updated_ms = excluded.updated_ms`
+      ).bind(import_batch_id, content_fingerprint, source_type, source_file, sheet_name, total_rows, inserted, batchStatus, now, now).run();
+
       const summary = { s_empty_order, s_zero_qty, s_empty_bizday, s_loc_unknown };
       return jsonpOrJson({ ok:true, inserted, skipped, total: rows.length, import_batch_id, source_type, summary }, callback);
     }
@@ -1677,24 +1723,35 @@ export default {
       const content_fingerprint = String(p.content_fingerprint || "").trim();
       const source_type = String(p.source_type || "").trim();
 
-      // 1) 内容指纹硬拦截：同 source_type + content_fingerprint → block
+      // 1) 内容指纹检测：查 wms_import_batches
+      //    completed → 硬拦截(block)，partial → 软提醒(warn，允许重试)
       let block = false;
       let block_matches = [];
+      let partial_warn = false;
+      let partial_matches = [];
       if (content_fingerprint && source_type) {
         const rs2 = await env.DB.prepare(
-          `SELECT import_batch_id, source_type, source_file, sheet_name, COUNT(*) as row_count, MAX(created_ms) as created_ms
-           FROM wms_outputs
+          `SELECT import_batch_id, source_type, source_file, sheet_name, total_rows, inserted_rows, status,
+                  created_ms, updated_ms
+           FROM wms_import_batches
            WHERE content_fingerprint=? AND source_type=? AND content_fingerprint!=''
-           GROUP BY import_batch_id
-           LIMIT 3`
+           LIMIT 5`
         ).bind(content_fingerprint, source_type).all();
-        block_matches = rs2.results || [];
-        block = block_matches.length > 0;
+        const matches = rs2.results || [];
+        for (const m of matches) {
+          if (m.status === "completed") {
+            block = true;
+            block_matches.push(m);
+          } else {
+            partial_matches.push(m);
+          }
+        }
+        if (!block && partial_matches.length > 0) partial_warn = true;
       }
 
       // 2) 文件名软提醒：同 source_file + sheet_name + row_count（全量历史）
       let name_matches = [];
-      if (!block) {
+      if (!block && !partial_warn) {
         const rs1 = await env.DB.prepare(
           `SELECT import_batch_id, source_type, source_file, sheet_name, COUNT(*) as row_count, MAX(created_ms) as created_ms
            FROM wms_outputs
@@ -1710,6 +1767,8 @@ export default {
         ok: true,
         block,
         block_matches,
+        partial_warn,
+        partial_matches,
         has_name_duplicate: name_matches.length > 0,
         name_matches
       }, callback);
