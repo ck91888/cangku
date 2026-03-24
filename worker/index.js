@@ -1335,28 +1335,30 @@ export default {
     if (action === "admin_force_leave") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const badge = String(p.badge || "").trim();
-      if (!badge) return jsonpOrJson({ ok:false, error:"missing badge" }, callback);
+      const biz = String(p.biz || "").trim();
       const task = String(p.task || "").trim();
       const session = String(p.session || "").trim();
+      if (!badge) return jsonpOrJson({ ok:false, error:"missing badge" }, callback);
+      if (!biz) return jsonpOrJson({ ok:false, error:"missing biz" }, callback);
+      if (!task) return jsonpOrJson({ ok:false, error:"missing task" }, callback);
+      if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
       const operator_id = String(p.operator_id || "").trim();
-      const biz = String(p.biz || "").trim();
       const server_ms = now;
       const event_id = "admin-fl-" + badge + "-" + now;
       await env.DB.prepare(
         `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind(server_ms, server_ms, event_id, "leave", badge, biz||"ADMIN", task||"ADMIN", session||"", "", operator_id||"", 1, "admin_force_leave").run();
+      ).bind(server_ms, server_ms, event_id, "leave", badge, biz, task, session, "", operator_id || "", 1, "admin_force_leave").run();
       const stub = locksStub(env);
       let lockReleased = false;
       try {
         const relR = await stub.fetch("https://locks/do", {
           method: "POST",
           headers: { "content-type":"application/json" },
-          body: JSON.stringify({ action:"lock_release", badge, task: task || undefined, session: session || undefined })
+          body: JSON.stringify({ action:"lock_release", badge, task, session })
         });
         const relData = await relR.json();
         lockReleased = !!relData.released;
-        // different_session / different_task / not_found → 不误删
       } catch (_) {}
       return jsonpOrJson({ ok:true, released:true, lock_released: lockReleased }, callback);
     }
