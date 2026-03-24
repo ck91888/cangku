@@ -2098,31 +2098,32 @@ export default {
         ).bind(badge, session, biz, task, startMs).first();
         if (sup) evRows.push(sup);
       }
-      // 补查：silent badge — 区间前已 join、区间内无任何事件的 badge（按 badge+session 粒度）
-      // 即使同 session 其他 badge 有事件，当前 badge 无事件也要补回
+      // 补查：silent badge+task — 区间前已 join、区间内无任何事件（按 badge+session+biz+task 粒度）
+      // 即使同 session 同 badge 的另一个 task 有事件，当前 task 无事件也要补回
       const sessOverlapRs = await env.DB.prepare(
         `SELECT session, biz, task, created_ms, closed_ms
          FROM sessions
          WHERE created_ms <= ? AND (closed_ms IS NULL OR closed_ms >= ?)
          AND biz != '' AND task != ''`
       ).bind(endMs, startMs).all();
-      // 收集 evRows 中已有事件的 badge+session 组合
-      const badgeSessionInEvRows = new Set(evRows.map(e => e.badge + "|" + e.session));
+      // 收集 evRows 中已有事件的 badge+session+biz+task 组合
+      const bsbtInEvRows = new Set(evRows.map(e => e.badge + "|" + e.session + "|" + e.biz + "|" + e.task));
       let silentSupCount = 0;
       for (const s of (sessOverlapRs.results || [])) {
-        // 查该 session 区间前所有 join（找哪些 badge 曾 join）
+        // 查该 session 区间前所有 join（找哪些 badge+biz+task 曾 join）
         const joinRs = await env.DB.prepare(
           `SELECT biz, task, badge, session, event, server_ms
            FROM events
            WHERE event='join' AND ok=1 AND session=? AND server_ms < ?
-           ORDER BY badge, server_ms DESC`
+           ORDER BY badge, biz, task, server_ms DESC`
         ).bind(s.session, startMs).all();
-        const seenBadges = new Set();
+        const seenBadgeTasks = new Set();
         for (const r of (joinRs.results || [])) {
-          if (seenBadges.has(r.badge)) continue;
-          seenBadges.add(r.badge);
-          // 跳过已在 evRows 中有事件的 badge+session（orphan leave 已处理）
-          if (badgeSessionInEvRows.has(r.badge + "|" + r.session)) continue;
+          const btk = r.badge + "|" + r.biz + "|" + r.task;
+          if (seenBadgeTasks.has(btk)) continue;
+          seenBadgeTasks.add(btk);
+          // 跳过已在 evRows 中有事件的 badge+session+biz+task（orphan leave 已处理）
+          if (bsbtInEvRows.has(r.badge + "|" + r.session + "|" + r.biz + "|" + r.task)) continue;
           evRows.push(r);
           silentSupCount++;
         }
@@ -2323,9 +2324,10 @@ export default {
       }
 
       // join/leave 配对计算工时（按 KST 自然日切片）
-      const laborMap = {}; // badge|session → [{event, server_ms, biz, task}]
+      // 按 badge+session+biz+task 聚合，避免同 badge 同 session 不同 task 的 join/leave 串配
+      const laborMap = {}; // badge|session|biz|task → [{event, server_ms, biz, task}]
       for (const e of evRows) {
-        const key = e.badge + "|" + e.session;
+        const key = e.badge + "|" + e.session + "|" + e.biz + "|" + e.task;
         if (!laborMap[key]) laborMap[key] = [];
         laborMap[key].push(e);
       }
