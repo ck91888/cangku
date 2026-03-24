@@ -1755,6 +1755,7 @@ export default {
                   created_ms, updated_ms
            FROM wms_import_batches
            WHERE content_fingerprint=? AND source_type=? AND content_fingerprint!=''
+           ORDER BY updated_ms DESC, created_ms DESC
            LIMIT 5`
         ).bind(content_fingerprint, source_type).all();
         const matches = rs2.results || [];
@@ -2043,13 +2044,32 @@ export default {
       ).bind(laborQueryStart, laborQueryEnd).all();
       const evRows = evRs.results || [];
 
-      // Step2: session_count, event_wave_count, anomaly_count
-      const sessRs = await env.DB.prepare(
-        `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
-                biz, task, COUNT(DISTINCT session) as session_count
-         FROM events WHERE event='start' AND ok=1 AND server_ms >= ? AND server_ms <= ?
-         GROUP BY day_kst, biz, task`
-      ).bind(startMs, endMs).all();
+      // Step2: session_count（按 overlap 统计，跨天 session 每天都计入）, event_wave_count, anomaly_count
+      // 从 sessions 表查与日期范围有 overlap 的 session，再按 KST 天切分
+      const sessOverlapRs = await env.DB.prepare(
+        `SELECT session, biz, task, created_ms, closed_ms
+         FROM sessions
+         WHERE created_ms <= ? AND (closed_ms IS NULL OR closed_ms >= ?)
+         AND biz != '' AND task != ''`
+      ).bind(endMs, startMs).all();
+      // 按天分组：session 与哪些天有 overlap 就计入哪些天
+      const sessCountMap = {}; // day|biz|task → Set of session ids
+      for (const s of (sessOverlapRs.results || [])) {
+        const sStart = Math.max(s.created_ms || 0, startMs);
+        const sEnd = s.closed_ms ? Math.min(s.closed_ms, endMs) : endMs;
+        if (sStart > sEnd) continue;
+        const mappedTask = mapTask(s.biz, s.task);
+        // iterate days this session overlaps
+        let cur = sStart;
+        while (cur <= sEnd) {
+          const day = kstDayOf(cur);
+          const nextDayMs = kstDayStartMs(day) + 24 * 3600 * 1000;
+          const k = day + "|" + s.biz + "|" + mappedTask;
+          if (!sessCountMap[k]) sessCountMap[k] = new Set();
+          sessCountMap[k].add(s.session);
+          cur = nextDayMs;
+        }
+      }
 
       const waveRs = await env.DB.prepare(
         `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
@@ -2062,6 +2082,15 @@ export default {
         `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
                 biz, task, COUNT(*) as anomaly_count
          FROM events WHERE event='join_fail' AND server_ms >= ? AND server_ms <= ?
+         GROUP BY day_kst, biz, task`
+      ).bind(startMs, endMs).all();
+
+      // correction_count：统计 admin_event_insert 补录的 join/leave 事件（note='manual_correction'）
+      const corrRs = await env.DB.prepare(
+        `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
+                biz, task, COUNT(*) as correction_count
+         FROM events WHERE event IN ('join','leave') AND ok=1 AND note='manual_correction'
+           AND server_ms >= ? AND server_ms <= ?
          GROUP BY day_kst, biz, task`
       ).bind(startMs, endMs).all();
 
@@ -2227,10 +2256,11 @@ export default {
         f.unique_workers = badges.size;
       }
 
-      // session_count
-      for (const r of (sessRs.results || [])) {
-        const f = getOrCreate(r.day_kst, r.biz, mapTask(r.biz, r.task));
-        f.session_count = r.session_count;
+      // session_count（overlap 口径）
+      for (const [k, sessions] of Object.entries(sessCountMap)) {
+        const [day, biz, task] = k.split("|");
+        const f = getOrCreate(day, biz, task);
+        f.session_count = sessions.size;
       }
 
       // event_wave_count
@@ -2243,6 +2273,12 @@ export default {
       for (const r of (anomRs.results || [])) {
         const f = getOrCreate(r.day_kst, r.biz, mapTask(r.biz, r.task));
         f.anomaly_count = r.anomaly_count;
+      }
+
+      // correction_count
+      for (const r of (corrRs.results || [])) {
+        const f = getOrCreate(r.day_kst, r.biz, mapTask(r.biz, r.task));
+        f.correction_count = r.correction_count;
       }
 
       // WMS: B2C拣货 — direct
@@ -3041,7 +3077,7 @@ export default {
       // 状态流转校验
       const TRANSITIONS = {
         "draft": ["issued", "cancelled"],
-        "issued": ["completed", "cancelled"],
+        "issued": ["working", "completed", "cancelled"],
         "working": ["completed"],
         "completed": [],
         "cancelled": []
@@ -3326,7 +3362,7 @@ export default {
       const fo_did_pack = toBool01(p.did_pack);
       const fo_did_rebox = toBool01(p.did_rebox);
       const fo_needs_forklift_pick = toBool01(p.needs_forklift_pick);
-      const fo_packed_box_count = fo_did_pack ? Math.max(0, Number(p.packed_box_count || 0)) : Math.max(0, Number(p.packed_box_count || 0));
+      const fo_packed_box_count = fo_did_pack ? Math.max(0, Number(p.packed_box_count || 0)) : 0;
       const fo_big_carton_count = fo_used_carton ? Math.max(0, Number(p.big_carton_count || 0)) : 0;
       const fo_small_carton_count = fo_used_carton ? Math.max(0, Number(p.small_carton_count || 0)) : 0;
       const fo_rebox_count = fo_did_rebox ? Math.max(0, Number(p.rebox_count || 0)) : 0;
@@ -3462,7 +3498,7 @@ export default {
         const e_did_pack = toBool01(p.did_pack);
         const e_did_rebox = toBool01(p.did_rebox);
         const e_needs_forklift_pick = toBool01(p.needs_forklift_pick);
-        const e_packed_box_count = Math.max(0, Number(p.packed_box_count || 0));
+        const e_packed_box_count = e_did_pack ? Math.max(0, Number(p.packed_box_count || 0)) : 0;
         const e_big_carton_count = e_used_carton ? Math.max(0, Number(p.big_carton_count || 0)) : 0;
         const e_small_carton_count = e_used_carton ? Math.max(0, Number(p.small_carton_count || 0)) : 0;
         const e_rebox_count = e_did_rebox ? Math.max(0, Number(p.rebox_count || 0)) : 0;
