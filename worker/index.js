@@ -1448,19 +1448,10 @@ export default {
       if (event !== "join" && event !== "leave") return jsonpOrJson({ ok:false, error:"event must be join or leave" }, callback);
       if (!custom_ms || custom_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid custom_ms (need ms timestamp)" }, callback);
 
-      // 确保 session 记录存在（补录: created_ms 用事件时间, source 标记为 manual_correction）
-      if (session) {
-        await ensureSessionOpen(env, session, operator_id, biz, task, custom_ms, "manual_correction");
-        // 补录 join 时确保 task_state 为 OPEN（补录没有 start 事件）
-        if (event === "join") {
-          await taskStateOpen_(env, session, biz, task, custom_ms, operator_id);
-        }
-      }
-
       // deterministic event_id：同一组参数永远相同，防止重复提交
       const event_id = "me-" + [event, badge, biz, task, session, custom_ms].join("|");
 
-      // 前置重复检测
+      // 前置重复检测（在任何副作用之前）
       const dupEv = await env.DB.prepare(
         `SELECT event_id FROM events WHERE event_id=? LIMIT 1`
       ).bind(event_id).first();
@@ -1468,6 +1459,7 @@ export default {
         return jsonpOrJson({ ok:false, error:"duplicate manual event: this event already exists", event_id }, callback);
       }
 
+      // 真正 INSERT 事件
       const insResult = await env.DB.prepare(
         `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
@@ -1476,8 +1468,12 @@ export default {
         return jsonpOrJson({ ok:false, error:"insert failed", event_id }, callback);
       }
 
-      // 基于全部 events 重算 session 状态（status / closed_ms）
+      // 事件已落库，再处理 session/task_state 副作用
       if (session) {
+        await ensureSessionOpen(env, session, operator_id, biz, task, custom_ms, "manual_correction");
+        if (event === "join") {
+          await taskStateOpen_(env, session, biz, task, custom_ms, operator_id);
+        }
         await recalcSessionStatus_(env, session, operator_id);
       }
 
