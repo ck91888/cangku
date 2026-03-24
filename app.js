@@ -402,11 +402,18 @@ var laborBiz = null;
 var laborTask = null;
 var _pendingAutoSession = null; // { biz, task } — auto-session 延迟创建上下文
 var _justCreatedAutoSid = null; // 刚兑现的 auto-session id，join 失败时用于回滚
-var _laborDedupMap = {}; // { semanticKey: timestampMs } — labor 扫码语义去重
-var LABOR_DEDUP_TTL = 4000; // 4秒内同一badge+action+task+session视为重复
+var _laborDedupMap = {}; // { semanticKey: { state:"inflight"|"done", ts:ms } }
+var LABOR_DEDUP_TTL = 4000;
 function _laborDedupKey(action,biz,task,sid,badge){ return action+"|"+biz+"|"+task+"|"+(sid||"")+"|"+badge; }
-function _laborDedupCheck(key){ var t=_laborDedupMap[key]; return t && (Date.now()-t)<LABOR_DEDUP_TTL; }
-function _laborDedupMark(key){ _laborDedupMap[key]=Date.now(); }
+function _laborDedupCheck(key){
+  var e=_laborDedupMap[key]; if(!e) return null;
+  if(e.state==="inflight") return "inflight";
+  if(e.state==="done" && (Date.now()-e.ts)<LABOR_DEDUP_TTL) return "done";
+  delete _laborDedupMap[key]; return null;
+}
+function _laborDedupMarkInflight(key){ _laborDedupMap[key]={state:"inflight",ts:Date.now()}; }
+function _laborDedupMarkDone(key){ _laborDedupMap[key]={state:"done",ts:Date.now()}; }
+function _laborDedupClear(key){ delete _laborDedupMap[key]; }
 
 var activePick = new Set();
 var activeRelabel = new Set();
@@ -4426,9 +4433,14 @@ async function openScannerCommon(){
       if(!isOperatorBadge(code)){ setStatus("无效工牌（DA-... / DAF-...|名字 / EMP-...|名字）", false); return; }
       var p2 = parseBadge(code);
 
-      // ✅ 语义去重：同一badge+action+task+session 在 TTL 内不重复请求
+      // ✅ 语义去重：同一badge+action+task+session 在处理中/TTL内不重复请求
       var _ddKey = _laborDedupKey(laborAction, laborBiz, laborTask, currentSessionId, p2.raw);
-      if(_laborDedupCheck(_ddKey)){
+      var _ddState = _laborDedupCheck(_ddKey);
+      if(_ddState === "inflight"){
+        setStatus("正在处理中，请勿重复扫描 ⏳ " + p2.raw, false);
+        return;
+      }
+      if(_ddState === "done"){
         setStatus("重复扫描已忽略 ⏭️ " + p2.raw, false);
         return;
       }
@@ -4466,6 +4478,7 @@ async function openScannerCommon(){
         }
       }
 
+      _laborDedupMarkInflight(_ddKey);
       setStatus("处理中... 请稍等 ⏳（join/leave 需确认锁）", true);
 
       // ✅ 延迟创建 auto-session：扫到有效工牌后才真正创建
@@ -4479,6 +4492,7 @@ async function openScannerCommon(){
             addRecent(evIdStart);
           }catch(e){
             _pendingAutoSession = null;
+            _laborDedupClear(_ddKey);
             scanBusy = false;
             setStatus("创建趟次失败 ❌ " + e, false);
             alert("创建趟次失败：" + String(e));
@@ -4520,7 +4534,7 @@ async function openScannerCommon(){
 
         _justCreatedAutoSid = null; // join 成功，不再需要回滚
         addRecent(evId);
-        _laborDedupMark(_ddKey);
+        _laborDedupMarkDone(_ddKey);
 
         applyActive(laborTask, laborAction, p2.raw);
 
@@ -4566,7 +4580,7 @@ async function openScannerCommon(){
           if(joinActuallyOk){
             // join 实际已成功：补齐正常成功路径的本地副作用
             addRecent(evId);
-            _laborDedupMark(_ddKey);
+            _laborDedupMarkDone(_ddKey);
             applyActive(laborTask, "join", p2.raw);
             if(tripNote){
               if(laborTask === "取/送货") importPickupNotes[p2.raw] = tripNote;
@@ -4577,7 +4591,8 @@ async function openScannerCommon(){
             alert("网络波动，但服务端确认已成功加入 ✅\n" + p2.raw);
             await closeScanner();
           } else {
-            // join 确实没成功：清本地 + 关服务端空 session
+            // join 确实没成功：清去重+清本地+关服务端空 session
+            _laborDedupClear(_ddKey);
             if(CUR_CTX) clearSess_(CUR_CTX.biz, CUR_CTX.task);
             currentSessionId = null;
             persistState(); refreshUI();
@@ -4595,6 +4610,7 @@ async function openScannerCommon(){
             }
           }
         } else {
+          _laborDedupClear(_ddKey);
           setStatus("提交失败 ❌ " + e, false);
           alert("提交失败，请重试。\n" + e);
         }
