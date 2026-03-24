@@ -365,8 +365,8 @@ var scannedInbounds = new Set();
 var scannedBulkOutOrders = new Set();
 var scannedB2bTallyOrders = new Set();
 var scannedB2bWorkorders = new Set();
-var b2bWorkorderBindings = {}; // { orderNo: { source_type, match_status, wo_summary } }
-var b2bWorkorderResults = {};  // { orderNo: { operation_mode, box_count, pallet_count, ... } }
+var b2bWorkorderBindings = {}; // { orderNo: { source_type, match_status, day_kst, internal_workorder_id, wo_summary } }
+var b2bWorkorderResults = {};  // { resultKey: { operation_mode, box_count, pallet_count, ... } }  key = day_kst||source_type||source_order_no
 
 var lastScanAt = 0;
 var scanBusy = false;
@@ -2021,10 +2021,10 @@ function callB2bOpBind(orderNo){
       return;
     }
     if(res.duplicate){
-      b2bWorkorderBindings[orderNo] = b2bWorkorderBindings[orderNo] || { source_type: res.source_type, match_status: res.match_status };
+      b2bWorkorderBindings[orderNo] = b2bWorkorderBindings[orderNo] || { source_type: res.source_type, match_status: res.match_status, day_kst: res.day_kst || "", internal_workorder_id: res.internal_workorder_id || null };
       showScanFeedback_("该工单已绑定: " + orderNo, "#fffbe6", "#b8860b", 1500);
     } else {
-      b2bWorkorderBindings[orderNo] = { source_type: res.source_type, match_status: res.match_status, wo_summary: res.wo_summary || null };
+      b2bWorkorderBindings[orderNo] = { source_type: res.source_type, match_status: res.match_status, day_kst: res.day_kst || "", internal_workorder_id: res.internal_workorder_id || null, wo_summary: res.wo_summary || null };
       if(res.source_type === "internal_b2b_workorder"){
         var qt = (res.wo_summary && res.wo_summary.qty_text) ? " · " + res.wo_summary.qty_text : "";
         showScanFeedback_("已绑定本系统工单 " + orderNo + qt, "#e6ffe6", "#006400", 2000);
@@ -2048,10 +2048,16 @@ function loadB2bBindings(){
   jsonp(LOCK_URL, { action:"b2b_op_bind_list", session_id: currentSessionId }).then(function(res){
     if(!res || !res.ok) return;
     var bindings = res.bindings || [];
+    // 完全以服务端为准，清空本地残留，防止幽灵工单
+    scannedB2bWorkorders = new Set();
     b2bWorkorderBindings = {};
     for(var i=0; i<bindings.length; i++){
       var b = bindings[i];
-      b2bWorkorderBindings[b.source_order_no] = { source_type: b.source_type, match_status: b.match_status, wo_summary: b.wo_summary || null };
+      b2bWorkorderBindings[b.source_order_no] = {
+        source_type: b.source_type, match_status: b.match_status,
+        day_kst: b.day_kst || "", internal_workorder_id: b.internal_workorder_id || null,
+        wo_summary: b.wo_summary || null
+      };
       scannedB2bWorkorders.add(b.source_order_no);
     }
     persistState();
@@ -2060,6 +2066,11 @@ function loadB2bBindings(){
 }
 
 // ===== B2B 现场结果单 =====
+function b2bResultKey_(dayKst, sourceType, orderNo){ return dayKst + "||" + sourceType + "||" + orderNo; }
+function b2bResultKeyFromBinding_(orderNo){
+  var b = b2bWorkorderBindings[orderNo];
+  return b ? b2bResultKey_(b.day_kst, b.source_type, orderNo) : null;
+}
 var B2B_OP_MODE_LABELS = { pack_outbound:"打包出库", move_and_palletize:"纯搬箱打托" };
 
 function fmtResultSummary(r){
@@ -2099,13 +2110,16 @@ function fmtResultSummary(r){
 }
 
 function loadB2bResults(){
-  var kstDay = kstDayKey_(Date.now());
-  jsonp(LOCK_URL, { action:"b2b_op_result_list", day_kst: kstDay }, { skipBusy:true }).then(function(res){
-    if(!res || !res.ok) return;
+  if(!currentSessionId) return;
+  jsonp(LOCK_URL, { action:"b2b_op_result_list_by_session", session_id: currentSessionId }, { skipBusy:true }).then(function(res){
+    if(!res || !res.ok){ console.error("b2b_op_result_list_by_session error", res && res.error); return; }
     b2bWorkorderResults = {};
-    (res.results || []).forEach(function(r){ b2bWorkorderResults[r.source_order_no] = r; });
+    (res.results || []).forEach(function(r){
+      var rk = b2bResultKey_(r.day_kst, r.source_type, r.source_order_no);
+      b2bWorkorderResults[rk] = r;
+    });
     renderB2bWorkorderUI();
-  }).catch(function(){});
+  }).catch(function(e){ console.error("b2b_op_result_list_by_session error", e); });
 }
 
 async function tryRecoverB2bSession_(){
@@ -2140,7 +2154,12 @@ async function tryRecoverB2bSession_(){
 }
 
 function openResultForm(orderNo, seedData){
-  var kstDay = kstDayKey_(Date.now());
+  var binding = b2bWorkorderBindings[orderNo];
+  if(!binding || !binding.day_kst || !binding.source_type){
+    alert("绑定信息缺失，请刷新后重试");
+    return;
+  }
+  var kstDay = binding.day_kst;
   var modal = document.getElementById("b2bResultModal");
   var body = document.getElementById("b2bResultBody");
   if(!modal || !body) return;
@@ -2156,8 +2175,12 @@ function openResultForm(orderNo, seedData){
     var pt = res.participation || {};
     var om = r.operation_mode || "pack_outbound";
 
+    var isCrossDay = kstDay !== kstDayKey_(Date.now());
     var html = '<div style="font-size:16px;font-weight:800;margin-bottom:6px;">现场结果单</div>';
     html += '<div style="font-size:13px;color:#555;margin-bottom:4px;">工单: <b>'+esc(orderNo)+'</b>'+(cust ? ' · '+esc(cust) : '')+'</div>';
+    if(isCrossDay){
+      html += '<div style="background:#fff3e0;color:#e65100;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:700;margin-bottom:6px;">绑定日: '+esc(kstDay)+'（非今天，跨天旧 session）</div>';
+    }
     html += '<div style="font-size:12px;color:#999;margin-bottom:10px;padding:6px 8px;background:#f5f5f5;border-radius:6px;">' +
       '工单共用结果单 · 参与 session: '+pt.session_count+' · 参与人: '+pt.badge_count +
       (pt.badges && pt.badges.length > 0 ? '<br>'+pt.badges.map(function(b){ var p=b.split("|"); return esc(p[1]||p[0]); }).join(", ") : '') +
@@ -2220,6 +2243,7 @@ function openResultForm(orderNo, seedData){
       '<textarea id="rf-remark" rows="2" style="width:100%;margin-top:2px;">'+ esc(r.remark||"") +'</textarea></div>';
 
     html += '<input type="hidden" id="rf-order-no" value="'+esc(orderNo)+'" />';
+    html += '<input type="hidden" id="rf-day-kst" value="'+esc(kstDay)+'" />';
     html += '<div style="display:flex;gap:8px;">' +
       '<button onclick="submitResult(\'draft\')" style="flex:1;padding:10px;font-size:14px;">保存草稿</button>' +
       '<button onclick="submitResult(\'completed\')" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">完成提交</button>' +
@@ -2305,6 +2329,8 @@ function _rfChk(id){ return (document.getElementById(id) || {}).checked ? 1 : 0;
 function _collectResultPayload(st, extraFields){
   var orderNo = (document.getElementById("rf-order-no") || {}).value || "";
   if(!orderNo) return null;
+  var dayKst = (document.getElementById("rf-day-kst") || {}).value || "";
+  if(!dayKst){ alert("绑定日期信息缺失，请关闭后重新打开"); return null; }
   var om = (document.getElementById("rf-mode") || {}).value || "pack_outbound";
   var isPack = om === "pack_outbound";
 
@@ -2318,7 +2344,7 @@ function _collectResultPayload(st, extraFields){
   // 按模式取值，联动归零
   var payload = {
     action: "b2b_op_result_upsert",
-    day_kst: kstDayKey_(Date.now()),
+    day_kst: dayKst,
     source_order_no: orderNo,
     session_id: currentSessionId || "",
     operation_mode: om,
@@ -2437,7 +2463,9 @@ function _doBadgeConfirmSubmit(){
 
 function revertResultToDraft(orderNo){
   if(!confirm("确认退回草稿？\n将清除完成确认记录，状态改回草稿。")) return;
-  var kstDay = kstDayKey_(Date.now());
+  var binding = b2bWorkorderBindings[orderNo];
+  if(!binding || !binding.day_kst){ alert("绑定信息缺失，请刷新后重试"); return; }
+  var kstDay = binding.day_kst;
   jsonp(LOCK_URL, { action:"b2b_op_result_get", day_kst: kstDay, source_order_no: orderNo }, { skipBusy:true }).then(function(res){
     if(!res || !res.ok){ alert("加载失败"); return; }
     var r = res.result || {};
@@ -3611,6 +3639,18 @@ function renderB2bWorkorderUI(){
   var c = document.getElementById("b2bWorkorderOrderCount");
   var l = document.getElementById("b2bWorkorderOrderList");
   if(c) c.textContent = String(scannedB2bWorkorders.size);
+
+  // 跨天 session 提示
+  var banner = document.getElementById("b2bCrossDayBanner");
+  if(banner){
+    var hasCrossDay = false;
+    scannedB2bWorkorders.forEach(function(x){
+      var b = b2bWorkorderBindings[x];
+      if(b && b.day_kst && b.day_kst !== kstDayKey_(Date.now())) hasCrossDay = true;
+    });
+    banner.style.display = hasCrossDay ? "" : "none";
+  }
+
   if(!l) return;
   if(scannedB2bWorkorders.size === 0){
     l.innerHTML = '<span class="muted">无 / 없음</span>';
@@ -3622,7 +3662,8 @@ function renderB2bWorkorderUI(){
   // 按结果状态分组
   var groups = { completed:[], draft:[], none:[] };
   show.forEach(function(x){
-    var r = b2bWorkorderResults[x];
+    var rk = b2bResultKeyFromBinding_(x);
+    var r = rk ? b2bWorkorderResults[rk] : null;
     if(r && r.status === "completed") groups.completed.push(x);
     else if(r) groups.draft.push(x);
     else groups.none.push(x);
@@ -3644,16 +3685,32 @@ function renderB2bWorkorderUI(){
 
 function renderB2bBindCard_(x){
   var b = b2bWorkorderBindings[x];
-  var r = b2bWorkorderResults[x];
+  var rk = b2bResultKeyFromBinding_(x);
+  var r = rk ? b2bWorkorderResults[rk] : null;
+
+  // 无 binding 信息：绑定缺失卡片
+  if(!b || !b.day_kst || !b.source_type){
+    return '<div style="background:#fff0f0;border:1px solid #ef9a9a;border-radius:8px;padding:8px 10px;margin:4px 0;">' +
+      '<div style="font-size:14px;font-weight:600;">' + esc(String(x)) + '</div>' +
+      '<div style="font-size:11px;color:#c62828;margin-top:3px;">绑定信息缺失，请刷新重试</div>' +
+      '<div style="margin-top:5px;"><button onclick="unbindB2bWorkorder(\''+esc(x)+'\')" style="font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;background:#fff;color:#c62828;border:1px solid #ef9a9a;">解绑</button></div>' +
+    '</div>';
+  }
 
   // 类型标签
   var typeTag;
-  if(b && b.source_type === "internal_b2b_workorder"){
+  if(b.source_type === "internal_b2b_workorder"){
     typeTag = '<span style="display:inline-block;background:#c8e6c9;color:#2e7d32;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;">🏠 本系统工单</span>';
-  } else if(b && b.source_type === "external_wms_workorder"){
+  } else if(b.source_type === "external_wms_workorder"){
     typeTag = '<span style="display:inline-block;background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;">📦 外部WMS工单</span>';
   } else {
     typeTag = '<span style="display:inline-block;background:#e0e0e0;color:#555;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;">📝 待确认</span>';
+  }
+
+  // 跨天绑定日标签
+  var dayTag = "";
+  if(b.day_kst !== kstDayKey_(Date.now())){
+    dayTag = '<span style="display:inline-block;background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;">绑定日:'+esc(b.day_kst)+'</span>';
   }
 
   // 结果状态标签
@@ -3667,15 +3724,15 @@ function renderB2bBindCard_(x){
   }
 
   // 工单号行
-  var line1 = '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:3px;">' + typeTag + statusTag + '</div>';
+  var line1 = '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:3px;">' + typeTag + dayTag + statusTag + '</div>';
   var line2 = '<div style="font-size:14px;font-weight:600;margin-top:3px;">' + esc(String(x)) + '</div>';
 
   // 工单摘要（内部工单的数量信息）
   var qtyLine = "";
-  if(b && b.source_type === "internal_b2b_workorder" && b.wo_summary && b.wo_summary.qty_text){
+  if(b.source_type === "internal_b2b_workorder" && b.wo_summary && b.wo_summary.qty_text){
     qtyLine = '<div style="font-size:11px;color:#666;margin-top:2px;">计划: '+esc(b.wo_summary.qty_text)+'</div>';
   }
-  if(b && b.source_type === "external_wms_workorder" && !r){
+  if(b.source_type === "external_wms_workorder" && !r){
     qtyLine = '<div style="font-size:11px;color:#e65100;margin-top:2px;">待WMS匹配</div>';
   }
 
@@ -3689,9 +3746,7 @@ function renderB2bBindCard_(x){
 
   // 操作按钮
   var btnLine = '<div style="display:flex;gap:6px;margin-top:5px;">';
-  if(b){
-    btnLine += '<button onclick="openResultForm(\''+esc(x)+'\')" style="font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;background:#1976d2;color:#fff;border:none;">'+(r?'编辑结果':'录入结果')+'</button>';
-  }
+  btnLine += '<button onclick="openResultForm(\''+esc(x)+'\')" style="font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;background:#1976d2;color:#fff;border:none;">'+(r?'编辑结果':'录入结果')+'</button>';
   btnLine += '<button onclick="unbindB2bWorkorder(\''+esc(x)+'\')" style="font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;background:#fff;color:#c62828;border:1px solid #ef9a9a;">解绑</button>';
   btnLine += '</div>';
 

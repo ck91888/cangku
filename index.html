@@ -785,6 +785,7 @@
         <input id="b2bWorkorderManualInput" type="text" placeholder="手动输入工单号 / 수동 입력" style="flex:1;" />
         <button onclick="manualAddB2bWorkorder()" style="width:auto;min-width:80px;">添加</button>
       </div>
+      <div id="b2bCrossDayBanner" style="display:none;background:#fff3e0;color:#e65100;padding:8px 12px;border-radius:6px;font-size:13px;font-weight:700;margin-bottom:8px;border:1px solid #ffcc80;">⚠️ 当前为跨天旧 session，结果单按绑定日处理</div>
       <div class="listBox">
         <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;"><b>已绑定工单 / 바인딩 작업지시</b><span style="font-size:16px;font-weight:700;color:#1565c0;">(<span id="b2bWorkorderOrderCount">0</span>)</span></div>
         <div id="b2bWorkorderOrderList" class="muted">无 / 없음</div>
