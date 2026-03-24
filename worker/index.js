@@ -2098,8 +2098,35 @@ export default {
         ).bind(badge, session, biz, task, startMs).first();
         if (sup) evRows.push(sup);
       }
-      // 重排序
-      if (orphanKeys.length > 0) {
+      // 补查：silent overlap sessions — 区间前已 join、区间内无任何 join/leave 的跨日续作 session
+      // 先查与区间 overlap 的 session，再排除已在 evRows 中出现的
+      const sessOverlapRs = await env.DB.prepare(
+        `SELECT session, biz, task, created_ms, closed_ms
+         FROM sessions
+         WHERE created_ms <= ? AND (closed_ms IS NULL OR closed_ms >= ?)
+         AND biz != '' AND task != ''`
+      ).bind(endMs, startMs).all();
+      const sessionsInEvRows = new Set(evRows.map(e => e.session));
+      const silentSessions = (sessOverlapRs.results || []).filter(s => !sessionsInEvRows.has(s.session));
+      for (const s of silentSessions) {
+        // 该 session 在区间内无事件，找区间前最后的 join（按 badge 去重）
+        const joinRs = await env.DB.prepare(
+          `SELECT biz, task, badge, session, event, server_ms
+           FROM events
+           WHERE event='join' AND ok=1 AND session=? AND server_ms < ?
+           ORDER BY server_ms DESC`
+        ).bind(s.session, startMs).all();
+        const seenBadges = new Set();
+        for (const r of (joinRs.results || [])) {
+          if (!seenBadges.has(r.badge)) {
+            seenBadges.add(r.badge);
+            evRows.push(r);
+          }
+        }
+      }
+
+      // 重排序（orphan leave 补 join + silent session 补 join 后统一排序）
+      if (orphanKeys.length > 0 || silentSessions.length > 0) {
         evRows.sort((a, b) => {
           if (a.badge < b.badge) return -1; if (a.badge > b.badge) return 1;
           if (a.session < b.session) return -1; if (a.session > b.session) return 1;
@@ -2108,13 +2135,6 @@ export default {
       }
 
       // Step2: session_count（按 overlap 统计，跨天 session 每天都计入）, event_wave_count, anomaly_count
-      // 从 sessions 表查与日期范围有 overlap 的 session，再按 KST 天切分
-      const sessOverlapRs = await env.DB.prepare(
-        `SELECT session, biz, task, created_ms, closed_ms
-         FROM sessions
-         WHERE created_ms <= ? AND (closed_ms IS NULL OR closed_ms >= ?)
-         AND biz != '' AND task != ''`
-      ).bind(endMs, startMs).all();
       // 按天分组：session 与哪些天有 overlap 就计入哪些天
       const sessCountMap = {}; // day|biz|task → Set of session ids
       for (const s of (sessOverlapRs.results || [])) {
