@@ -152,7 +152,7 @@ function renderPages(){
   if(cur==="b2b_menu"){ refreshUI(); }
   if(cur==="b2b_unload"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
   if(cur==="b2b_tally"){ restoreState(); renderActiveLists(); renderB2bTallyUI(); refreshUI(); }
-  if(cur==="b2b_workorder"){ restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); loadB2bResults(); refreshUI(); if(!currentSessionId) tryRecoverB2bSession_(); }
+  if(cur==="b2b_workorder"){ _b2bBindingsLoaded = false; _b2bSelfHealPending = false; restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); loadB2bResults(); refreshUI(); if(!currentSessionId) tryRecoverB2bSession_(); }
   if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
   if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_field_op"){ restoreState(); renderActiveLists(); renderB2bFieldOpUI(); refreshUI(); }
@@ -366,6 +366,8 @@ var scannedBulkOutOrders = new Set();
 var scannedB2bTallyOrders = new Set();
 var scannedB2bWorkorders = new Set();
 var b2bWorkorderBindings = {}; // { orderNo: { source_type, match_status, day_kst, internal_workorder_id, wo_summary } }
+var _b2bBindingsLoaded = false; // true after first loadB2bBindings() success
+var _b2bSelfHealPending = false; // guard: one self-heal reload at a time
 var b2bWorkorderResults = {};  // { resultKey: { operation_mode, box_count, pallet_count, ... } }  key = day_kst||source_type||source_order_no
 
 var lastScanAt = 0;
@@ -2001,7 +2003,7 @@ function renderB2bTallyUI(){
 }
 
 /** ===== B2B Workorder (like B2C BulkOut) ===== */
-function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); b2bWorkorderBindings = {}; b2bWorkorderResults = {}; }, renderB2bWorkorderUI); }
+function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); b2bWorkorderBindings = {}; _b2bBindingsLoaded = false; _b2bSelfHealPending = false; b2bWorkorderResults = {}; }, renderB2bWorkorderUI); }
 async function endB2bWorkorder(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 function callB2bOpBind(orderNo){
@@ -2022,7 +2024,7 @@ function callB2bOpBind(orderNo){
       return;
     }
     if(res.duplicate){
-      b2bWorkorderBindings[orderNo] = b2bWorkorderBindings[orderNo] || { source_type: res.source_type, match_status: res.match_status, day_kst: res.day_kst || "", internal_workorder_id: res.internal_workorder_id || null };
+      b2bWorkorderBindings[orderNo] = { source_type: res.source_type, match_status: res.match_status, day_kst: res.day_kst || "", internal_workorder_id: res.internal_workorder_id || null, wo_summary: res.wo_summary || null };
       showScanFeedback_("该工单已绑定: " + orderNo, "#fffbe6", "#b8860b", 1500);
     } else {
       b2bWorkorderBindings[orderNo] = { source_type: res.source_type, match_status: res.match_status, day_kst: res.day_kst || "", internal_workorder_id: res.internal_workorder_id || null, wo_summary: res.wo_summary || null };
@@ -2061,9 +2063,11 @@ function loadB2bBindings(){
       };
       scannedB2bWorkorders.add(b.source_order_no);
     }
+    _b2bBindingsLoaded = true;
+    _b2bSelfHealPending = false;
     persistState();
     renderB2bWorkorderUI();
-  }).catch(function(e){ console.error("b2b_op_bind_list error", e); });
+  }).catch(function(e){ console.error("b2b_op_bind_list error", e); _b2bBindingsLoaded = true; _b2bSelfHealPending = false; });
 }
 
 // ===== B2B 现场结果单 =====
@@ -3718,8 +3722,26 @@ function renderB2bBindCard_(x){
   var rk = b2bResultKeyFromBinding_(x);
   var r = rk ? b2bWorkorderResults[rk] : null;
 
-  // 无 binding 信息：绑定缺失卡片
+  // 无 binding 信息
   if(!b || !b.day_kst || !b.source_type){
+    // 尚在加载中：显示占位，不显示错误
+    if(!_b2bBindingsLoaded){
+      return '<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:8px 10px;margin:4px 0;">' +
+        '<div style="font-size:14px;font-weight:600;">' + esc(String(x)) + '</div>' +
+        '<div style="font-size:11px;color:#888;margin-top:3px;">加载绑定信息中...</div>' +
+      '</div>';
+    }
+    // 已加载完但仍缺失：触发一次自愈重建
+    if(!_b2bSelfHealPending){
+      _b2bSelfHealPending = true;
+      _b2bBindingsLoaded = false;
+      setTimeout(function(){ loadB2bBindings(); }, 0);
+      return '<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:8px 10px;margin:4px 0;">' +
+        '<div style="font-size:14px;font-weight:600;">' + esc(String(x)) + '</div>' +
+        '<div style="font-size:11px;color:#888;margin-top:3px;">正在自动恢复绑定信息...</div>' +
+      '</div>';
+    }
+    // 自愈已尝试仍失败：显示错误
     return '<div style="background:#fff0f0;border:1px solid #ef9a9a;border-radius:8px;padding:8px 10px;margin:4px 0;">' +
       '<div style="font-size:14px;font-weight:600;">' + esc(String(x)) + '</div>' +
       '<div style="font-size:11px;color:#c62828;margin-top:3px;">绑定信息缺失，请刷新重试</div>' +
