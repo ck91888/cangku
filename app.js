@@ -2048,8 +2048,10 @@ function callB2bOpBind(orderNo){
 
 function loadB2bBindings(){
   if(!currentSessionId) return;
-  jsonp(LOCK_URL, { action:"b2b_op_bind_list", session_id: currentSessionId }).then(function(res){
-    if(!res || !res.ok) return;
+  var reqSid = currentSessionId; // 捕获发起时的 session，用于回调校验
+  jsonp(LOCK_URL, { action:"b2b_op_bind_list", session_id: reqSid }).then(function(res){
+    if(currentSessionId !== reqSid){ return; } // session 已切换，丢弃旧结果
+    if(!res || !res.ok){ _b2bBindingsLoaded = true; _b2bSelfHealPending = false; return; }
     var bindings = res.bindings || [];
     // 完全以服务端为准，清空本地残留，防止幽灵工单
     scannedB2bWorkorders = new Set();
@@ -2067,7 +2069,7 @@ function loadB2bBindings(){
     _b2bSelfHealPending = false;
     persistState();
     renderB2bWorkorderUI();
-  }).catch(function(e){ console.error("b2b_op_bind_list error", e); _b2bBindingsLoaded = true; _b2bSelfHealPending = false; });
+  }).catch(function(e){ console.error("b2b_op_bind_list error", e); if(currentSessionId === reqSid){ _b2bBindingsLoaded = true; _b2bSelfHealPending = false; } });
 }
 
 // ===== B2B 现场结果单 =====
