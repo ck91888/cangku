@@ -400,6 +400,7 @@ var currentDaId = localStorage.getItem("da_id") || null;
 var laborAction = null;
 var laborBiz = null;
 var laborTask = null;
+var _pendingAutoSession = null; // { biz, task } — auto-session 延迟创建上下文
 
 var activePick = new Set();
 var activeRelabel = new Set();
@@ -3892,45 +3893,14 @@ async function joinWork_(biz, task){
   // ✅ 每任务独立 session：先拿到该任务的 session
   var sid = getSess_(biz, task);
 
-  // 自动 session 的任务：第一次 join 时自动开新趟次，并同步发送 start
+  // 自动 session 的任务：延迟到真正扫码 join 成功时才创建 session
   if(!sid && taskAutoSession_(task)){
-    var newSid = makePickSessionId();
-
-    // ✅ 先调服务器确认，避免有未关闭趟次时写入错误的本地 session
-    var evIdStart = makeEventId({ event:"start", biz:biz, task: task, wave_id:"", badgeRaw:"" });
-    if(!hasRecent(evIdStart)){
-      try{
-        await submitEventSync_({ event:"start", event_id: evIdStart, biz: biz, task: task, pick_session_id: newSid }, true);
-        addRecent(evIdStart);
-      }catch(e){
-        setStatus("加入失败 ❌ " + e, false);
-        alert(String(e));
-        return;
-      }
-    }
-
-    // ✅ 服务器确认后才写入本地状态
-    sid = newSid;
-    currentSessionId = sid;
-    CUR_CTX = { biz: biz, task: task, page: getHashPage() };
-    setSess_(biz, task, sid);
-
-    // 清空该任务的本地状态
-    if(task==="打包") activePack = new Set();
-    if(task==="退件入库") activeReturn = new Set();
-    if(task==="质检") activeQc = new Set();
-    if(task==="废弃处理") activeDisposal = new Set();
-    if(task==="卸货") activeImportUnload = new Set();
-    if(task==="过机扫描码托") activeImportScanPallet = new Set();
-    if(task==="装柜/出货") activeImportLoadout = new Set();
-    if(task==="B2B卸货") activeB2bUnload = new Set();
-    if(task==="B2B出库") activeB2bOutbound = new Set();
-    if(task==="B2B盘点") activeB2bInventory = new Set();
-    if(task==="B2C盘点") activeB2cInventory = new Set();
-    if(task==="仓库整理") activeWarehouseCleanup = new Set();
-    if(task==="取/送货") { activeImportPickup = new Set(); importPickupNotes = {}; }
-    if(task==="问题处理") { activeImportProblem = new Set(); importProblemNotes = {}; }
-    persistState(); refreshUI();
+    _pendingAutoSession = { biz: biz, task: task };
+    laborAction = "join"; laborBiz = biz; laborTask = task;
+    scanMode = "labor";
+    document.getElementById("scanTitle").textContent = "扫码工牌（加入）";
+    await openScannerCommon();
+    return;
   }
 
   if(!sid){
@@ -4485,6 +4455,37 @@ async function openScannerCommon(){
 
       setStatus("处理中... 请稍等 ⏳（join/leave 需确认锁）", true);
 
+      // ✅ 延迟创建 auto-session：扫到有效工牌后才真正创建
+      if(_pendingAutoSession && laborAction === "join"){
+        var pa = _pendingAutoSession;
+        var newSid = makePickSessionId();
+        var evIdStart = makeEventId({ event:"start", biz:pa.biz, task:pa.task, wave_id:"", badgeRaw:"" });
+        if(!hasRecent(evIdStart)){
+          try{
+            await submitEventSync_({ event:"start", event_id: evIdStart, biz: pa.biz, task: pa.task, pick_session_id: newSid }, true);
+            addRecent(evIdStart);
+          }catch(e){
+            _pendingAutoSession = null;
+            scanBusy = false;
+            setStatus("创建趟次失败 ❌ " + e, false);
+            alert("创建趟次失败：" + String(e));
+            await closeScanner();
+            return;
+          }
+        }
+        // 服务器确认后写入本地状态
+        currentSessionId = newSid;
+        CUR_CTX = { biz: pa.biz, task: pa.task, page: getHashPage() };
+        setSess_(pa.biz, pa.task, newSid);
+        // 清空该任务的本地 active set
+        var _r = taskReg_(pa.task);
+        if(_r) _r.set(new Set());
+        if(pa.task==="取/送货") importPickupNotes = {};
+        if(pa.task==="问题处理") importProblemNotes = {};
+        persistState(); refreshUI();
+        _pendingAutoSession = null;
+      }
+
       try{
         var evId = makeEventId({ event:laborAction, biz:laborBiz, task:laborTask, wave_id:"", badgeRaw:p2.raw });
         if(hasRecent(evId)){ setStatus("重复扫描已忽略 ⏭️", false); await closeScanner(); return; }
@@ -4773,6 +4774,7 @@ async function closeScanner(){
   try{
     if(scanner){ await scanner.stop(); await scanner.clear(); scanner = null; }
   }catch(e){}
+  _pendingAutoSession = null; // 关闭扫码器时丢弃未兑现的 auto-session
   clearScanFeedback_();
   hideOverlay();
 }
