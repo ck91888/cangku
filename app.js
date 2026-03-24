@@ -5816,6 +5816,7 @@ function adminLogout(){
 var _wmsWorkbook = null;
 var _wmsFileName = "";
 var _wmsPreviewRows = [];  // [{header:[], rows:[[]]}]
+var _wmsReuseBatchId = "";  // partial 重试时复用的 batch_id
 var _wmsCurrentSheet = "";
 
 function wmsSetStatus_(msg, ok){
@@ -5997,13 +5998,15 @@ async function wmsConfirmImport(){
       return;
     }
     if(dupRes && dupRes.ok && dupRes.partial_warn){
-      // 部分导入提醒：允许重试
-      var pm = (dupRes.partial_matches||[]).map(function(m){
+      // 部分导入提醒：复用最新 partial batch 的 import_batch_id
+      var sorted = (dupRes.partial_matches||[]).slice().sort(function(a,b){ return (b.updated_ms||b.created_ms||0) - (a.updated_ms||a.created_ms||0); });
+      var pm = sorted.map(function(m){
         return "批次: " + (m.import_batch_id||"?") + " | 已入 " + (m.inserted_rows||0) + "/" + (m.total_rows||"?") + "行 | " + fmtKST_(m.updated_ms||m.created_ms);
       }).join("\n");
-      if(!confirm("⚠️ 发现未完成的同内容导入记录：\n" + pm + "\n\n可能是之前导入中断，重试将跳过已存在的行。\n确定继续导入吗？")){
+      if(!confirm("⚠️ 发现未完成的同内容导入记录：\n" + pm + "\n\n将复用已有批次继续导入，已成功的行会自动跳过。\n确定继续导入吗？")){
         return;
       }
+      _wmsReuseBatchId = sorted[0].import_batch_id;
     }
     if(dupRes && dupRes.ok && dupRes.has_name_duplicate){
       // 软提醒：文件名/Sheet/行数相同，但内容不同
@@ -6016,8 +6019,9 @@ async function wmsConfirmImport(){
 
   if(!confirm("确认导入 " + rows.length + " 行数据到后端？\n\n文件：" + _wmsFileName + "\nSheet：" + _wmsCurrentSheet)) return;
 
-  // 生成本次导入批次ID
-  var batchId = "WMS-" + Date.now() + "-" + Math.random().toString(36).slice(2,8);
+  // 生成本次导入批次ID（partial 重试时复用已有 batch_id）
+  var batchId = _wmsReuseBatchId || ("WMS-" + Date.now() + "-" + Math.random().toString(36).slice(2,8));
+  _wmsReuseBatchId = "";
 
   // 构建导入数据：每行转为 {header[i]: value} 的对象
   var records = [];
@@ -6121,9 +6125,11 @@ async function wmsLoadRecent(){
     batches.forEach(function(b){
       var bid = b.import_batch_id || "";
       var label = bid.indexOf("LEGACY-") === 0 ? "历史导入" : (bid || "未知批次");
+      var rowInfo = b.total_rows ? (b.inserted_rows||0) + "/" + b.total_rows + " 行" : (b.row_count||0) + " 行";
+      var statusTag = b.status === "partial" ? ' <span style="color:#e65100;">⏳未完成</span>' : (b.status === "completed" ? ' <span style="color:#388e3c;">✅</span>' : "");
       html += "<div style='padding:6px 0;border-bottom:1px solid #f0f0f0;'>" +
-        "<div><b>" + esc(b.source_file||"?") + "</b> → " + esc(b.sheet_name||"?") + "</div>" +
-        "<div style='color:#666;font-size:12px;'>" + (b.row_count||0) + " 行 | " + fmtKST_(b.created_ms) + " | " + esc(label) + "</div>" +
+        "<div><b>" + esc(b.source_file||"?") + "</b> → " + esc(b.sheet_name||"?") + statusTag + "</div>" +
+        "<div style='color:#666;font-size:12px;'>" + rowInfo + " | " + fmtKST_(b.updated_ms||b.created_ms) + " | " + esc(label) + "</div>" +
         "</div>";
     });
     html += "</div>";
