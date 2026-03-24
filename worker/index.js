@@ -1424,8 +1424,9 @@ export default {
       const binds = [];
       if (biz) { where += " AND biz=?"; binds.push(biz); }
       if (task) { where += " AND task=?"; binds.push(task); }
-      if (since_ms) { where += " AND created_ms>=?"; binds.push(since_ms); }
-      if (until_ms) { where += " AND created_ms<=?"; binds.push(until_ms); }
+      // overlap 条件：session 与查询区间有交集（跨天 session 不遗漏）
+      if (since_ms) { where += " AND (closed_ms IS NULL OR closed_ms >= ?)"; binds.push(since_ms); }
+      if (until_ms) { where += " AND created_ms <= ?"; binds.push(until_ms); }
 
       const sessionsSql = `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator,source FROM sessions ${where} ORDER BY created_ms DESC LIMIT ?`;
       binds.push(limit);
@@ -2001,14 +2002,45 @@ export default {
 
       const TASKS = ["B2C拣货", "B2C打包", "过机扫描码托", "换单", "退件入库", "质检"];
 
+      // ── 通用 helper：将一段工时按 KST 自然日切片 ──
+      // 返回 [{day_kst, minutes}]
+      // KST 日界 = UTC 15:00 前一天 → UTC 15:00 = KST 00:00
+      const KST_OFFSET = 9 * 3600 * 1000;
+      function kstDayOf(ms) {
+        const d = new Date(ms + KST_OFFSET);
+        return d.getUTCFullYear() + "-" + String(d.getUTCMonth()+1).padStart(2,"0") + "-" + String(d.getUTCDate()).padStart(2,"0");
+      }
+      function kstDayStartMs(dayStr) {
+        return new Date(dayStr + "T00:00:00+09:00").getTime();
+      }
+      function sliceLaborByDay_(joinMs, leaveMs, rangeStart, rangeEnd) {
+        // clamp to query range
+        const s = Math.max(joinMs, rangeStart);
+        const e = Math.min(leaveMs, rangeEnd);
+        if (s >= e) return [];
+        const slices = [];
+        let cur = s;
+        while (cur < e) {
+          const day = kstDayOf(cur);
+          const nextDayMs = kstDayStartMs(day) + 24 * 3600 * 1000; // KST 次日 00:00
+          const sliceEnd = Math.min(nextDayMs, e);
+          const mins = (sliceEnd - cur) / 60000;
+          if (mins > 0) slices.push({ day_kst: day, minutes: mins });
+          cur = sliceEnd;
+        }
+        return slices;
+      }
+
       // Step1: 劳动数据 — join/leave 事件
+      // 扩大查询范围：join 可能在 startMs 之前 24h（跨天），leave 可能在 endMs 之后 24h
+      const laborQueryStart = startMs - 24 * 3600 * 1000;
+      const laborQueryEnd = endMs + 24 * 3600 * 1000;
       const evRs = await env.DB.prepare(
-        `SELECT substr(datetime(server_ms/1000,'unixepoch','+9 hours'),1,10) as day_kst,
-                biz, task, badge, session, event, server_ms
+        `SELECT biz, task, badge, session, event, server_ms
          FROM events
          WHERE event IN ('join','leave') AND ok=1 AND server_ms >= ? AND server_ms <= ?
          ORDER BY badge, session, server_ms`
-      ).bind(startMs, endMs).all();
+      ).bind(laborQueryStart, laborQueryEnd).all();
       const evRows = evRs.results || [];
 
       // Step2: session_count, event_wave_count, anomaly_count
@@ -2156,16 +2188,14 @@ export default {
         return featureMap[k];
       }
 
-      // join/leave 配对计算工时
-      // 按 badge+session 分组，配对 join→leave
-      const laborMap = {}; // badge|session → [{event, server_ms, day_kst, biz, task}]
+      // join/leave 配对计算工时（按 KST 自然日切片）
+      const laborMap = {}; // badge|session → [{event, server_ms, biz, task}]
       for (const e of evRows) {
         const key = e.badge + "|" + e.session;
         if (!laborMap[key]) laborMap[key] = [];
         laborMap[key].push(e);
       }
 
-      // 每个 badge+session 的事件已按 server_ms 排序
       const workersByDayBizTask = {}; // day|biz|task → Set of badges
       for (const [, events] of Object.entries(laborMap)) {
         let pendingJoin = null;
@@ -2173,15 +2203,17 @@ export default {
           if (e.event === "join") {
             pendingJoin = e;
           } else if (e.event === "leave" && pendingJoin) {
-            // 配对成功: 归到 join 所在日
-            const minutes = (e.server_ms - pendingJoin.server_ms) / 60000;
-            if (minutes > 0 && minutes < 1440) { // 最多 24 小时
+            const totalMin = (e.server_ms - pendingJoin.server_ms) / 60000;
+            if (totalMin > 0 && totalMin < 1440) {
               const mappedTask = mapTask(pendingJoin.biz, pendingJoin.task);
-              const f = getOrCreate(pendingJoin.day_kst, pendingJoin.biz, mappedTask);
-              f.total_person_minutes += minutes;
-              const wk = pendingJoin.day_kst + "|" + pendingJoin.biz + "|" + mappedTask;
-              if (!workersByDayBizTask[wk]) workersByDayBizTask[wk] = new Set();
-              workersByDayBizTask[wk].add(pendingJoin.badge);
+              const slices = sliceLaborByDay_(pendingJoin.server_ms, e.server_ms, startMs, endMs);
+              for (const sl of slices) {
+                const f = getOrCreate(sl.day_kst, pendingJoin.biz, mappedTask);
+                f.total_person_minutes += sl.minutes;
+                const wk = sl.day_kst + "|" + pendingJoin.biz + "|" + mappedTask;
+                if (!workersByDayBizTask[wk]) workersByDayBizTask[wk] = new Set();
+                workersByDayBizTask[wk].add(pendingJoin.badge);
+              }
             }
             pendingJoin = null;
           }
@@ -4036,9 +4068,10 @@ export default {
       const woWaves = waves.filter(w => w.task === "B2B工单操作");
       if (woWaves.length > 0) {
         const woIds = [...new Set(woWaves.map(w => w.wave_id))];
-        const woDays = [...new Set(woWaves.map(w => w.day_kst))];
-        // 并行查 workorders + results
+        const woSessions = [...new Set(woWaves.map(w => w.session))];
+        // 并行查 workorders + bindings（用 binding.day_kst 做结果查询的 key）
         const woMap = {};
+        const bindingMap = {}; // session|source_order_no → {day_kst, source_type}
         const resultMap = {};
         const pWo = (async () => {
           for (let i = 0; i < woIds.length; i += 80) {
@@ -4052,19 +4085,42 @@ export default {
             for (const wo of (wrs.results || [])) woMap[wo.workorder_id] = wo;
           }
         })();
-        const pRes = (async () => {
-          for (let i = 0; i < woIds.length; i += 80) {
-            const batch = woIds.slice(i, i + 80);
+        // 查 bindings 获取真实 day_kst + source_type
+        const pBind = (async () => {
+          for (let i = 0; i < woSessions.length; i += 80) {
+            const batch = woSessions.slice(i, i + 80);
             const ph = batch.map(() => "?").join(",");
-            const dayPh = woDays.map(() => "?").join(",");
-            const rrs = await env.DB.prepare(
-              `SELECT day_kst, source_order_no, status, operation_mode, confirm_badge
-               FROM b2b_operation_results WHERE source_order_no IN (${ph}) AND day_kst IN (${dayPh})`
-            ).bind(...batch, ...woDays).all();
-            for (const r of (rrs.results || [])) resultMap[r.day_kst + "|" + r.source_order_no] = r;
+            const brs = await env.DB.prepare(
+              `SELECT session_id, source_order_no, day_kst, source_type
+               FROM b2b_operation_bindings WHERE session_id IN (${ph})`
+            ).bind(...batch).all();
+            for (const b of (brs.results || [])) {
+              bindingMap[b.session_id + "|" + b.source_order_no] = { day_kst: b.day_kst, source_type: b.source_type };
+            }
           }
         })();
-        await Promise.all([pWo, pRes]);
+        await Promise.all([pWo, pBind]);
+
+        // 用 binding.day_kst 查结果单
+        const resultKeys = new Set();
+        for (const w of woWaves) {
+          const bk = bindingMap[w.session + "|" + w.wave_id];
+          if (bk) resultKeys.add(bk.day_kst + "|" + bk.source_type + "|" + w.wave_id);
+        }
+        const rkArr = [...resultKeys];
+        for (let i = 0; i < rkArr.length; i += 80) {
+          const batch = rkArr.slice(i, i + 80);
+          // 逐条查效率不高，改为用 source_order_no IN + day_kst IN 批量查
+          const orderNos = [...new Set(batch.map(k => k.split("|")[2]))];
+          const days = [...new Set(batch.map(k => k.split("|")[0]))];
+          const ph = orderNos.map(() => "?").join(",");
+          const dayPh = days.map(() => "?").join(",");
+          const rrs = await env.DB.prepare(
+            `SELECT day_kst, source_type, source_order_no, status, operation_mode, confirm_badge
+             FROM b2b_operation_results WHERE source_order_no IN (${ph}) AND day_kst IN (${dayPh})`
+          ).bind(...orderNos, ...days).all();
+          for (const r of (rrs.results || [])) resultMap[r.day_kst + "|" + r.source_type + "|" + r.source_order_no] = r;
+        }
 
         for (const w of woWaves) {
           w.detail_type = "b2b_workorder";
@@ -4079,12 +4135,15 @@ export default {
             w.has_update_notice = wo.has_update_notice || 0;
             w.has_cancel_notice = wo.has_cancel_notice || 0;
           }
-          const rk = w.day_kst + "|" + w.wave_id;
-          const result = resultMap[rk];
-          if (result) {
-            w.result_status = result.status || "";
-            w.result_operation_mode = result.operation_mode || "";
-            w.result_confirm_badge = result.confirm_badge || "";
+          // 用 binding 的真实 day_kst + source_type 查结果
+          const bk = bindingMap[w.session + "|" + w.wave_id];
+          if (bk) {
+            const result = resultMap[bk.day_kst + "|" + bk.source_type + "|" + w.wave_id];
+            if (result) {
+              w.result_status = result.status || "";
+              w.result_operation_mode = result.operation_mode || "";
+              w.result_confirm_badge = result.confirm_badge || "";
+            }
           }
         }
       }
@@ -4330,30 +4389,29 @@ export default {
           // summary 模式下可能没有 session → 用 wave_id+day 查 binding
         }
 
-        // summary 模式补充：wave_id 直接查 bindings（不按 session），含冲突检测
+        // summary 模式补充：wave_id 直接查 bindings（不限 day_kst，用 binding 自身 day_kst），含冲突检测
         const summaryAmbiguousSet = new Set();  // day_kst|source_order_no 有不一致 binding
         if (summaryMode) {
           const waveIds = [...new Set(woRows.map(r => r.wave_id))];
-          const days = [...new Set(woRows.map(r => r.work_day_kst))];
           for (let i = 0; i < waveIds.length; i += 80) {
             const batch = waveIds.slice(i, i + 80);
             const ph = batch.map(() => "?").join(",");
-            const dayPh = days.map(() => "?").join(",");
             const brs = await env.DB.prepare(
               `SELECT session_id, source_type, source_order_no, internal_workorder_id, day_kst, badge, bound_at
-               FROM b2b_operation_bindings WHERE source_order_no IN (${ph}) AND day_kst IN (${dayPh})`
-            ).bind(...batch, ...days).all();
+               FROM b2b_operation_bindings WHERE source_order_no IN (${ph})`
+            ).bind(...batch).all();
             for (const b of (brs.results || [])) {
               resultKeys.add(b.day_kst + "|" + b.source_type + "|" + b.source_order_no);
               if (b.source_type === "internal_b2b_workorder") internalWoIds.add(b.source_order_no);
-              // summary 模式：检测同 day+wave_id 是否有不一致的 binding
-              const wk = b.day_kst + "|" + b.source_order_no;
+              // summary 模式：按 wave_id 聚合 binding，检测是否有不一致
+              const wk = b.source_order_no;
               const existing = bindingMap["_wave_" + wk];
               if (!existing) {
                 bindingMap["_wave_" + wk] = b;
               } else {
-                // 检查 source_type / internal_workorder_id 是否一致
+                // 检查 source_type / internal_workorder_id / day_kst 是否一致
                 if (existing.source_type !== b.source_type ||
+                    existing.day_kst !== b.day_kst ||
                     (existing.internal_workorder_id || "") !== (b.internal_workorder_id || "")) {
                   summaryAmbiguousSet.add(wk);
                 }
@@ -4413,7 +4471,7 @@ export default {
         for (const r of woRows) {
           let binding;
           if (summaryMode) {
-            const swk = r.work_day_kst + "|" + r.wave_id;
+            const swk = r.wave_id;
             if (summaryAmbiguousSet.has(swk)) { r.link_status = "ambiguous_binding"; continue; }
             binding = bindingMap["_wave_" + swk];
           } else {
