@@ -1151,6 +1151,33 @@ function formatActiveListForAlert_(active){
   }).join("\n");
 }
 
+// 按指定上下文清理某个 source task 的本地 session + 缓存（不影响 currentSessionId / CUR_CTX）
+function clearTaskLocalState_(biz, task, sid){
+  if(!sid) return;
+  // 临时切换 currentSessionId 以计算 localStorage key
+  var savedSid = currentSessionId;
+  currentSessionId = sid;
+  // 清 localStorage 缓存（key 依赖 currentSessionId）
+  localStorage.removeItem(keyWaves());
+  localStorage.removeItem(keyInbounds());
+  localStorage.removeItem(keyBulkOutOrders());
+  localStorage.removeItem(keyB2bTallyOrders());
+  localStorage.removeItem(keyB2bWorkorders());
+  localStorage.removeItem(keyRecent());
+  localStorage.removeItem(keyImportPickupNotes());
+  localStorage.removeItem(keyImportProblemNotes());
+  // 恢复 currentSessionId
+  currentSessionId = savedSid;
+  // 清该任务的 active set
+  var reg = taskReg_(task);
+  if(reg) reg.set(new Set());
+  // 清该任务对应备注
+  if(task === "取/送货"){ importPickupNotes = {}; }
+  if(task === "问题处理"){ importProblemNotes = {}; }
+  // 清 session 映射
+  clearSess_(biz, task);
+}
+
 function cleanupLocalSession_(){
   localStorage.removeItem(keyWaves());
   localStorage.removeItem(keyInbounds());
@@ -3504,10 +3531,15 @@ async function returnFromTempTarget_(){
   try{
     var info = await jsonp(LOCK_URL, { action:"session_info", session: srcSid }, { skipBusy: true });
     if(info && String(info.status||"").toUpperCase() === "CLOSED"){
-      alert("原任务趟次已被关闭（可能已被其他人结束），需要重新开始。");
+      clearTaskLocalState_(srcBiz, srcTask, srcSid);
       clearTempSwitchCtx_();
+      persistState();
+      alert("原任务趟次已被关闭（可能已被其他人结束），需要重新开始。");
       go(srcPage);
+      refreshUI();
+      renderActiveLists();
       updateReturnButton_();
+      fetchOperatorOpenSessions();
       return;
     }
   }catch(e){
