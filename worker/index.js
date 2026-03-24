@@ -1376,6 +1376,7 @@ export default {
         const relData = await relR.json();
         lockReleased = !!relData.released;
       } catch (_) {}
+      await recalcSessionStatus_(env, session, operator_id || "admin_force_leave");
       return jsonpOrJson({ ok:true, released:true, lock_released: lockReleased }, callback);
     }
 
