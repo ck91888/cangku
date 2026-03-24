@@ -1516,6 +1516,38 @@ export default {
 
       if (sets.length === 0) return jsonpOrJson({ ok:false, error:"no fields to update" }, callback);
 
+      const isMcPair = event_id.startsWith("mc-");
+      const isMeSingle = event_id.startsWith("me-");
+      const keyFieldChanged = p.new_badge !== undefined || p.new_biz !== undefined
+        || p.new_task !== undefined || p.new_ms !== undefined;
+      // note: session 字段不在可修改列表中，无需检查
+
+      // mc-* 成对补录：禁止修改会破坏 pair 语义的关键字段
+      if (isMcPair && keyFieldChanged) {
+        return jsonpOrJson({ ok:false, error:"mc-* pair event: cannot edit badge/biz/task/time directly. Delete the pair and re-create via admin_manual_correction_pair" }, callback);
+      }
+
+      // me-* 单条补录：关键字段变更时重算 event_id
+      let newEventId = event_id;
+      if (isMeSingle && keyFieldChanged) {
+        const finalBadge = p.new_badge !== undefined ? String(p.new_badge).trim() : existing.badge;
+        const finalBiz = p.new_biz !== undefined ? String(p.new_biz).trim() : existing.biz;
+        const finalTask = p.new_task !== undefined ? String(p.new_task).trim() : existing.task;
+        const finalMs = (p.new_ms !== undefined && p.new_ms !== null && p.new_ms !== "") ? Number(p.new_ms) : existing.server_ms;
+        newEventId = "me-" + [existing.event, finalBadge, finalBiz, finalTask, existing.session, finalMs].join("|");
+
+        // 新 event_id 与旧相同（值未实际改变）则无需换 id
+        if (newEventId !== event_id) {
+          const dupNew = await env.DB.prepare(
+            `SELECT event_id FROM events WHERE event_id=? LIMIT 1`
+          ).bind(newEventId).first();
+          if (dupNew) {
+            return jsonpOrJson({ ok:false, error:"update would create duplicate event_id: " + newEventId }, callback);
+          }
+          sets.push("event_id=?"); binds.push(newEventId);
+        }
+      }
+
       binds.push(event_id);
       await env.DB.prepare(`UPDATE events SET ${sets.join(",")} WHERE event_id=?`).bind(...binds).run();
 
@@ -1524,7 +1556,7 @@ export default {
         await recalcSessionStatus_(env, existing.session, String(p.operator_id || "").trim());
       }
 
-      return jsonpOrJson({ ok:true, updated:true, event_id, fields: sets.length }, callback);
+      return jsonpOrJson({ ok:true, updated:true, event_id: newEventId, old_event_id: event_id !== newEventId ? event_id : undefined, fields: sets.length }, callback);
     }
 
     // ===== 修正：删除错误事件 =====
