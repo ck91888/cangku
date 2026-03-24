@@ -1343,6 +1343,22 @@ export default {
       if (!task) return jsonpOrJson({ ok:false, error:"missing task" }, callback);
       if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
       const operator_id = String(p.operator_id || "").trim();
+
+      // 检查 join/leave 净计数，只有 net>0（有未配平 join）才允许插 leave
+      const netRs = await env.DB.prepare(
+        `SELECT event, COUNT(*) as cnt FROM events
+         WHERE badge=? AND biz=? AND task=? AND session=? AND event IN ('join','leave') AND ok=1
+         GROUP BY event`
+      ).bind(badge, biz, task, session).all();
+      let joinCnt = 0, leaveCnt = 0;
+      for (const r of (netRs.results || [])) {
+        if (r.event === "join") joinCnt = r.cnt;
+        if (r.event === "leave") leaveCnt = r.cnt;
+      }
+      if (joinCnt <= leaveCnt) {
+        return jsonpOrJson({ ok:false, error:"no_open_join_to_force_leave", badge, session, join_count: joinCnt, leave_count: leaveCnt }, callback);
+      }
+
       const server_ms = now;
       const event_id = "admin-fl-" + badge + "-" + now;
       await env.DB.prepare(
