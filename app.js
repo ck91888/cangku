@@ -133,6 +133,8 @@ function renderPages(){
     if(el) el.style.display = (p===cur) ? "block" : "none";
   }
 
+  if(cur==="home" || cur==="global_menu" || cur==="b2c_menu" || cur==="import_menu" || cur==="b2b_menu"){ fetchOperatorOpenSessions(); }
+
   if(cur==="badge"){ refreshUI(); refreshDaUI(); }
 
   if(cur==="b2c_tally"){ restoreState(); renderActiveLists(); renderInboundCountUI(); refreshUI(); }
@@ -343,6 +345,7 @@ function restoreOpenSession(sid, biz, task, page){
   restoreState();
   renderActiveLists();
   refreshUI();
+  fetchOperatorOpenSessions();
   go(page);
 }
 
@@ -1170,6 +1173,7 @@ function cleanupLocalSession_(){
   currentSessionId = null;
   leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0");
   refreshUI();
+  fetchOperatorOpenSessions();
 }
 
 async function endSessionGlobal_(){
@@ -1966,6 +1970,7 @@ async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
     renderActiveLists();
     if(postRenderFn) postRenderFn();
     setStatus(task + "开始 ✅ 新趟次: " + newSid, true);
+    fetchOperatorOpenSessions();
   }catch(err){
     setStatus(task + "开始失败 ❌ " + err, false);
     alert(String(err));
@@ -2876,6 +2881,7 @@ async function startB2bFieldOp(e){
     refreshUI();
     renderB2bFieldOpUI();
     setStatus("B2B现场记录开始 ✅ " + r.record_id + " 趟次: " + newSid, true);
+    fetchOperatorOpenSessions();
 
   }catch(err){
     setStatus("开始失败 ❌ " + err, false);
