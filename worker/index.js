@@ -1361,11 +1361,21 @@ export default {
       if (!leave_ms || leave_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid leave_ms" }, callback);
       if (leave_ms <= join_ms) return jsonpOrJson({ ok:false, error:"leave_ms must be after join_ms" }, callback);
 
-      const joinEventId = "manual-join-" + badge + "-" + join_ms + "-" + now;
-      const leaveEventId = "manual-leave-" + badge + "-" + leave_ms + "-" + now;
+      // deterministic event_id：同一组补录参数永远生成相同 id，防止重复提交
+      const idBase = [badge, biz, task, session, join_ms, leave_ms].join("|");
+      const joinEventId = "mc-join-" + idBase;
+      const leaveEventId = "mc-leave-" + idBase;
 
-      // D1 batch：同一事务内写入 join + leave，普通 INSERT（非 IGNORE）
-      // 重复 event_id → UNIQUE 约束报错 → batch 整体回滚，不会落半条
+      // 前置重复检测：任一 event_id 已存在则拦截
+      const dupCheck = await env.DB.prepare(
+        `SELECT event_id FROM events WHERE event_id IN (?, ?) LIMIT 1`
+      ).bind(joinEventId, leaveEventId).first();
+      if (dupCheck) {
+        return jsonpOrJson({ ok:false, error:"duplicate manual correction: this join/leave pair already exists" }, callback);
+      }
+
+      // D1 batch：同一事务内写入 join + leave，普通 INSERT
+      // 重复 event_id → UNIQUE 约束报错 → batch 整体回滚（兜底）
       let batchResults;
       try {
         batchResults = await env.DB.batch([
