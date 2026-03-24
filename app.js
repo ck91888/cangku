@@ -2859,8 +2859,8 @@ async function endB2bFieldOp(){
     var recordId = _foSelectedRecord && _foSelectedRecord.record_id;
     var result = await endSessionGlobal_();
     if(result === "closed" || result === "already_closed"){
-      // session 真正关闭后，把现场记录状态改为 completed
-      if(recordId && result === "closed"){
+      // session 关闭（含已关闭）后，把现场记录状态改为 completed
+      if(recordId){
         try{
           var foRes = await jsonp(LOCK_URL, { action:"b2b_field_op_update", k:getFoKey_(), sub:"status", record_id: recordId, status:"completed" }, { skipBusy:true });
           if(!foRes || !foRes.ok){
@@ -3291,6 +3291,18 @@ async function tempSwitchToTarget_(kind){
   if(joinedTarget.length === 0){
     // 全部 join 失败 → 整体回滚：把所有 leftBadges rejoin 回源任务
     setStatus("加入"+kindLabel+"全部失败，正在恢复原任务... ⏳", true);
+
+    // 清理 ghost target session（无人成功 join）
+    if(targetCreated){
+      try{
+        currentSessionId = targetSid;
+        await sessionCloseServer_();
+      }catch(e){ /* best effort close */ }
+    }
+    clearSess_(target.biz, target.task);
+    var targetReg2 = taskReg_(target.task);
+    if(targetReg2) targetReg2.set(new Set());
+
     currentSessionId = srcSid;
     CUR_CTX = { biz: srcBiz, task: srcTask, page: srcPage };
     var rollbackOk = 0;
@@ -5977,12 +5989,21 @@ async function wmsConfirmImport(){
       source_type: sourceType
     });
     if(dupRes && dupRes.ok && dupRes.block){
-      // 硬拦截：内容完全相同，禁止导入
+      // 硬拦截：已有 completed 批次，内容完全相同
       var bm = (dupRes.block_matches||[]).map(function(m){
-        return "文件: " + (m.source_file||"?") + " | Sheet: " + (m.sheet_name||"?") + " | " + (m.row_count||0) + "行 | 导入时间: " + fmtKST_(m.created_ms) + " | 批次: " + (m.import_batch_id||"?");
+        return "文件: " + (m.source_file||"?") + " | Sheet: " + (m.sheet_name||"?") + " | " + (m.total_rows||0) + "行(已入" + (m.inserted_rows||0) + ") | 导入时间: " + fmtKST_(m.created_ms) + " | 批次: " + (m.import_batch_id||"?");
       }).join("\n");
-      alert("❌ 禁止重复导入！\n\n该文件内容与已导入数据完全相同（source_type + 内容指纹匹配）。\n\n已有记录：\n" + bm);
+      alert("❌ 禁止重复导入！\n\n该文件内容与已完成的导入完全相同（source_type + 内容指纹匹配）。\n\n已有记录：\n" + bm);
       return;
+    }
+    if(dupRes && dupRes.ok && dupRes.partial_warn){
+      // 部分导入提醒：允许重试
+      var pm = (dupRes.partial_matches||[]).map(function(m){
+        return "批次: " + (m.import_batch_id||"?") + " | 已入 " + (m.inserted_rows||0) + "/" + (m.total_rows||"?") + "行 | " + fmtKST_(m.updated_ms||m.created_ms);
+      }).join("\n");
+      if(!confirm("⚠️ 发现未完成的同内容导入记录：\n" + pm + "\n\n可能是之前导入中断，重试将跳过已存在的行。\n确定继续导入吗？")){
+        return;
+      }
     }
     if(dupRes && dupRes.ok && dupRes.has_name_duplicate){
       // 软提醒：文件名/Sheet/行数相同，但内容不同
@@ -6027,6 +6048,7 @@ async function wmsConfirmImport(){
         k: adminKey_(),
         import_batch_id: batchId,
         row_offset: b,
+        total_rows: records.length,
         content_fingerprint: fingerprint,
         source_type: sourceType,
         business_day_kst: businessDay,
@@ -6448,19 +6470,12 @@ function _scUpdateProgress(doneBoxes, totalBoxes, pct){
 }
 
 function _scUpdateSummary(items, unplanned){
+  // done = scanned >= expected（含多扫）, over = scanned > expected, missing = scanned < expected
   var done=0, missing=0, over=0;
   (items||[]).forEach(function(it){
     if(it.scanned_count >= it.expected_box_count) done++;
-    else missing++;
     if(it.scanned_count > it.expected_box_count) over++;
-  });
-  // scanned == expected 算 done 但不算 over；scanned > expected 同时算 done 和 over
-  // 重新算：missing = scanned < expected, done(完成) = scanned == expected, over = scanned > expected
-  done=0; missing=0; over=0;
-  (items||[]).forEach(function(it){
     if(it.scanned_count < it.expected_box_count) missing++;
-    else if(it.scanned_count === it.expected_box_count) done++;
-    else over++;
   });
   var unplannedCount = (unplanned||[]).length;
   var html = '<span style="color:#388e3c;font-weight:700;">已完成: '+done+'种</span>';
