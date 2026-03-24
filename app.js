@@ -4538,22 +4538,40 @@ async function openScannerCommon(){
         if(_justCreatedAutoSid && currentSessionId === _justCreatedAutoSid){
           var rollSid = _justCreatedAutoSid;
           _justCreatedAutoSid = null;
-          // 清本地
-          if(CUR_CTX) clearSess_(CUR_CTX.biz, CUR_CTX.task);
-          currentSessionId = null;
-          persistState(); refreshUI();
-          // 关服务端空 session
-          var rollOk = false;
+
+          // 事后核实：join 是否其实已在服务端成功（弱网回包丢失）
+          var joinActuallyOk = false;
           try{
-            var rr = await jsonp(LOCK_URL, { action:"session_close", session: rollSid, operator_id: getOperatorId() || "" });
-            rollOk = !!(rr && rr.ok);
+            var infoRes = await jsonp(LOCK_URL, { action:"session_info", session: rollSid }, { skipBusy: true });
+            if(infoRes && infoRes.ok && Array.isArray(infoRes.active)){
+              joinActuallyOk = infoRes.active.some(function(lk){ return lk.badge === p2.raw; });
+            }
           }catch(_){}
-          if(rollOk){
-            setStatus("加入失败，已自动撤销空趟次 ❌ " + e, false);
-            alert("加入失败，已自动撤销刚创建的趟次。\n" + e);
+
+          if(joinActuallyOk){
+            // join 实际已成功：恢复本地状态，不回滚
+            applyActive(laborTask, "join", p2.raw);
+            renderActiveLists(); persistState();
+            setStatus("网络异常，但已确认加入成功 ✅ " + p2.raw, true);
+            alert("网络波动，但服务端确认已成功加入 ✅\n" + p2.raw);
+            await closeScanner();
           } else {
-            setStatus("加入失败，服务端趟次关闭失败 ❌", false);
-            alert("加入失败。\n\n本地已清理，但服务端趟次关闭失败，请刷新后重试或联系管理员。\n\n趟次ID: " + rollSid + "\n原因: " + e);
+            // join 确实没成功：清本地 + 关服务端空 session
+            if(CUR_CTX) clearSess_(CUR_CTX.biz, CUR_CTX.task);
+            currentSessionId = null;
+            persistState(); refreshUI();
+            var rollOk = false;
+            try{
+              var rr = await jsonp(LOCK_URL, { action:"session_close", session: rollSid, operator_id: getOperatorId() || "" });
+              rollOk = !!(rr && rr.ok);
+            }catch(_){}
+            if(rollOk){
+              setStatus("加入失败，已自动撤销空趟次 ❌ " + e, false);
+              alert("加入失败，已自动撤销刚创建的趟次。\n" + e);
+            } else {
+              setStatus("加入失败，服务端趟次关闭失败 ❌", false);
+              alert("加入失败。\n\n本地已清理，但服务端趟次关闭失败，请刷新后重试或联系管理员。\n\n趟次ID: " + rollSid + "\n原因: " + e);
+            }
           }
         } else {
           setStatus("提交失败 ❌ " + e, false);
