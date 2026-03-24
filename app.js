@@ -5834,7 +5834,7 @@ function adminLogout(){
 var _wmsWorkbook = null;
 var _wmsFileName = "";
 var _wmsPreviewRows = [];  // [{header:[], rows:[[]]}]
-var _wmsReuseBatchId = "";  // partial 重试时复用的 batch_id
+// _wmsReuseBatchId 已移除，改为 wmsConfirmImport() 内局部变量 reuseBatchId
 var _wmsCurrentSheet = "";
 
 function wmsSetStatus_(msg, ok){
@@ -5996,6 +5996,7 @@ async function wmsConfirmImport(){
   if(rows.length === 0){ alert("数据为空"); return; }
 
   // 重复导入检测：内容指纹硬拦截 + 文件名软提醒
+  var reuseBatchId = "";  // partial 重试时复用的 batch_id（局部变量，不跨调用残留）
   var fingerprint = wmsContentFingerprint_(header, rows);
   try{
     var dupRes = await fetchApi({
@@ -6024,7 +6025,7 @@ async function wmsConfirmImport(){
       if(!confirm("⚠️ 发现未完成的同内容导入记录：\n" + pm + "\n\n将复用已有批次继续导入，已成功的行会自动跳过。\n确定继续导入吗？")){
         return;
       }
-      _wmsReuseBatchId = sorted[0].import_batch_id;
+      reuseBatchId = sorted[0].import_batch_id;
     }
     if(dupRes && dupRes.ok && dupRes.has_name_duplicate){
       // 软提醒：文件名/Sheet/行数相同，但内容不同
@@ -6038,8 +6039,7 @@ async function wmsConfirmImport(){
   if(!confirm("确认导入 " + rows.length + " 行数据到后端？\n\n文件：" + _wmsFileName + "\nSheet：" + _wmsCurrentSheet)) return;
 
   // 生成本次导入批次ID（partial 重试时复用已有 batch_id）
-  var batchId = _wmsReuseBatchId || ("WMS-" + Date.now() + "-" + Math.random().toString(36).slice(2,8));
-  _wmsReuseBatchId = "";
+  var batchId = reuseBatchId || ("WMS-" + Date.now() + "-" + Math.random().toString(36).slice(2,8));
 
   // 构建导入数据：每行转为 {header[i]: value} 的对象
   var records = [];
