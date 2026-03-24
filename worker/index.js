@@ -1347,12 +1347,18 @@ export default {
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(server_ms, server_ms, event_id, "leave", badge, biz||"ADMIN", task||"ADMIN", session||"", "", operator_id||"", 1, "admin_force_leave").run();
       const stub = locksStub(env);
-      await stub.fetch("https://locks/do", {
-        method: "POST",
-        headers: { "content-type":"application/json" },
-        body: JSON.stringify({ action:"lock_force_release", badge })
-      }).catch(() => {});
-      return jsonpOrJson({ ok:true, released:true }, callback);
+      let lockReleased = false;
+      try {
+        const relR = await stub.fetch("https://locks/do", {
+          method: "POST",
+          headers: { "content-type":"application/json" },
+          body: JSON.stringify({ action:"lock_release", badge, task: task || undefined, session: session || undefined })
+        });
+        const relData = await relR.json();
+        lockReleased = !!relData.released;
+        // different_session / different_task / not_found → 不误删
+      } catch (_) {}
+      return jsonpOrJson({ ok:true, released:true, lock_released: lockReleased }, callback);
     }
 
     // ===== 补录修正：原子写入 join+leave 一对事件 =====
