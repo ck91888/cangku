@@ -4988,6 +4988,13 @@ function buildReportSummary_(){
   }
 
   var now = Date.now();
+  // 报表区间上界：历史查询不能用 now，最多到查询的 until_ms
+  var meta = REPORT_CACHE.meta || {};
+  var reportUntilMs = meta.dayTo ? kstDayEndMs_(meta.dayTo) : now;
+  // 如果查询区间包含今天，用 now（可能正在进行中）
+  if(reportUntilMs >= now) reportUntilMs = now;
+  // 报表区间下界
+  var reportSinceMs = meta.dayFrom ? kstDayStartMs_(meta.dayFrom) : 0;
 
   // First pass: collect ALL events for session-level data
   for(var r=0;r<rows.length;r++){
@@ -5025,9 +5032,12 @@ function buildReportSummary_(){
     if(ev === "join"){
       if(!badge) continue;
       if(active[badge]){
-        var durRejoin = Math.max(0, t - active[badge].t);
+        // clamp to report range for duration calculation
+        var clampedStart = Math.max(active[badge].t, reportSinceMs);
+        var clampedEnd = Math.min(t, reportUntilMs);
+        var durRejoin = Math.max(0, clampedEnd - clampedStart);
         addDur(badge, active[badge].biz, active[badge].task, durRejoin);
-        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "AUTO_CLOSE_REJOIN", active[badge].session, active[badge].note);
+        addTimeline(badge, active[badge].biz, active[badge].task, clampedStart, clampedEnd, "AUTO_CLOSE_REJOIN", active[badge].session, active[badge].note);
         anomalies.rejoin_without_leave++;
         addAnomaly("rejoin_without_leave", badge, active[badge].biz, active[badge].task, t, "join 前未 leave，已自动截断上一段");
       }
@@ -5039,9 +5049,12 @@ function buildReportSummary_(){
     }else if(ev === "leave"){
       if(!badge) continue;
       if(active[badge]){
-        var durLeave = Math.max(0, t - active[badge].t);
+        // clamp to report range for duration calculation
+        var clampedStart2 = Math.max(active[badge].t, reportSinceMs);
+        var clampedEnd2 = Math.min(t, reportUntilMs);
+        var durLeave = Math.max(0, clampedEnd2 - clampedStart2);
         addDur(badge, active[badge].biz, active[badge].task, durLeave);
-        addTimeline(badge, active[badge].biz, active[badge].task, active[badge].t, t, "NORMAL", active[badge].session, active[badge].note);
+        addTimeline(badge, active[badge].biz, active[badge].task, clampedStart2, clampedEnd2, "NORMAL", active[badge].session, active[badge].note);
         delete active[badge];
       }else{
         anomalies.leave_without_join++;
@@ -5050,13 +5063,14 @@ function buildReportSummary_(){
     }
   }
 
-  // 还在岗的按 now 结算
+  // 还在岗的按 reportUntilMs 结算（历史查询不会算到现在）
   Object.keys(active).forEach(function(b){
     anomalies.open++;
-    var durOpen = Math.max(0, now - active[b].t);
+    var capMs = reportUntilMs;
+    var durOpen = Math.max(0, capMs - active[b].t);
     addDur(b, active[b].biz, active[b].task, durOpen);
-    addTimeline(b, active[b].biz, active[b].task, active[b].t, now, "OPEN", active[b].session, active[b].note);
-    addAnomaly("open_not_left", b, active[b].biz, active[b].task, now, "统计截止时仍在岗");
+    addTimeline(b, active[b].biz, active[b].task, active[b].t, capMs, "OPEN", active[b].session, active[b].note);
+    addAnomaly("open_not_left", b, active[b].biz, active[b].task, capMs, "统计截止时仍在岗");
   });
 
   // 展平成表格
