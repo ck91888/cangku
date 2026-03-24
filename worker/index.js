@@ -1342,7 +1342,55 @@ export default {
       return jsonpOrJson({ ok:true, released:true }, callback);
     }
 
-    // ===== 补录修正：管理员手动插入 join/leave 事件（指定自定义时间戳） =====
+    // ===== 补录修正：原子写入 join+leave 一对事件 =====
+    if (action === "admin_manual_correction_pair") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+      const badge = String(p.badge || "").trim();
+      const biz = String(p.biz || "").trim();
+      const task = String(p.task || "").trim();
+      const session = String(p.session || "").trim();
+      const join_ms = Number(p.join_ms || 0);
+      const leave_ms = Number(p.leave_ms || 0);
+      const operator_id = String(p.operator_id || "").trim();
+      const note = String(p.note || "").trim() || "manual_correction";
+
+      if (!badge) return jsonpOrJson({ ok:false, error:"missing badge" }, callback);
+      if (!biz) return jsonpOrJson({ ok:false, error:"missing biz" }, callback);
+      if (!task) return jsonpOrJson({ ok:false, error:"missing task" }, callback);
+      if (!join_ms || join_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid join_ms" }, callback);
+      if (!leave_ms || leave_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid leave_ms" }, callback);
+      if (leave_ms <= join_ms) return jsonpOrJson({ ok:false, error:"leave_ms must be after join_ms" }, callback);
+
+      // 确保 session 存在 + task_state OPEN
+      if (session) {
+        await ensureSessionOpen(env, session, operator_id, biz, task, join_ms, "manual_correction");
+        await taskStateOpen_(env, session, biz, task, join_ms, operator_id);
+      }
+
+      const joinEventId = "manual-join-" + badge + "-" + join_ms + "-" + now;
+      const leaveEventId = "manual-leave-" + badge + "-" + leave_ms + "-" + now;
+
+      // D1 batch：同一事务内写入 join + leave，任一失败则整体回滚
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(join_ms, join_ms, joinEventId, "join", badge, biz, task, session, "", operator_id, 1, note),
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(leave_ms, leave_ms, leaveEventId, "leave", badge, biz, task, session, "", operator_id, 1, note)
+      ]);
+
+      // 重算 session 状态
+      if (session) {
+        await recalcSessionStatus_(env, session, operator_id);
+      }
+
+      return jsonpOrJson({ ok:true, inserted:true, join_event_id: joinEventId, leave_event_id: leaveEventId, badge, join_ms, leave_ms }, callback);
+    }
+
+    // ===== 补录修正：管理员手动插入单条 join/leave 事件（指定自定义时间戳） =====
     if (action === "admin_event_insert") {
       if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const badge = String(p.badge || "").trim();

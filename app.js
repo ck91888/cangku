@@ -5758,31 +5758,17 @@ async function corrSubmit(){
   resultEl.textContent = "提交中... ";
 
   try{
-    // 插入 join
-    var r1 = await fetchApi({
-      action: "admin_event_insert",
+    // 原子写入 join+leave（后端 D1 batch 事务，不会出现只成功一半）
+    var r = await fetchApi({
+      action: "admin_manual_correction_pair",
       k: adminKey_(),
       badge: badge, biz: biz, task: task, session: session,
-      event: "join", custom_ms: joinMs,
+      join_ms: joinMs, leave_ms: leaveMs,
       operator_id: getOperatorId() || "",
       note: note
     });
-    if(!r1 || r1.ok !== true){
-      resultEl.textContent = "join 插入失败: " + (r1 && r1.error ? r1.error : "unknown");
-      return;
-    }
-
-    // 插入 leave
-    var r2 = await fetchApi({
-      action: "admin_event_insert",
-      k: adminKey_(),
-      badge: badge, biz: biz, task: task, session: session,
-      event: "leave", custom_ms: leaveMs,
-      operator_id: getOperatorId() || "",
-      note: note
-    });
-    if(!r2 || r2.ok !== true){
-      resultEl.textContent = "leave 插入失败: " + (r2 && r2.error ? r2.error : "unknown");
+    if(!r || r.ok !== true){
+      resultEl.textContent = "补录失败（整次未生效）: " + (r && r.error ? r.error : "unknown");
       return;
     }
 
