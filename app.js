@@ -401,6 +401,7 @@ var laborAction = null;
 var laborBiz = null;
 var laborTask = null;
 var _pendingAutoSession = null; // { biz, task } — auto-session 延迟创建上下文
+var _justCreatedAutoSid = null; // 刚兑现的 auto-session id，join 失败时用于回滚
 
 var activePick = new Set();
 var activeRelabel = new Set();
@@ -4483,6 +4484,7 @@ async function openScannerCommon(){
         if(pa.task==="取/送货") importPickupNotes = {};
         if(pa.task==="问题处理") importProblemNotes = {};
         persistState(); refreshUI();
+        _justCreatedAutoSid = newSid;
         _pendingAutoSession = null;
       }
 
@@ -4502,6 +4504,7 @@ async function openScannerCommon(){
 
         var syncRes = await submitEventSyncWithRetry_(submitPayload);
 
+        _justCreatedAutoSid = null; // join 成功，不再需要回滚
         addRecent(evId);
 
         applyActive(laborTask, laborAction, p2.raw);
@@ -4531,9 +4534,23 @@ async function openScannerCommon(){
         setStatus((laborAction === "join" ? "加入成功 ✅ " : "退出成功 ✅ ") + p2.raw, true);
         await closeScanner();
       } catch(e){
-        setStatus("提交失败 ❌ " + e, false);
-        alert("提交失败，请重试。\n" + e);
-      } finally { scanBusy = false; }
+        // ✅ 回滚刚创建的 auto-session（start 成功但 join 失败）
+        if(_justCreatedAutoSid && currentSessionId === _justCreatedAutoSid){
+          var rollSid = _justCreatedAutoSid;
+          _justCreatedAutoSid = null;
+          // 清本地
+          if(CUR_CTX) clearSess_(CUR_CTX.biz, CUR_CTX.task);
+          currentSessionId = null;
+          persistState(); refreshUI();
+          // 关服务端空 session（best-effort）
+          try{ await jsonp(LOCK_URL, { action:"session_close", session: rollSid, operator_id: getOperatorId() || "" }); }catch(_){}
+          setStatus("加入失败，已自动撤销空趟次 ❌ " + e, false);
+          alert("加入失败，已自动撤销刚创建的趟次。\n" + e);
+        } else {
+          setStatus("提交失败 ❌ " + e, false);
+          alert("提交失败，请重试。\n" + e);
+        }
+      } finally { scanBusy = false; _justCreatedAutoSid = null; }
       return;
     }
 
