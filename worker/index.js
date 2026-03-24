@@ -1689,12 +1689,14 @@ export default {
       for (const [k, net] of Object.entries(badgeNet)) {
         if (net <= 0) continue; // 已配平
         const m = badgeMeta[k];
-        const evId = "admin-force-leave-" + m.badge + "-" + m.biz + "-" + m.task + "-" + session + "-" + now;
-        await env.DB.prepare(
-          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(now, now, evId, "leave", m.badge, m.biz, m.task, session, "", "", 1, "admin_force_end").run();
-        autoLeaved.push(m.badge);
+        for (let i = 0; i < net; i++) {
+          const evId = "admin-force-leave-" + m.badge + "-" + m.biz + "-" + m.task + "-" + session + "-" + now + "-" + i;
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(now, now, evId, "leave", m.badge, m.biz, m.task, session, "", "", 1, "admin_force_end").run();
+        }
+        autoLeaved.push({ badge: m.badge, biz: m.biz, task: m.task, count: net });
       }
 
       await env.DB.prepare(
