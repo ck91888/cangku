@@ -3330,8 +3330,33 @@ async function tempSwitchToTarget_(kind){
   persistState();
 
   if(leftBadges.length === 0){
-    setStatus("全部退出失败，切换已取消 ❌", false);
-    alert("切换失败：所有人员退出原任务失败。\n当前任务未受影响，可继续操作。");
+    // 回滚刚创建的空目标 session
+    if(targetCreated){
+      var rollOk = false;
+      try{
+        currentSessionId = targetSid;
+        var rrr = await sessionCloseServer_();
+        rollOk = !!(rrr && (rrr.closed || rrr.already_closed));
+      }catch(_){}
+      clearSess_(target.biz, target.task);
+      var tReg = taskReg_(target.task);
+      if(tReg) tReg.set(new Set());
+      if(rollOk){
+        setStatus("全部退出失败，切换已取消 ❌", false);
+        alert("切换失败：所有人员退出原任务失败。\n目标空趟次已回收，当前任务未受影响。");
+      } else {
+        setStatus("全部退出失败，目标趟次清理失败 ⚠️", false);
+        alert("切换失败：所有人员退出原任务失败。\n\n源任务未受影响，但目标趟次清理失败。\n趟次ID: " + targetSid + "\n请联系管理员处理。");
+      }
+    } else {
+      setStatus("全部退出失败，切换已取消 ❌", false);
+      alert("切换失败：所有人员退出原任务失败。\n当前任务未受影响，可继续操作。");
+    }
+    // 恢复源任务上下文
+    currentSessionId = srcSid;
+    CUR_CTX = { biz: srcBiz, task: srcTask, page: srcPage };
+    persistState(); refreshUI(); renderActiveLists();
+    fetchOperatorOpenSessions();
     return;
   }
 
