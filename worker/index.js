@@ -1361,29 +1361,38 @@ export default {
       if (!leave_ms || leave_ms < 1000000000000) return jsonpOrJson({ ok:false, error:"invalid leave_ms" }, callback);
       if (leave_ms <= join_ms) return jsonpOrJson({ ok:false, error:"leave_ms must be after join_ms" }, callback);
 
-      // 确保 session 存在 + task_state OPEN
-      if (session) {
-        await ensureSessionOpen(env, session, operator_id, biz, task, join_ms, "manual_correction");
-        await taskStateOpen_(env, session, biz, task, join_ms, operator_id);
-      }
-
       const joinEventId = "manual-join-" + badge + "-" + join_ms + "-" + now;
       const leaveEventId = "manual-leave-" + badge + "-" + leave_ms + "-" + now;
 
-      // D1 batch：同一事务内写入 join + leave，任一失败则整体回滚
-      await env.DB.batch([
-        env.DB.prepare(
-          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(join_ms, join_ms, joinEventId, "join", badge, biz, task, session, "", operator_id, 1, note),
-        env.DB.prepare(
-          `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(leave_ms, leave_ms, leaveEventId, "leave", badge, biz, task, session, "", operator_id, 1, note)
-      ]);
+      // D1 batch：同一事务内写入 join + leave，普通 INSERT（非 IGNORE）
+      // 重复 event_id → UNIQUE 约束报错 → batch 整体回滚，不会落半条
+      let batchResults;
+      try {
+        batchResults = await env.DB.batch([
+          env.DB.prepare(
+            `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(join_ms, join_ms, joinEventId, "join", badge, biz, task, session, "", operator_id, 1, note),
+          env.DB.prepare(
+            `INSERT INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(leave_ms, leave_ms, leaveEventId, "leave", badge, biz, task, session, "", operator_id, 1, note)
+        ]);
+      } catch (batchErr) {
+        return jsonpOrJson({ ok:false, error:"atomic insert failed: " + String(batchErr.message || batchErr) }, callback);
+      }
 
-      // 重算 session 状态
+      // 显式校验两条都真正写入（changes === 1）
+      const joinChanges = batchResults[0]?.meta?.changes ?? 0;
+      const leaveChanges = batchResults[1]?.meta?.changes ?? 0;
+      if (joinChanges !== 1 || leaveChanges !== 1) {
+        return jsonpOrJson({ ok:false, error:"insert incomplete: join=" + joinChanges + " leave=" + leaveChanges }, callback);
+      }
+
+      // 事件已原子落库，再处理 session/task_state 副作用
       if (session) {
+        await ensureSessionOpen(env, session, operator_id, biz, task, join_ms, "manual_correction");
+        await taskStateOpen_(env, session, biz, task, join_ms, operator_id);
         await recalcSessionStatus_(env, session, operator_id);
       }
 
