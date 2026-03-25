@@ -380,6 +380,7 @@ var _smCurrentOrder = null; // 当前工单号 (source_order_no)
 var _smLabor = []; // labor details from server
 var _smWorkorderStatuses = {}; // source_order_no → { workflow_status, temporary_completed_at, ... }
 var _smIsSimpleMode = false; // 当前是否在简化模式
+var _smBindingInFlight = false; // 绑定请求进行中，拦截依赖工单的操作
 
 // ===== B2B Simple Mode i18n Dictionary =====
 var SM_T = {
@@ -2180,12 +2181,12 @@ function callB2bOpBind(orderNo){
   });
 }
 
-function loadB2bBindings(){
-  if(!currentSessionId) return;
+function loadB2bBindings(onDone){
+  if(!currentSessionId){ if(typeof onDone === "function") onDone(); return; }
   var reqSid = currentSessionId; // 捕获发起时的 session，用于回调校验
   jsonp(LOCK_URL, { action:"b2b_op_bind_list", session_id: reqSid }).then(function(res){
-    if(currentSessionId !== reqSid){ return; } // session 已切换，丢弃旧结果
-    if(!res || !res.ok){ _b2bBindingsLoaded = true; _b2bSelfHealPending = false; return; }
+    if(currentSessionId !== reqSid){ if(typeof onDone === "function") onDone(); return; } // session 已切换，丢弃旧结果
+    if(!res || !res.ok){ _b2bBindingsLoaded = true; _b2bSelfHealPending = false; if(typeof onDone === "function") onDone(); return; }
     var bindings = res.bindings || [];
     // 完全以服务端为准，清空本地残留，防止幽灵工单
     scannedB2bWorkorders = new Set();
@@ -2203,7 +2204,8 @@ function loadB2bBindings(){
     _b2bSelfHealPending = false;
     persistState();
     renderB2bWorkorderUI();
-  }).catch(function(e){ console.error("b2b_op_bind_list error", e); if(currentSessionId === reqSid){ _b2bBindingsLoaded = true; _b2bSelfHealPending = false; } });
+    if(typeof onDone === "function") onDone();
+  }).catch(function(e){ console.error("b2b_op_bind_list error", e); if(currentSessionId === reqSid){ _b2bBindingsLoaded = true; _b2bSelfHealPending = false; } if(typeof onDone === "function") onDone(); });
 }
 
 // ===== B2B 现场结果单 =====
@@ -4172,13 +4174,20 @@ async function smEnsureSession_(){
 // --- 页面初始化 ---
 function smInitPage_(){
   _smIsSimpleMode = true;
+  _smBindingInFlight = false;
   CUR_CTX = { biz:"B2B", task:"B2B工单操作", page:"b2b_workorder_simple" };
   var sid = getSess_("B2B","B2B工单操作");
   if(sid){
     currentSessionId = sid;
-    loadB2bBindings();
+    loadB2bBindings(function(){
+      // bindings 加载完成后恢复当前工单
+      _smRestoreCurrentOrder_();
+      smRender_();
+    });
     loadB2bResults();
     smLoadLabor_();
+    // 先立即尝试恢复（可能 scannedB2bWorkorders 还有旧值）
+    _smRestoreCurrentOrder_();
   }
   smRender_();
 }
@@ -4210,6 +4219,7 @@ function smHandleWorkorderScan_(code){
   // 已绑定 → 切换为当前工单
   if(scannedB2bWorkorders.has(codeW)){
     _smCurrentOrder = codeW;
+    _smPersistCurrentOrder_();
     showScanFeedback_(smtz_("already_bound") + ": " + codeW, "#fffbe6", "#b8860b", 1200);
     smRender_();
     return;
@@ -4231,12 +4241,14 @@ function smHandleWorkorderScan_(code){
   _b2bCooldownUntil = nowW + B2B_SUCCESS_COOLDOWN_MS;
   scannedB2bWorkorders.add(codeW); persistState();
   _smCurrentOrder = codeW;
+  _smPersistCurrentOrder_();
+  _smBindingInFlight = true;
   var evIdW = makeEventId({ event:"wave", biz:"B2B", task:"B2B工单操作", wave_id: codeW, badgeRaw:"" });
   if(!hasRecent(evIdW)){
     submitEvent({ event:"wave", event_id: evIdW, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: codeW });
     addRecent(evIdW);
   }
-  callB2bOpBind(codeW);
+  _smCallBindWithLock_(codeW);
   showScanFeedback_("⏳ 绑定中 " + codeW + "...", "#e3f2fd", "#1565c0", 1500);
   smRender_();
   try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
@@ -4261,26 +4273,60 @@ function smManualAddWorkorder(){
 function _smDoManualAdd(val, inp){
   if(scannedB2bWorkorders.has(val)){
     _smCurrentOrder = val;
+    _smPersistCurrentOrder_();
     smRender_();
     alert(smtz_("already_bound") + "\n" + val);
     inp.value = ""; return;
   }
   scannedB2bWorkorders.add(val); persistState();
   _smCurrentOrder = val;
+  _smPersistCurrentOrder_();
+  _smBindingInFlight = true;
   var evIdW = makeEventId({ event:"wave", biz:"B2B", task:"B2B工单操作", wave_id: val, badgeRaw:"" });
   if(!hasRecent(evIdW)){
     submitEvent({ event:"wave", event_id: evIdW, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, wave_id: val });
     addRecent(evIdW);
   }
-  callB2bOpBind(val);
+  _smCallBindWithLock_(val);
   smRender_();
   inp.value = "";
 }
 
+// 简化模式专用绑定 — 带 _smBindingInFlight 锁 + 细化错误提示
+function _smCallBindWithLock_(orderNo){
+  callB2bOpBind(orderNo);
+  // callB2bOpBind 是 fire-and-forget，需要 hook 它的 resolve/reject 清除锁
+  // 因为 callB2bOpBind 内部用 jsonp().then/catch 处理，我们在下一个微任务后轮询 bindings
+  // 更好的方式：监听 _b2bBindingsLoaded + bindings[orderNo] 是否出现
+  var checkCount = 0;
+  var checkTimer = setInterval(function(){
+    checkCount++;
+    if(b2bWorkorderBindings[orderNo] || checkCount > 50){ // 最多 5 秒
+      _smBindingInFlight = false;
+      clearInterval(checkTimer);
+      smRender_();
+    }
+    // 绑定失败（被 callB2bOpBind 回滚 — scannedB2bWorkorders 里已没有）
+    if(!scannedB2bWorkorders.has(orderNo)){
+      _smBindingInFlight = false;
+      clearInterval(checkTimer);
+      setStatus("⚠️ 工单绑定失败，请重新扫码: " + orderNo, false);
+      smRender_();
+    }
+  }, 100);
+}
+
 // --- 扫人员 ---
 async function smScanWorker(){
-  if(!currentSessionId){ alert(smt_("no_session")); return; }
-  if(!_smCurrentOrder){ alert(smt_("no_current_order")); return; }
+  if(!currentSessionId){ alert("趟次丢失，请刷新页面 / 세션 없음, 새로고침하세요"); return; }
+  if(_smBindingInFlight){ alert("工单绑定中，请稍候... / 바인딩 진행 중..."); return; }
+  // 兜底：只有 1 张工单且未选中 → 自动选中
+  if(!_smCurrentOrder && scannedB2bWorkorders.size === 1){
+    _smCurrentOrder = Array.from(scannedB2bWorkorders)[0];
+    _smPersistCurrentOrder_();
+    smRender_();
+  }
+  if(!_smCurrentOrder){ alert("请先扫工单 / 먼저 작업지시를 스캔하세요"); return; }
   scanMode = "b2b_simple_worker";
   document.getElementById("scanTitle").textContent = smtz_("scan_worker_title");
   await openScannerCommon();
@@ -4289,12 +4335,29 @@ async function smScanWorker(){
 // 处理简化模式扫到的人员工牌
 async function smHandleWorkerScan_(code){
   if(!isOperatorBadge(code)){
-    setStatus("无效工牌 / 유효하지 않은 명찰", false);
+    setStatus("无效工牌 / 유효하지 않은 명찰: " + code, false);
     return;
   }
   var p = parseBadge(code);
+  if(!currentSessionId){
+    setStatus("趟次丢失，请刷新页面 / 세션 없음", false);
+    return;
+  }
+  if(_smBindingInFlight){
+    setStatus("工单绑定中，请稍候... / 바인딩 진행 중...", false);
+    return;
+  }
+  // 兜底：只有 1 张工单且未选中 → 自动选中
+  if(!_smCurrentOrder && scannedB2bWorkorders.size === 1){
+    _smCurrentOrder = Array.from(scannedB2bWorkorders)[0];
+    _smPersistCurrentOrder_();
+  }
   if(!_smCurrentOrder){
-    setStatus(smt_("no_current_order"), false);
+    setStatus("请先扫工单 / 먼저 작업지시를 스캔하세요", false);
+    return;
+  }
+  if(!b2bWorkorderBindings[_smCurrentOrder]){
+    setStatus("工单 " + _smCurrentOrder + " 绑定未完成，请稍候重试", false);
     return;
   }
   scanBusy = true;
@@ -4309,7 +4372,7 @@ async function smHandleWorkerScan_(code){
       if(reg){ var s = reg.get(); s.add(p.raw); reg.set(s); renderActiveLists(); }
     }
     // 2. labor detail join
-    await jsonp(LOCK_URL, {
+    var laborRes = await jsonp(LOCK_URL, {
       action:"b2b_simple_labor_join",
       session_id: currentSessionId,
       source_order_no: _smCurrentOrder,
@@ -4317,12 +4380,18 @@ async function smHandleWorkerScan_(code){
       operator_name: p.name || "",
       entry_mode: "simple_mode"
     }, { skipBusy:true });
+    if(!laborRes || !laborRes.ok){
+      var errMsg = (laborRes && laborRes.error) || "unknown";
+      if(errMsg === "workorder_not_bound") errMsg = "工单绑定未完成 / 바인딩 미완료";
+      setStatus("labor加入失败: " + errMsg, false);
+      return;
+    }
     showScanFeedback_((p.name||p.id) + " " + smtz_("worker_joined"), "#e6ffe6", "#006400", 1500);
     smLoadLabor_();
     smRender_();
     try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
   }catch(e){
-    setStatus("加入失败: " + e, false);
+    setStatus("网络错误，加入失败: " + e, false);
   }finally{
     scanBusy = false;
   }
@@ -4330,8 +4399,9 @@ async function smHandleWorkerScan_(code){
 
 // --- 暂时完成 ---
 async function smTempComplete(){
-  if(!currentSessionId){ alert(smt_("no_session")); return; }
-  if(!_smCurrentOrder){ alert(smt_("no_current_order")); return; }
+  if(!currentSessionId){ alert("趟次丢失，请刷新页面 / 세션 없음, 새로고침하세요"); return; }
+  if(_smBindingInFlight){ alert("工单绑定中，请稍候... / 바인딩 진행 중..."); return; }
+  if(!_smCurrentOrder){ alert("请先扫工单 / 먼저 작업지시를 스캔하세요"); return; }
   if(!confirm(smtz_("temp_complete_confirm"))) return;
   if(!acquireBusy_()) return;
   try{
@@ -4358,7 +4428,8 @@ async function smTempComplete(){
 
 // --- 录结果（复用现有结果单表单）---
 function smOpenResultForCurrent(){
-  if(!_smCurrentOrder){ alert(smt_("no_current_order")); return; }
+  if(_smBindingInFlight){ alert("工单绑定中，请稍候... / 바인딩 진행 중..."); return; }
+  if(!_smCurrentOrder){ alert("请先扫工单 / 먼저 작업지시를 스캔하세요"); return; }
   // 确保 bindings 已加载
   if(!b2bWorkorderBindings[_smCurrentOrder]){
     alert("工单绑定信息未加载，请稍后重试 / 바인딩 정보 미로드");
@@ -4508,6 +4579,9 @@ async function smLeaveTask(){
     }
     // 2. 主系统 leave
     await leaveWork_("B2B","B2B工单操作");
+    _smClearCurrentOrder_();
+    _smIsSimpleMode = false;
+    _smBindingInFlight = false;
   }catch(e){
     setStatus("离开失败: " + e, false);
   }finally{ releaseBusy_(); }
@@ -4552,8 +4626,10 @@ async function smEndSession(){
       addRecent(evId);
     }
     setStatus("趟次已结束 / 세션 종료됨 ✅", true);
-    _smCurrentOrder = null; _smLabor = []; _smWorkorderStatuses = {};
+    _smClearCurrentOrder_();
+    _smLabor = []; _smWorkorderStatuses = {};
     _smIsSimpleMode = false;
+    _smBindingInFlight = false;
     cleanupLocalSession_();
     smRender_();
   }catch(e){
@@ -4713,7 +4789,32 @@ function smRender_(){
 
 function _smSelectOrder(orderNo){
   _smCurrentOrder = orderNo;
+  _smPersistCurrentOrder_();
   smRender_();
+}
+function _smPersistCurrentOrder_(){
+  if(currentSessionId && _smCurrentOrder){
+    try{ localStorage.setItem("sm_current_order_" + currentSessionId, _smCurrentOrder); }catch(e){}
+  }
+}
+function _smRestoreCurrentOrder_(){
+  if(!currentSessionId) return;
+  var saved = localStorage.getItem("sm_current_order_" + currentSessionId);
+  if(saved && scannedB2bWorkorders.has(saved)){
+    _smCurrentOrder = saved;
+    return;
+  }
+  // 兜底：只有 1 张工单时自动选中
+  if(!_smCurrentOrder && scannedB2bWorkorders.size === 1){
+    _smCurrentOrder = Array.from(scannedB2bWorkorders)[0];
+    _smPersistCurrentOrder_();
+  }
+}
+function _smClearCurrentOrder_(){
+  if(currentSessionId){
+    try{ localStorage.removeItem("sm_current_order_" + currentSessionId); }catch(e){}
+  }
+  _smCurrentOrder = null;
 }
 
 function startPicking(e){ startGeneric_(e, "B2C", "拣货", "b2c_pick", function(){ scannedWaves = new Set(); activePick = new Set(); leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0"); syncLeaderPickUI(); }); }
