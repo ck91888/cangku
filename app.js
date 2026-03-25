@@ -2252,17 +2252,18 @@ function fmtResultSummary(r){
   return parts.join(" · ");
 }
 
-function loadB2bResults(){
-  if(!currentSessionId) return;
+function loadB2bResults(onDone){
+  if(!currentSessionId){ if(typeof onDone === "function") onDone(); return; }
   jsonp(LOCK_URL, { action:"b2b_op_result_list_by_session", session_id: currentSessionId }, { skipBusy:true }).then(function(res){
-    if(!res || !res.ok){ console.error("b2b_op_result_list_by_session error", res && res.error); return; }
+    if(!res || !res.ok){ console.error("b2b_op_result_list_by_session error", res && res.error); if(typeof onDone === "function") onDone(); return; }
     b2bWorkorderResults = {};
     (res.results || []).forEach(function(r){
       var rk = b2bResultKey_(r.day_kst, r.source_type, r.source_order_no);
       b2bWorkorderResults[rk] = r;
     });
     renderB2bWorkorderUI();
-  }).catch(function(e){ console.error("b2b_op_result_list_by_session error", e); });
+    if(typeof onDone === "function") onDone();
+  }).catch(function(e){ console.error("b2b_op_result_list_by_session error", e); if(typeof onDone === "function") onDone(); });
 }
 
 async function tryRecoverB2bSession_(){
@@ -2299,7 +2300,7 @@ async function tryRecoverB2bSession_(){
 function openResultForm(orderNo, seedData){
   var binding = b2bWorkorderBindings[orderNo];
   if(!binding || !binding.day_kst || !binding.source_type){
-    alert("绑定信息缺失，请刷新后重试");
+    alert("바인딩 정보 없음 / 绑定信息缺失，请刷新后重试");
     return;
   }
   var kstDay = binding.day_kst;
@@ -2307,10 +2308,10 @@ function openResultForm(orderNo, seedData){
   var body = document.getElementById("b2bResultBody");
   if(!modal || !body) return;
   modal.style.display = "flex";
-  body.innerHTML = '<div class="muted">加载中...</div>';
+  body.innerHTML = '<div class="muted">로딩 중 / 加载中...</div>';
 
   jsonp(LOCK_URL, { action:"b2b_op_result_get", day_kst: kstDay, source_order_no: orderNo }, { skipBusy:true }).then(function(res){
-    if(!res || !res.ok){ body.innerHTML = '<div style="color:red;">'+esc(res&&res.error||"加载失败")+'</div>'; return; }
+    if(!res || !res.ok){ body.innerHTML = '<div style="color:red;">'+esc(res&&res.error||"로드 실패 / 加载失败")+'</div>'; return; }
     var serverData = res.result || {};
     // seedData 优先（从确认层取消返回时恢复本地未保存输入）
     var r = seedData ? _mergeResultSeed(serverData, seedData) : serverData;
@@ -2319,81 +2320,81 @@ function openResultForm(orderNo, seedData){
     var om = r.operation_mode || "pack_outbound";
 
     var isCrossDay = kstDay !== kstDayKey_(Date.now());
-    var html = '<div style="font-size:16px;font-weight:800;margin-bottom:6px;">现场结果单</div>';
-    html += '<div style="font-size:13px;color:#555;margin-bottom:4px;">工单: <b>'+esc(orderNo)+'</b>'+(cust ? ' · '+esc(cust) : '')+'</div>';
+    var html = '<div style="font-size:16px;font-weight:800;margin-bottom:6px;">현장 결과서 / 现场结果单</div>';
+    html += '<div style="font-size:13px;color:#555;margin-bottom:4px;">작업지시 / 工单: <b>'+esc(orderNo)+'</b>'+(cust ? ' · '+esc(cust) : '')+'</div>';
     if(isCrossDay){
-      html += '<div style="background:#fff3e0;color:#e65100;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:700;margin-bottom:6px;">绑定日: '+esc(kstDay)+'（非今天，跨天旧 session）</div>';
+      html += '<div style="background:#fff3e0;color:#e65100;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:700;margin-bottom:6px;">바인딩 날짜 / 绑定日: '+esc(kstDay)+' (이전 세션 / 跨天旧session)</div>';
     }
     html += '<div style="font-size:12px;color:#999;margin-bottom:10px;padding:6px 8px;background:#f5f5f5;border-radius:6px;">' +
-      '工单共用结果单 · 参与 session: '+pt.session_count+' · 参与人: '+pt.badge_count +
+      '공유 결과서 / 共用结果单 · 세션 / session: '+pt.session_count+' · 참여자 / 参与人: '+pt.badge_count +
       (pt.badges && pt.badges.length > 0 ? '<br>'+pt.badges.map(function(b){ var p=b.split("|"); return esc(p[1]||p[0]); }).join(", ") : '') +
     '</div>';
     if(r.status === "completed"){
-      html += '<div style="color:#2e7d32;font-weight:700;margin-bottom:8px;">✅ 已完成提交';
-      if(r.confirm_badge) html += ' · 工牌: '+esc(r.confirm_badge);
-      else if(r.confirmed_by) html += ' · 确认人: '+esc(r.confirmed_by);
+      html += '<div style="color:#2e7d32;font-weight:700;margin-bottom:8px;">✅ 제출 완료 / 已完成提交';
+      if(r.confirm_badge) html += ' · 명찰 / 工牌: '+esc(r.confirm_badge);
+      else if(r.confirmed_by) html += ' · 확인자 / 确认人: '+esc(r.confirmed_by);
       html += '</div>';
-      html += '<div style="margin-bottom:10px;"><button onclick="revertResultToDraft(\''+esc(orderNo)+'\')" style="font-size:12px;padding:4px 12px;background:#ff9800;color:#fff;border:none;border-radius:4px;cursor:pointer;">↩ 退回草稿</button></div>';
+      html += '<div style="margin-bottom:10px;"><button onclick="revertResultToDraft(\''+esc(orderNo)+'\')" style="font-size:12px;padding:4px 12px;background:#ff9800;color:#fff;border:none;border-radius:4px;cursor:pointer;">↩ 초안으로 / 退回草稿</button></div>';
     }
 
-    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">作业类型</label>' +
+    html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">작업 유형 / 作业类型</label>' +
       '<select id="rf-mode" style="width:100%;margin-top:2px;" onchange="rfToggleMode()">' +
-        '<option value="pack_outbound"'+(om==="pack_outbound"?' selected':'')+'>打包出库</option>' +
-        '<option value="move_and_palletize"'+(om==="move_and_palletize"?' selected':'')+'>纯搬箱打托</option>' +
+        '<option value="pack_outbound"'+(om==="pack_outbound"?' selected':'')+'>포장 출고 / 打包出库</option>' +
+        '<option value="move_and_palletize"'+(om==="move_and_palletize"?' selected':'')+'>박스이동·팔레타이징 / 纯搬箱打托</option>' +
       '</select></div>';
 
     // === 打包出库 字段区 ===
     html += '<div id="rf-pack-area" style="'+(om==="move_and_palletize"?"display:none;":"")+'">';
-    html += _rfField("品项数", "rf-sku", "number", r.sku_kind_count, "0", "1");
-    html += _rfField("打包件数", "rf-packed-qty", "number", r.packed_qty, "0", "1");
-    html += _rfField("总出库箱数", "rf-box", "number", r.box_count, "0", "0.5");
-    html += _rfField("打包箱数", "rf-packed-box", "number", r.packed_box_count, "0", "0.5");
-    html += _rfSwitch("rf-carton", "是否用了纸箱", r.used_carton, "rfToggleCarton()");
+    html += _rfField("품목 수 / 品项数", "rf-sku", "number", r.sku_kind_count, "0", "1");
+    html += _rfField("포장 수량 / 打包件数", "rf-packed-qty", "number", r.packed_qty, "0", "1");
+    html += _rfField("총 출고 박스 / 总出库箱数", "rf-box", "number", r.box_count, "0", "0.5");
+    html += _rfField("포장 박스 / 打包箱数", "rf-packed-box", "number", r.packed_box_count, "0", "0.5");
+    html += _rfSwitch("rf-carton", "박스 사용 / 是否用了纸箱", r.used_carton, "rfToggleCarton()");
     html += '<div id="rf-carton-fields" style="'+(r.used_carton?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
-      _rfField("大箱数", "rf-big-carton", "number", r.big_carton_count, "0", "1") +
-      _rfField("小箱数", "rf-small-carton", "number", r.small_carton_count, "0", "1") +
+      _rfField("대형 박스 / 大箱数", "rf-big-carton", "number", r.big_carton_count, "0", "1") +
+      _rfField("소형 박스 / 小箱数", "rf-small-carton", "number", r.small_carton_count, "0", "1") +
     '</div>';
-    html += _rfField("出库托数", "rf-pallet", "number", r.pallet_count, "0", "0.5");
-    html += _rfField("贴标数量", "rf-label", "number", r.label_count, "0", "1");
-    html += _rfField("拍照数量", "rf-photo", "number", r.photo_count, "0", "1");
-    html += _rfSwitch("rf-pallet-detail", "是否制作了打托明细", r.has_pallet_detail);
+    html += _rfField("출고 팔레트 / 出库托数", "rf-pallet", "number", r.pallet_count, "0", "0.5");
+    html += _rfField("라벨 수량 / 贴标数量", "rf-label", "number", r.label_count, "0", "1");
+    html += _rfField("사진 수량 / 拍照数量", "rf-photo", "number", r.photo_count, "0", "1");
+    html += _rfSwitch("rf-pallet-detail", "팔레트 상세 작성 / 是否制作了打托明细", r.has_pallet_detail);
     html += '</div>';
 
     // === 搬箱打托 字段区 ===
     html += '<div id="rf-move-area" style="'+(om==="pack_outbound"?"display:none;":"")+'">';
-    html += _rfSwitch("rf-did-pack", "是否打包", r.did_pack, "rfToggleDidPack()");
+    html += _rfSwitch("rf-did-pack", "포장 여부 / 是否打包", r.did_pack, "rfToggleDidPack()");
     html += '<div id="rf-did-pack-fields" style="'+(r.did_pack?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
-      _rfField("打包箱数", "rf-move-packed-box", "number", r.packed_box_count, "0", "0.5") +
+      _rfField("포장 박스 / 打包箱数", "rf-move-packed-box", "number", r.packed_box_count, "0", "0.5") +
     '</div>';
-    html += _rfSwitch("rf-did-rebox", "是否换箱", r.did_rebox, "rfToggleDidRebox()");
+    html += _rfSwitch("rf-did-rebox", "박스 교체 / 是否换箱", r.did_rebox, "rfToggleDidRebox()");
     html += '<div id="rf-did-rebox-fields" style="'+(r.did_rebox?"":"display:none;")+'padding-left:12px;border-left:3px solid #1976d2;margin-bottom:8px;">' +
-      _rfField("换箱数", "rf-rebox-count", "number", r.rebox_count, "0", "1") +
+      _rfField("교체 박스 / 换箱数", "rf-rebox-count", "number", r.rebox_count, "0", "1") +
     '</div>';
-    html += _rfField("贴标数量", "rf-move-label", "number", r.label_count, "0", "1");
-    html += _rfField("出库箱数", "rf-move-box", "number", r.box_count, "0", "0.5");
-    html += _rfField("出库托数", "rf-move-pallet", "number", r.pallet_count, "0", "0.5");
+    html += _rfField("라벨 수량 / 贴标数量", "rf-move-label", "number", r.label_count, "0", "1");
+    html += _rfField("출고 박스 / 出库箱数", "rf-move-box", "number", r.box_count, "0", "0.5");
+    html += _rfField("출고 팔레트 / 出库托数", "rf-move-pallet", "number", r.pallet_count, "0", "0.5");
     html += '</div>';
 
     // === 公共区：叉车找货 + 备注 ===
     var nfp = r.needs_forklift_pick ? 1 : 0;
-    html += _rfSwitch("rf-fork", "需要叉车找货", nfp, "rfToggleFork()");
+    html += _rfSwitch("rf-fork", "지게차 필요 / 需要叉车找货", nfp, "rfToggleFork()");
     html += '<div id="rf-fork-fields" style="'+(nfp?"":"display:none;")+'padding-left:12px;border-left:3px solid #ff9800;margin-bottom:8px;">' +
-      _rfField("叉车取货托数", "rf-fork-pallet", "number", r.forklift_pallet_count, "0", "0.5") +
-      _rfField("涉及货位数", "rf-fork-loc", "number", r.rack_pick_location_count, "0", "1") +
+      _rfField("지게차 팔레트 / 叉车取货托数", "rf-fork-pallet", "number", r.forklift_pallet_count, "0", "0.5") +
+      _rfField("관련 위치 수 / 涉及货位数", "rf-fork-loc", "number", r.rack_pick_location_count, "0", "1") +
     '</div>';
 
-    html += '<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:700;">备注</label>' +
+    html += '<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:700;">비고 / 备注</label>' +
       '<textarea id="rf-remark" rows="2" style="width:100%;margin-top:2px;">'+ esc(r.remark||"") +'</textarea></div>';
 
     html += '<input type="hidden" id="rf-order-no" value="'+esc(orderNo)+'" />';
     html += '<input type="hidden" id="rf-day-kst" value="'+esc(kstDay)+'" />';
     html += '<div style="display:flex;gap:8px;">' +
-      '<button onclick="submitResult(\'draft\')" style="flex:1;padding:10px;font-size:14px;">保存草稿</button>' +
-      '<button onclick="submitResult(\'completed\')" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">完成提交</button>' +
+      '<button onclick="submitResult(\'draft\')" style="flex:1;padding:10px;font-size:14px;">임시 저장 / 保存草稿</button>' +
+      '<button onclick="submitResult(\'completed\')" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">제출 완료 / 完成提交</button>' +
     '</div>';
 
     body.innerHTML = html;
-  }).catch(function(e){ body.innerHTML = '<div style="color:red;">网络错误</div>'; });
+  }).catch(function(e){ body.innerHTML = '<div style="color:red;">네트워크 오류 / 网络错误</div>'; });
 }
 
 // --- seedData 合并：用 payload 字段覆盖服务端数据，保留服务端的 status/confirm 等元数据 ---
@@ -2473,7 +2474,7 @@ function _collectResultPayload(st, extraFields){
   var orderNo = (document.getElementById("rf-order-no") || {}).value || "";
   if(!orderNo) return null;
   var dayKst = (document.getElementById("rf-day-kst") || {}).value || "";
-  if(!dayKst){ alert("绑定日期信息缺失，请关闭后重新打开"); return null; }
+  if(!dayKst){ alert("바인딩 날짜 없음 / 绑定日期信息缺失，请关闭后重新打开"); return null; }
   var om = (document.getElementById("rf-mode") || {}).value || "pack_outbound";
   var isPack = om === "pack_outbound";
 
@@ -2529,12 +2530,17 @@ function _doSubmitResult(payload){
   }
   var st = payload.status;
   jsonp(LOCK_URL, payload, { skipBusy:true }).then(function(res){
-    if(!res || !res.ok){ alert("保存失败: " + (res&&res.error||"unknown")); return; }
+    if(!res || !res.ok){
+      var errText = (res&&res.error||"unknown");
+      if(errText === "cross_session_active_labor") errText = (res&&res.msg) || "다른 기기에서 작업 중 / 该工单在其他设备仍有作业中人员";
+      alert("저장 실패 / 保存失败: " + errText);
+      return;
+    }
     closeResultForm();
-    loadB2bResults();
     setStatus(st === "completed" ? "结果已提交 ✅" : (_smIsSimpleMode ? smt_("result_saved") + " ✅" : "草稿已保存 ✅"), true);
-    if(_smIsSimpleMode) smRender_();
-  }).catch(function(){ alert("网络错误，请重试"); });
+    loadB2bResults(function(){ if(_smIsSimpleMode) smRender_(); });
+    if(_smIsSimpleMode) smRender_(); // 先立即渲染一次
+  }).catch(function(){ alert("네트워크 오류 / 网络错误，请重试"); });
 }
 
 function submitResult(st){
@@ -2686,7 +2692,7 @@ function unbindB2bWorkorder(orderNo){
     var msg = "已解绑 "+orderNo;
     if(res.remaining_bindings === 0) msg += "（该工单已无任何绑定）";
     setStatus(msg+" ✅", true);
-  }).catch(function(){ alert("网络错误，请重试"); });
+  }).catch(function(){ alert("네트워크 오류 / 网络错误，请重试"); });
 }
 
 function closeResultForm(){
@@ -4250,6 +4256,7 @@ function smHandleWorkorderScan_(code){
   }
   _smCallBindWithLock_(codeW);
   showScanFeedback_("⏳ 绑定中 " + codeW + "...", "#e3f2fd", "#1565c0", 1500);
+  setStatus("✅ 工单已添加: " + codeW, true);
   smRender_();
   try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
   updateScanRecentList_();
@@ -4417,10 +4424,10 @@ async function smTempComplete(){
       return;
     }
     setStatus(smtz_("temp_complete") + " ✅ " + _smCurrentOrder, true);
-    // 刷新数据
+    // 刷新数据（回调确保渲染在数据到达后）
     smLoadLabor_();
-    loadB2bResults();
-    smRender_();
+    loadB2bResults(function(){ smRender_(); });
+    smRender_(); // 先立即渲染一次，回调后再刷一次
   }catch(e){
     alert("暂时完成失败: " + e);
   }finally{ releaseBusy_(); }
@@ -4555,8 +4562,8 @@ async function _smDoConfirm(){
     }
     _smCancelConfirm();
     setStatus(smtz_("wo_confirmed") + " ✅ " + orderNo, true);
-    loadB2bResults();
-    smRender_();
+    loadB2bResults(function(){ smRender_(); });
+    smRender_(); // 先立即渲染一次
   }catch(e){
     alert("确认失败: " + e);
   }
@@ -4567,21 +4574,33 @@ async function smLeaveTask(){
   if(!confirm(smt_("leave_confirm"))) return;
   if(!acquireBusy_()) return;
   try{
-    var opId = getOperatorId();
-    if(!opId){ alert("未设置操作员"); return; }
-    // 1. 关闭所有 active labor details
+    // 1. 关闭所有 active labor details（全 session，不限单人）
     if(currentSessionId){
       await jsonp(LOCK_URL, {
-        action:"b2b_simple_labor_leave",
-        session_id: currentSessionId,
-        operator_badge: opId
+        action:"b2b_simple_labor_leave_all",
+        session_id: currentSessionId
       }, { skipBusy:true });
     }
-    // 2. 主系统 leave
-    await leaveWork_("B2B","B2B工单操作");
+    // 2. 批量 leave 所有已 join 的工人（通过 task registry 拿到在岗列表）
+    var reg = taskReg_("B2B工单操作");
+    var badges = reg ? Array.from(reg.get()) : [];
+    for(var i=0; i<badges.length; i++){
+      var bRaw = badges[i];
+      var evId = makeEventId({ event:"leave", biz:"B2B", task:"B2B工单操作", wave_id:"", badgeRaw: bRaw });
+      if(!hasRecent(evId)){
+        try{
+          await submitEventSync_({ event:"leave", event_id: evId, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, da_id: bRaw }, true);
+          addRecent(evId);
+        }catch(e){ console.error("batch leave error for " + bRaw, e); }
+      }
+    }
+    // 清空本地 active list
+    if(reg){ reg.set(new Set()); renderActiveLists(); }
     _smClearCurrentOrder_();
     _smIsSimpleMode = false;
     _smBindingInFlight = false;
+    setStatus("已离开本环节 / 나가기 완료 ✅", true);
+    back();
   }catch(e){
     setStatus("离开失败: " + e, false);
   }finally{ releaseBusy_(); }
@@ -4676,9 +4695,12 @@ function smRender_(){
     }
   }
 
-  // 当前工单参与人数
+  // 当前工单参与人数 + 任务在岗人数
   var activeLabor = _smLabor.filter(function(l){ return l.source_order_no === _smCurrentOrder && l.status === "active"; });
-  if(elWorkerCount) elWorkerCount.textContent = String(activeLabor.length);
+  var taskReg = taskReg_("B2B工单操作");
+  var taskActiveCount = taskReg ? taskReg.get().size : 0;
+  if(elWorkerCount) elWorkerCount.innerHTML = String(activeLabor.length) +
+    ' <span style="font-size:11px;color:#666;font-weight:400;">(任务在岗 / 작업참여: ' + taskActiveCount + ')</span>';
 
   // 累计工时
   var totalMin = 0;

@@ -1088,6 +1088,52 @@ export default {
       }
 
       const stub = locksStub(env);
+      const simple_mode_b2b = String(p.simple_mode || "") === "1" && s && s.biz === "B2B" && s.task === "B2B工单操作";
+
+      // ★ 简化模式预清理：在标准锁/配平检查之前，自动处理所有 leave + 释放锁
+      if (simple_mode_b2b) {
+        // 1) 阻塞：仍有 working 工单
+        const workingRs = await env.DB.prepare(
+          `SELECT r.source_order_no FROM b2b_operation_results r
+           JOIN b2b_operation_bindings b ON b.day_kst=r.day_kst AND b.source_type=r.source_type AND b.source_order_no=r.source_order_no AND b.session_id=?
+           WHERE r.workflow_status='working'`
+        ).bind(session).all();
+        if ((workingRs.results || []).length > 0) {
+          const workingOrders = (workingRs.results || []).map(r => ({ source_order_no: r.source_order_no, result_status: "working" }));
+          return jsonpOrJson({ ok:true, blocked:true, reason:"working_b2b_orders", session, pending_orders: workingOrders }, callback);
+        }
+        // 2) 关闭所有残留 active labor details
+        await env.DB.prepare(
+          `UPDATE b2b_operation_labor_details SET leave_ms=?, duration_minutes=ROUND((? - join_ms)/60000.0, 2), status='closed', updated_at=?
+           WHERE session_id=? AND status='active'`
+        ).bind(now, now, now, session).run();
+        // 3) 自动 leave 所有未配对 badge + 释放锁
+        const jlPre = await env.DB.prepare(
+          `SELECT badge, event FROM events WHERE session=? AND event IN ('join','leave') AND ok=1 ORDER BY server_ms ASC`
+        ).bind(session).all();
+        const jlCount = {};
+        for (const ev of (jlPre.results || [])) {
+          if (!jlCount[ev.badge]) jlCount[ev.badge] = 0;
+          jlCount[ev.badge] += (ev.event === 'join' ? 1 : -1);
+        }
+        const unpaired = Object.entries(jlCount).filter(([_, c]) => c > 0);
+        for (const [badge] of unpaired) {
+          const leaveEvId = `auto_leave_${session}_${badge}_${now}`;
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO events(server_ms,client_ms,event_id,event,badge,biz,task,session,wave_id,operator_id,ok,note)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(now, now, leaveEvId, 'leave', badge, s.biz, s.task, session, '', operator_id, 1, 'auto_leave_simple_close').run();
+          try {
+            await stub.fetch("https://locks/do", {
+              method: "POST",
+              headers: { "content-type":"application/json" },
+              body: JSON.stringify({ action:"lock_release", badge, task: s.task, session, operator_id })
+            });
+          } catch(e) { /* best effort */ }
+        }
+      }
+
+      // ★ 标准检查：活跃锁
       const r = await stub.fetch("https://locks/do", {
         method: "POST",
         headers: { "content-type":"application/json" },
@@ -1099,7 +1145,7 @@ export default {
         return jsonpOrJson({ ok:true, blocked:true, reason:"still_active", session, active }, callback);
       }
 
-      // ★ join/leave 配平检查：有未 leave 的 badge 时也拦截
+      // ★ 标准检查：join/leave 配平
       const jlRs = await env.DB.prepare(
         `SELECT badge, event FROM events
          WHERE session=? AND event IN ('join','leave') AND ok=1
@@ -1115,32 +1161,11 @@ export default {
         return jsonpOrJson({ ok:true, blocked:true, reason:"unpaired_joins", session, badges: unpairedBadges }, callback);
       }
 
-      // B2B工单操作: 未完成结果单拦截
-      if (s && s.biz === "B2B" && s.task === "B2B工单操作") {
-        const simple_mode = String(p.simple_mode || "") === "1";
-        if (simple_mode) {
-          // 简化模式：只有 workflow_status='working' 的工单阻塞关闭
-          // pending_result / pending_review / completed 不阻塞
-          const workingRs = await env.DB.prepare(
-            `SELECT r.source_order_no FROM b2b_operation_results r
-             JOIN b2b_operation_bindings b ON b.day_kst=r.day_kst AND b.source_type=r.source_type AND b.source_order_no=r.source_order_no AND b.session_id=?
-             WHERE r.workflow_status='working'`
-          ).bind(session).all();
-          if ((workingRs.results || []).length > 0) {
-            const workingOrders = (workingRs.results || []).map(r => ({ source_order_no: r.source_order_no, result_status: "working" }));
-            return jsonpOrJson({ ok:true, blocked:true, reason:"working_b2b_orders", session, pending_orders: workingOrders }, callback);
-          }
-          // 同时关闭所有残留 active labor details
-          await env.DB.prepare(
-            `UPDATE b2b_operation_labor_details SET leave_ms=?, duration_minutes=ROUND((? - join_ms)/60000.0, 2), status='closed', updated_at=?
-             WHERE session_id=? AND status='active'`
-          ).bind(now, now, now, session).run();
-        } else {
-          // 旧模式：非 completed 的结果单阻塞关闭
-          const pending = await getPendingB2bOpResultsForSession_(env.DB, session);
-          if (pending.length > 0) {
-            return jsonpOrJson({ ok:true, blocked:true, reason:"pending_b2b_results", session, pending_orders: pending }, callback);
-          }
+      // B2B工单操作: 旧模式未完成结果单拦截
+      if (s && s.biz === "B2B" && s.task === "B2B工单操作" && !simple_mode_b2b) {
+        const pending = await getPendingB2bOpResultsForSession_(env.DB, session);
+        if (pending.length > 0) {
+          return jsonpOrJson({ ok:true, blocked:true, reason:"pending_b2b_results", session, pending_orders: pending }, callback);
         }
       }
 
@@ -4332,6 +4357,16 @@ export default {
       if (new_status === "completed") {
         if (!confirm_badge) return jsonpOrJson({ ok:false, error:"missing confirm_badge" }, callback);
         if (!/^EMP-.+$/.test(confirm_badge)) return jsonpOrJson({ ok:false, error:"invalid confirm_badge, employee badge (EMP-...) required" }, callback);
+        // ★ 跨 session 活跃 labor 检查：该工单在其他设备仍有 active labor 时禁止 completed
+        const activeLaborCross = await env.DB.prepare(
+          `SELECT session_id, operator_badge FROM b2b_operation_labor_details
+           WHERE source_order_no=? AND day_kst=? AND status='active' LIMIT 5`
+        ).bind(source_order_no, day_kst).all();
+        if ((activeLaborCross.results || []).length > 0) {
+          const info = (activeLaborCross.results || []).map(r => r.operator_badge + '@' + r.session_id.slice(-6));
+          return jsonpOrJson({ ok:false, error:"cross_session_active_labor", active_labor: info,
+            msg:"该工单在其他设备仍有作业中的人员，请先完成或暂停 / 다른 기기에서 아직 작업 중인 인원이 있습니다" }, callback);
+        }
       }
 
       // 客户名
