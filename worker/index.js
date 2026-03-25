@@ -2656,7 +2656,8 @@ export default {
           { biz: "进口", task: "过机扫描码托" },
           { biz: "B2C", task: "换单" },
           { biz: "B2C", task: "退件入库" },
-          { biz: "B2C", task: "质检" }
+          { biz: "B2C", task: "质检" },
+          { biz: "B2B", task: "B2B工单操作" }
         ];
         const sd = new Date(start_date + "T00:00:00Z");
         const ed = new Date(end_date + "T00:00:00Z");
@@ -2819,40 +2820,56 @@ export default {
         f.source_summary = "return_qc_export";
       }
 
-      // Step9: B2B工单操作 — 本系统内部工单产出（b2b_operation_bindings + b2b_workorders）
-      // 口径：source_type='internal_b2b_workorder', match_status='direct_internal', 排除 cancelled
-      // 去重：每张工单只计一次，归属到"首次绑定日"（MIN(bound_at) 对应的 day_kst）
+      // Step9: B2B工单操作 — 以 completed 结果单为主产出来源
+      // 口径：b2b_operation_results.status='completed'，按 day_kst 聚合
+      // 涵盖 internal_b2b_workorder + external_wms_workorder
       {
-        const b2bWoBindRs = await env.DB.prepare(
-          `SELECT sub.internal_workorder_id, sub.first_day_kst,
-                  w.outbound_box_count, w.outbound_pallet_count, w.total_weight_kg, w.total_cbm
-           FROM (
-             SELECT internal_workorder_id,
-                    MIN(bound_at) as first_bound_at,
-                    (SELECT day_kst FROM b2b_operation_bindings b2
-                     WHERE b2.internal_workorder_id = b1.internal_workorder_id
-                       AND b2.source_type='internal_b2b_workorder'
-                     ORDER BY b2.bound_at ASC LIMIT 1) as first_day_kst
-             FROM b2b_operation_bindings b1
-             WHERE source_type='internal_b2b_workorder'
-               AND match_status='direct_internal'
-               AND internal_workorder_id IS NOT NULL
-             GROUP BY internal_workorder_id
-           ) sub
-           JOIN b2b_workorders w ON w.workorder_id = sub.internal_workorder_id
-           WHERE w.status != 'cancelled'
-             AND sub.first_day_kst >= ? AND sub.first_day_kst <= ?`
+        // 9a: 聚合 completed 结果单产出
+        const b2bResultRs = await env.DB.prepare(
+          `SELECT day_kst,
+                  COUNT(*) as completed_count,
+                  SUM(COALESCE(packed_qty, 0)) as packed_qty_sum,
+                  SUM(COALESCE(box_count, 0)) as box_count_sum,
+                  SUM(COALESCE(pallet_count, 0)) as pallet_count_sum,
+                  SUM(COALESCE(label_count, 0)) as label_count_sum,
+                  SUM(COALESCE(rebox_count, 0)) as rebox_count_sum,
+                  SUM(COALESCE(forklift_pallet_count, 0)) as forklift_pallet_count_sum,
+                  SUM(COALESCE(rack_pick_location_count, 0)) as rack_pick_location_count_sum
+           FROM b2b_operation_results
+           WHERE status='completed'
+             AND day_kst >= ? AND day_kst <= ?
+           GROUP BY day_kst`
         ).bind(start_date, end_date).all();
 
-        for (const r of (b2bWoBindRs.results || [])) {
-          const f = getOrCreate(r.first_day_kst, "B2B", "B2B工单操作");
-          f.wms_order_count_direct += 1;
-          f.wms_box_count += (r.outbound_box_count || 0);
-          f.wms_pallet_count += (r.outbound_pallet_count || 0);
-          f.wms_weight += (r.total_weight_kg || 0);
-          f.wms_volume += (r.total_cbm || 0);
-          // wms_qty 置 0：carton_based / sku_based 单位不同（箱/件），不强行混合汇总
-          f.source_summary = "b2b_internal_bindings";
+        for (const r of (b2bResultRs.results || [])) {
+          const f = getOrCreate(r.day_kst, "B2B", "B2B工单操作");
+          f.wms_order_count_direct += (r.completed_count || 0);
+          f.wms_qty_direct += (r.packed_qty_sum || 0);
+          f.wms_box_count += (r.box_count_sum || 0);
+          f.wms_pallet_count += (r.pallet_count_sum || 0);
+          f.source_summary = "b2b_operation_results_completed";
+        }
+
+        // 9b: 重量/体积 — 仅 completed 且 source_type='internal_b2b_workorder' 的结果单
+        //     通过 internal_workorder_id 关联 b2b_workorders 取重量体积
+        //     external_wms_workorder 无重量体积来源，允许为 0
+        const b2bWeightRs = await env.DB.prepare(
+          `SELECT r.day_kst,
+                  SUM(COALESCE(w.total_weight_kg, 0)) as weight_sum,
+                  SUM(COALESCE(w.total_cbm, 0)) as volume_sum
+           FROM b2b_operation_results r
+           JOIN b2b_workorders w ON w.workorder_id = r.internal_workorder_id
+           WHERE r.status='completed'
+             AND r.source_type='internal_b2b_workorder'
+             AND r.internal_workorder_id IS NOT NULL
+             AND r.day_kst >= ? AND r.day_kst <= ?
+           GROUP BY r.day_kst`
+        ).bind(start_date, end_date).all();
+
+        for (const r of (b2bWeightRs.results || [])) {
+          const f = getOrCreate(r.day_kst, "B2B", "B2B工单操作");
+          f.wms_weight += (r.weight_sum || 0);
+          f.wms_volume += (r.volume_sum || 0);
         }
       }
 
