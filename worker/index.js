@@ -934,6 +934,45 @@ export default {
           await env.DB.prepare(`UPDATE sessions SET owner_operator_id = created_by_operator WHERE owner_operator_id IS NULL`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v24_session_owner_transfer', ?)`).bind(Date.now()).run();
         }
+
+        // v25: B2B simple mode — labor details table + result extensions
+        const m25 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v25_b2b_simple_mode'`).first();
+        if (!m25) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_operation_labor_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_kst TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            source_type TEXT NOT NULL DEFAULT '',
+            source_order_no TEXT NOT NULL DEFAULT '',
+            internal_workorder_id TEXT,
+            operator_badge TEXT NOT NULL,
+            operator_name TEXT NOT NULL DEFAULT '',
+            segment_no INTEGER NOT NULL DEFAULT 1,
+            join_ms INTEGER NOT NULL,
+            leave_ms INTEGER,
+            duration_minutes REAL,
+            entry_mode TEXT NOT NULL DEFAULT 'simple_mode',
+            temp_switch_flag INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )`).run();
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_bld_day ON b2b_operation_labor_details(day_kst)`).run();
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_bld_session ON b2b_operation_labor_details(session_id)`).run();
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_bld_order ON b2b_operation_labor_details(source_order_no)`).run();
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_bld_badge ON b2b_operation_labor_details(operator_badge)`).run();
+          // Extend b2b_operation_results
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN result_entered_by_badge TEXT NOT NULL DEFAULT ''`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN result_entered_by_name TEXT NOT NULL DEFAULT ''`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN result_entered_at INTEGER`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN confirmed_at INTEGER`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN reviewed_by_badge TEXT NOT NULL DEFAULT ''`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN reviewed_by_name TEXT NOT NULL DEFAULT ''`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN reviewed_at INTEGER`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN temporary_completed_at INTEGER`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN workflow_status TEXT NOT NULL DEFAULT ''`).run(); } catch(e) {}
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v25_b2b_simple_mode', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -1078,9 +1117,30 @@ export default {
 
       // B2B工单操作: 未完成结果单拦截
       if (s && s.biz === "B2B" && s.task === "B2B工单操作") {
-        const pending = await getPendingB2bOpResultsForSession_(env.DB, session);
-        if (pending.length > 0) {
-          return jsonpOrJson({ ok:true, blocked:true, reason:"pending_b2b_results", session, pending_orders: pending }, callback);
+        const simple_mode = String(p.simple_mode || "") === "1";
+        if (simple_mode) {
+          // 简化模式：只有 workflow_status='working' 的工单阻塞关闭
+          // pending_result / pending_review / completed 不阻塞
+          const workingRs = await env.DB.prepare(
+            `SELECT r.source_order_no FROM b2b_operation_results r
+             JOIN b2b_operation_bindings b ON b.day_kst=r.day_kst AND b.source_type=r.source_type AND b.source_order_no=r.source_order_no AND b.session_id=?
+             WHERE r.workflow_status='working'`
+          ).bind(session).all();
+          if ((workingRs.results || []).length > 0) {
+            const workingOrders = (workingRs.results || []).map(r => ({ source_order_no: r.source_order_no, result_status: "working" }));
+            return jsonpOrJson({ ok:true, blocked:true, reason:"working_b2b_orders", session, pending_orders: workingOrders }, callback);
+          }
+          // 同时关闭所有残留 active labor details
+          await env.DB.prepare(
+            `UPDATE b2b_operation_labor_details SET leave_ms=?, duration_minutes=ROUND((? - join_ms)/60000.0, 2), status='closed', updated_at=?
+             WHERE session_id=? AND status='active'`
+          ).bind(now, now, now, session).run();
+        } else {
+          // 旧模式：非 completed 的结果单阻塞关闭
+          const pending = await getPendingB2bOpResultsForSession_(env.DB, session);
+          if (pending.length > 0) {
+            return jsonpOrJson({ ok:true, blocked:true, reason:"pending_b2b_results", session, pending_orders: pending }, callback);
+          }
         }
       }
 
@@ -4289,6 +4349,16 @@ export default {
       const final_confirm_badge = new_status === "draft" ? "" : confirm_badge;
       const final_confirmed_by = new_status === "draft" ? "" : confirmed_by;
 
+      // v25: simple mode extended fields (backwards compatible — empty string / null = no change)
+      const result_entered_by_badge = String(p.result_entered_by_badge || "").trim();
+      const result_entered_by_name = String(p.result_entered_by_name || "").trim();
+      const result_entered_at = result_entered_by_badge ? now : null;
+      const confirmed_at = (new_status === "completed" && final_confirm_badge) ? now : (new_status === "draft" ? null : null);
+      const reviewed_by_badge = new_status === "completed" ? String(p.reviewed_by_badge || final_confirm_badge || "").trim() : (new_status === "draft" ? "" : "");
+      const reviewed_by_name = new_status === "completed" ? String(p.reviewed_by_name || final_confirmed_by || "").trim() : (new_status === "draft" ? "" : "");
+      const reviewed_at = (new_status === "completed" && reviewed_by_badge) ? now : null;
+      const workflow_status_param = String(p.workflow_status || "").trim();
+
       if (existing) {
         // 更新
         const completed_at = new_status === "completed" ? now : null;
@@ -4297,13 +4367,27 @@ export default {
            packed_qty=?, packed_box_count=?, used_carton=?, big_carton_count=?, small_carton_count=?,
            label_count=?, photo_count=?, has_pallet_detail=?, did_pack=?, did_rebox=?, rebox_count=?,
            needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?,
-           remark=?, status=?, confirmed_by=?, confirm_badge=?, customer_name=?, updated_at=?, completed_at=?
+           remark=?, status=?, confirmed_by=?, confirm_badge=?, customer_name=?, updated_at=?, completed_at=?,
+           result_entered_by_badge=COALESCE(NULLIF(?,''), result_entered_by_badge),
+           result_entered_by_name=COALESCE(NULLIF(?,''), result_entered_by_name),
+           result_entered_at=COALESCE(?, result_entered_at),
+           confirmed_at=COALESCE(?, confirmed_at),
+           reviewed_by_badge=CASE WHEN ?='draft' THEN '' WHEN ?!='' THEN ? ELSE reviewed_by_badge END,
+           reviewed_by_name=CASE WHEN ?='draft' THEN '' WHEN ?!='' THEN ? ELSE reviewed_by_name END,
+           reviewed_at=COALESCE(?, reviewed_at),
+           workflow_status=CASE WHEN ?!='' THEN ? ELSE workflow_status END
            WHERE id=?`
         ).bind(operation_mode, sku_kind_count, box_count, pallet_count,
           packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
           label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
-          remark, new_status, final_confirmed_by, final_confirm_badge, customer_name, now, completed_at, existing.id).run();
+          remark, new_status, final_confirmed_by, final_confirm_badge, customer_name, now, completed_at,
+          result_entered_by_badge, result_entered_by_name, result_entered_at, confirmed_at,
+          new_status, reviewed_by_badge, reviewed_by_badge,
+          new_status, reviewed_by_name, reviewed_by_name,
+          reviewed_at,
+          workflow_status_param, workflow_status_param,
+          existing.id).run();
         return jsonpOrJson({ ok:true, id: existing.id, created: false }, callback);
       } else {
         // 新建
@@ -4315,15 +4399,21 @@ export default {
            label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
            needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
            remark, photo_urls_json, status, created_by, confirmed_by, confirm_badge, first_session_id,
-           created_at, updated_at, completed_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?,?)`
+           created_at, updated_at, completed_at,
+           result_entered_by_badge, result_entered_by_name, result_entered_at,
+           confirmed_at, reviewed_by_badge, reviewed_by_name, reviewed_at,
+           workflow_status, temporary_completed_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         ).bind(day_kst, bind.source_type, source_order_no, bind.internal_workorder_id || null,
           customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
           packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
           label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
           remark, new_status, String(p.created_by || "").trim(), final_confirmed_by, final_confirm_badge, session_id,
-          now, now, completed_at).run();
+          now, now, completed_at,
+          result_entered_by_badge, result_entered_by_name, result_entered_at,
+          confirmed_at, reviewed_by_badge, reviewed_by_name, reviewed_at,
+          workflow_status_param, null).run();
         return jsonpOrJson({ ok:true, id: ins.meta && ins.meta.last_row_id, created: true }, callback);
       }
     }
@@ -4357,6 +4447,152 @@ export default {
         if (row) results.push(row);
       }
       return jsonpOrJson({ ok:true, results }, callback);
+    }
+
+    // ===== B2B Simple Mode: Labor Details =====
+
+    if (action === "b2b_simple_labor_join") {
+      const session_id = String(p.session_id || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      const operator_badge = String(p.operator_badge || "").trim();
+      const operator_name = String(p.operator_name || "").trim();
+      const entry_mode = String(p.entry_mode || "simple_mode").trim();
+      if (!session_id || !source_order_no || !operator_badge)
+        return jsonpOrJson({ ok:false, error:"missing required fields" }, callback);
+
+      const bind = await env.DB.prepare(
+        `SELECT source_type, internal_workorder_id, day_kst FROM b2b_operation_bindings WHERE session_id=? AND source_order_no=? LIMIT 1`
+      ).bind(session_id, source_order_no).first();
+      if (!bind) return jsonpOrJson({ ok:false, error:"workorder_not_bound" }, callback);
+
+      // 已 active 则去重
+      const existingLd = await env.DB.prepare(
+        `SELECT id FROM b2b_operation_labor_details WHERE session_id=? AND source_order_no=? AND operator_badge=? AND status='active'`
+      ).bind(session_id, source_order_no, operator_badge).first();
+      if (existingLd) return jsonpOrJson({ ok:true, duplicate:true, id: existingLd.id }, callback);
+
+      const segRs = await env.DB.prepare(
+        `SELECT MAX(segment_no) as max_seg FROM b2b_operation_labor_details WHERE session_id=? AND source_order_no=? AND operator_badge=?`
+      ).bind(session_id, source_order_no, operator_badge).first();
+      const segment_no = ((segRs && segRs.max_seg) || 0) + 1;
+
+      const ins = await env.DB.prepare(
+        `INSERT INTO b2b_operation_labor_details(day_kst,session_id,source_type,source_order_no,internal_workorder_id,operator_badge,operator_name,segment_no,join_ms,entry_mode,status,created_at,updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(bind.day_kst, session_id, bind.source_type, source_order_no, bind.internal_workorder_id||null,
+        operator_badge, operator_name, segment_no, now, entry_mode, 'active', now, now).run();
+
+      // 确保 result 行存在 + workflow_status=working
+      const existResult = await env.DB.prepare(
+        `SELECT id, workflow_status FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+      ).bind(bind.day_kst, bind.source_type, source_order_no).first();
+      if (existResult) {
+        if (!existResult.workflow_status || existResult.workflow_status === '') {
+          await env.DB.prepare(`UPDATE b2b_operation_results SET workflow_status='working', updated_at=? WHERE id=?`).bind(now, existResult.id).run();
+        }
+      }
+      return jsonpOrJson({ ok:true, id: ins.meta && ins.meta.last_row_id, segment_no }, callback);
+    }
+
+    if (action === "b2b_simple_labor_leave") {
+      const session_id = String(p.session_id || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      const operator_badge = String(p.operator_badge || "").trim();
+      if (!session_id || !operator_badge)
+        return jsonpOrJson({ ok:false, error:"missing required fields" }, callback);
+
+      let sql = `SELECT id, join_ms FROM b2b_operation_labor_details WHERE session_id=? AND operator_badge=? AND status='active'`;
+      const binds = [session_id, operator_badge];
+      if (source_order_no) { sql += ` AND source_order_no=?`; binds.push(source_order_no); }
+
+      const rows = await env.DB.prepare(sql).bind(...binds).all();
+      let closed = 0;
+      for (const r of (rows.results || [])) {
+        const dur = (now - r.join_ms) / 60000;
+        await env.DB.prepare(
+          `UPDATE b2b_operation_labor_details SET leave_ms=?, duration_minutes=?, status='closed', updated_at=? WHERE id=?`
+        ).bind(now, Math.round(dur*100)/100, now, r.id).run();
+        closed++;
+      }
+      return jsonpOrJson({ ok:true, closed }, callback);
+    }
+
+    if (action === "b2b_simple_temp_complete") {
+      const session_id = String(p.session_id || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      if (!session_id || !source_order_no)
+        return jsonpOrJson({ ok:false, error:"missing required fields" }, callback);
+
+      const bind = await env.DB.prepare(
+        `SELECT source_type, internal_workorder_id, day_kst FROM b2b_operation_bindings WHERE session_id=? AND source_order_no=? LIMIT 1`
+      ).bind(session_id, source_order_no).first();
+      if (!bind) return jsonpOrJson({ ok:false, error:"workorder_not_bound" }, callback);
+
+      // 关闭所有 active labor details
+      const activeLabor = await env.DB.prepare(
+        `SELECT id, join_ms, operator_badge FROM b2b_operation_labor_details WHERE session_id=? AND source_order_no=? AND status='active'`
+      ).bind(session_id, source_order_no).all();
+      for (const r of (activeLabor.results || [])) {
+        const dur = (now - r.join_ms) / 60000;
+        await env.DB.prepare(
+          `UPDATE b2b_operation_labor_details SET leave_ms=?, duration_minutes=?, status='closed', updated_at=? WHERE id=?`
+        ).bind(now, Math.round(dur*100)/100, now, r.id).run();
+      }
+
+      // 确保 result 行存在，设 workflow_status=pending_result + temporary_completed_at
+      const existResult = await env.DB.prepare(
+        `SELECT id FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+      ).bind(bind.day_kst, bind.source_type, source_order_no).first();
+      if (existResult) {
+        await env.DB.prepare(
+          `UPDATE b2b_operation_results SET workflow_status='pending_result', temporary_completed_at=?, updated_at=? WHERE id=?`
+        ).bind(now, now, existResult.id).run();
+      } else {
+        let customer_name = "";
+        if (bind.internal_workorder_id) {
+          const wo = await env.DB.prepare(`SELECT customer_name FROM b2b_workorders WHERE workorder_id=?`).bind(bind.internal_workorder_id).first();
+          if (wo) customer_name = wo.customer_name || "";
+        }
+        await env.DB.prepare(
+          `INSERT INTO b2b_operation_results(day_kst,source_type,source_order_no,internal_workorder_id,customer_name,status,workflow_status,temporary_completed_at,first_session_id,created_by,created_at,updated_at,photo_urls_json)
+           VALUES(?,?,?,?,?,'draft','pending_result',?,?,?,?,?,'[]')`
+        ).bind(bind.day_kst, bind.source_type, source_order_no, bind.internal_workorder_id||null,
+          customer_name, now, session_id, String(p.operator_id||""), now, now).run();
+      }
+      return jsonpOrJson({ ok:true, temporary_completed_at: now, closed_labor: (activeLabor.results||[]).length }, callback);
+    }
+
+    // 临时切走时批量关闭所有 active labor detail（带 temp_switch_flag）
+    if (action === "b2b_simple_labor_leave_all") {
+      const session_id = String(p.session_id || "").trim();
+      if (!session_id) return jsonpOrJson({ ok:false, error:"missing session_id" }, callback);
+      const is_temp = String(p.temp_switch || "") === "1";
+
+      const rows = await env.DB.prepare(
+        `SELECT id, join_ms FROM b2b_operation_labor_details WHERE session_id=? AND status='active'`
+      ).bind(session_id).all();
+      let closed = 0;
+      for (const r of (rows.results || [])) {
+        const dur = (now - r.join_ms) / 60000;
+        await env.DB.prepare(
+          `UPDATE b2b_operation_labor_details SET leave_ms=?, duration_minutes=?, status='closed', temp_switch_flag=?, updated_at=? WHERE id=?`
+        ).bind(now, Math.round(dur*100)/100, is_temp ? 1 : 0, now, r.id).run();
+        closed++;
+      }
+      return jsonpOrJson({ ok:true, closed }, callback);
+    }
+
+    if (action === "b2b_simple_labor_list") {
+      const session_id = String(p.session_id || "").trim();
+      if (!session_id) return jsonpOrJson({ ok:false, error:"missing session_id" }, callback);
+      const source_order_no = String(p.source_order_no || "").trim();
+
+      let sql = `SELECT * FROM b2b_operation_labor_details WHERE session_id=?`;
+      const binds = [session_id];
+      if (source_order_no) { sql += ` AND source_order_no=?`; binds.push(source_order_no); }
+      sql += ` ORDER BY join_ms ASC`;
+      const rs = await env.DB.prepare(sql).bind(...binds).all();
+      return jsonpOrJson({ ok:true, labor: rs.results || [] }, callback);
     }
 
     // ===== 出库扫码核对 =====

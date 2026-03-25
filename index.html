@@ -707,7 +707,8 @@
     <div class="card">
       <button class="primary" onclick="go('b2b_unload')">卸货 / 하차</button>
       <button class="primary" onclick="go('b2b_tally')">入库理货 / 입고검수</button>
-      <button class="primary" onclick="go('b2b_workorder')">工单操作 / 작업지시</button>
+      <button class="primary" onclick="go('b2b_workorder_simple')" style="background:#0d47a1;border-color:#0d47a1;font-size:16px;padding:14px;">工单操作（简化）/ 작업지시 (간편)</button>
+      <button class="primary" onclick="go('b2b_workorder')" style="background:#546e7a;border-color:#546e7a;font-size:13px;padding:8px;">工单操作（高级管理）/ 작업지시 (고급)</button>
       <button class="primary" onclick="go('b2b_outbound')">出库 / 출고</button>
       <button class="primary" onclick="go('b2b_inventory')">盘点 / 재고조사</button>
       <button class="primary" onclick="go('b2b_field_op')" style="background:#8e24aa;border-color:#8e24aa;">现场记录 / 현장작업</button>
@@ -798,6 +799,67 @@
         <div id="b2bWorkorderOrderList" class="muted">无 / 없음</div>
       </div>
       <button class="primary" onclick="endB2bWorkorder()">结束操作 / 종료</button>
+    </div>
+  </div>
+
+  <!-- B2B WORKORDER SIMPLE MODE -->
+  <div id="page-b2b_workorder_simple" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="back()">返回 / 뒤로</button>
+      <div class="grow pill" style="background:#0d47a1;color:#fff;">B2B 工单操作（简化）/ 작업지시 (간편)</div>
+    </div>
+    <div class="card">
+      <!-- 顶部状态区 -->
+      <div id="smStatusArea" style="background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
+        <div style="font-size:12px;color:#555;">
+          趟次 / 세션: <b id="smSessionId">-</b>
+          &nbsp;负责人 / 담당자: <b id="smOwner">-</b>
+        </div>
+        <div style="font-size:12px;color:#555;margin-top:4px;">
+          当前工单 / 현재 작업지시: <b id="smCurrentOrder" style="color:#0d47a1;font-size:14px;">-</b>
+          &nbsp;状态 / 상태: <span id="smCurrentStatus">-</span>
+        </div>
+        <div style="font-size:12px;color:#555;margin-top:4px;">
+          参与人数 / 참여자: <b id="smWorkerCount">0</b>
+          &nbsp;累计工时 / 누적시간: <span id="smTotalMinutes">-</span>
+        </div>
+      </div>
+
+      <!-- 主按钮区 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+        <button class="primary" onclick="smScanWorkorder()" style="background:#0d47a1;border-color:#0d47a1;">扫工单 / 작업지시 스캔</button>
+        <button class="primary" onclick="smScanWorker()" style="background:#1565c0;border-color:#1565c0;">扫人员 / 작업자 스캔</button>
+        <button class="primary" onclick="smTempComplete()" style="background:#e65100;border-color:#e65100;">暂时完成 / 임시 완료</button>
+        <button class="primary" onclick="smOpenResultForCurrent()" style="background:#2e7d32;border-color:#2e7d32;">录结果 / 결과 입력</button>
+        <button class="primary" onclick="smConfirmWorkorder()" style="background:#6a1b9a;border-color:#6a1b9a;">结束工单 / 작업 확인</button>
+        <button class="primary" onclick="smLeaveTask()" style="background:#757575;border-color:#757575;">离开本环节 / 나가기</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;">
+        <button class="primary" onclick="tempSwitchToUnload()" style="background:#e67e22;border-color:#e67e22;font-size:12px;padding:8px;">临时卸货 / 임시하차</button>
+        <button class="primary" onclick="tempSwitchToLoadout()" style="background:#8e44ad;border-color:#8e44ad;font-size:12px;padding:8px;">临时装车 / 임시상차</button>
+        <button class="primary" id="btnSmReturnFromTemp" style="display:none;background:#27ae60;border-color:#27ae60;font-size:12px;padding:8px;" onclick="returnFromTempTarget()">返回原工单 / 복귀</button>
+      </div>
+
+      <!-- 手动输入 -->
+      <div class="row" style="margin-bottom:8px;">
+        <input id="smManualInput" type="text" placeholder="手动输入工单号 / 수동 입력" style="flex:1;" />
+        <button onclick="smManualAddWorkorder()" style="width:auto;min-width:80px;">添加 / 추가</button>
+      </div>
+
+      <!-- 当前参与人员 -->
+      <div id="smLaborArea" style="background:#f5f5f5;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:700;">当前参与人员 / 현재 참여자</div>
+        <div id="smLaborList" class="muted" style="font-size:12px;margin-top:4px;">无 / 없음</div>
+      </div>
+
+      <!-- 工单列表 -->
+      <div class="listBox">
+        <div style="font-size:13px;font-weight:700;">工单列表 / 작업지시 목록 <span id="smOrderTotal" style="color:#0d47a1;">(0)</span></div>
+        <div id="smOrderList" class="muted">无 / 없음</div>
+      </div>
+
+      <!-- 结束趟次 -->
+      <button class="primary" onclick="smEndSession()" style="background:#c62828;border-color:#c62828;margin-top:8px;">结束趟次 / 세션 종료</button>
     </div>
   </div>
 
