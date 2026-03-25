@@ -4365,7 +4365,7 @@ async function smHandleWorkerScan_(code){
     // 1. 主系统 join（如果还没在 task 中）
     var evId = makeEventId({ event:"join", biz:"B2B", task:"B2B工单操作", wave_id:"", badgeRaw: p.raw });
     if(!hasRecent(evId)){
-      var res = await submitEventSync_({ event:"join", event_id: evId, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, badge: p.raw }, true);
+      var res = await submitEventSync_({ event:"join", event_id: evId, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, da_id: p.raw }, true);
       addRecent(evId);
       // 更新本地 active list
       var reg = taskReg_("B2B工单操作");
