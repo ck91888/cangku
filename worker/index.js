@@ -207,20 +207,20 @@ async function ensureSessionOpen(env, session, operator_id, biz, task, opt_creat
   const ts = opt_created_ms || Date.now();
   const source = opt_source || "scan";
   await env.DB.prepare(
-    `INSERT INTO sessions(session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task,source)
-     VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?, ?)
+    `INSERT INTO sessions(session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task,source,owner_operator_id)
+     VALUES(?, 'OPEN', ?, ?, NULL, NULL, ?, ?, ?, ?)
      ON CONFLICT(session) DO UPDATE SET
        created_ms=MIN(sessions.created_ms, excluded.created_ms),
        biz=CASE WHEN excluded.biz!='' THEN excluded.biz ELSE sessions.biz END,
        task=CASE WHEN excluded.task!='' THEN excluded.task ELSE sessions.task END`
-  ).bind(sid, ts, String(operator_id||""), String(biz||""), String(task||""), source).run();
+  ).bind(sid, ts, String(operator_id||""), String(biz||""), String(task||""), source, String(operator_id||"")).run();
 }
 
 async function getSession(env, session) {
   const sid = String(session || "").trim();
   if (!sid) return null;
   const r = await env.DB.prepare(
-    `SELECT session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task
+    `SELECT session,status,created_ms,created_by_operator,closed_ms,closed_by_operator,biz,task,owner_operator_id,owner_changed_at,owner_changed_by
      FROM sessions WHERE session=? LIMIT 1`
   ).bind(sid).first();
   return r || null;
@@ -923,6 +923,17 @@ export default {
           )`).run();
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v23_wms_import_batches', ?)`).bind(Date.now()).run();
         }
+
+        // v24: session owner transfer（趟次交接）
+        const m24 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v24_session_owner_transfer'`).first();
+        if (!m24) {
+          try { await env.DB.prepare(`ALTER TABLE sessions ADD COLUMN owner_operator_id TEXT`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE sessions ADD COLUMN owner_changed_at INTEGER`).run(); } catch(e) {}
+          try { await env.DB.prepare(`ALTER TABLE sessions ADD COLUMN owner_changed_by TEXT`).run(); } catch(e) {}
+          // 回填：owner_operator_id = created_by_operator
+          await env.DB.prepare(`UPDATE sessions SET owner_operator_id = created_by_operator WHERE owner_operator_id IS NULL`).run();
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v24_session_owner_transfer', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -1012,6 +1023,9 @@ export default {
         closed_by_operator: s?.closed_by_operator || "",
         biz: s?.biz || "",
         task: s?.task || "",
+        owner_operator_id: s?.owner_operator_id || s?.created_by_operator || "",
+        owner_changed_at: s?.owner_changed_at || 0,
+        owner_changed_by: s?.owner_changed_by || "",
         active: activeList
       }, callback);
     }
@@ -1164,7 +1178,7 @@ export default {
         // 豁免：拣货/B2B卸货/进口卸货 session 允许与其他 session 同时存在（临时去卸货场景）
         const open = await env.DB.prepare(
           `SELECT session,biz,task FROM sessions
-           WHERE status='OPEN' AND created_by_operator=?
+           WHERE status='OPEN' AND COALESCE(owner_operator_id, created_by_operator)=?
            AND NOT (biz='B2C' AND task='拣货')
            AND NOT (biz='B2B' AND task='B2B卸货')
            AND NOT (biz='进口' AND task='卸货')
@@ -1191,7 +1205,7 @@ export default {
         if (isExempt) {
           const dupExempt = await env.DB.prepare(
             `SELECT session, biz, task FROM sessions
-             WHERE status='OPEN' AND created_by_operator=? AND biz=? AND task=?
+             WHERE status='OPEN' AND COALESCE(owner_operator_id, created_by_operator)=? AND biz=? AND task=?
              LIMIT 1`
           ).bind(operator_id, biz, task).first();
           if (dupExempt && String(dupExempt.session || "") !== session) {
@@ -1343,11 +1357,96 @@ export default {
       if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
       const rows = await env.DB.prepare(
         `SELECT session, biz, task, created_ms FROM sessions
-         WHERE status='OPEN' AND created_by_operator=?
+         WHERE status='OPEN' AND COALESCE(owner_operator_id, created_by_operator)=?
            AND (source IS NULL OR source != 'manual_correction')
          ORDER BY created_ms DESC LIMIT 10`
       ).bind(operator_id).all();
       return jsonpOrJson({ ok:true, sessions: rows.results || [] }, callback);
+    }
+
+    // ===== 趟次交接 / owner 转移 =====
+    if (action === "session_transfer_owner") {
+      const session = String(p.session || "").trim();
+      const from_operator_id = String(p.from_operator_id || "").trim();
+      const to_operator_id = String(p.to_operator_id || "").trim();
+      const operator_id = String(p.operator_id || "").trim();
+      if (!session) return jsonpOrJson({ ok:false, error:"missing session" }, callback);
+      if (!to_operator_id) return jsonpOrJson({ ok:false, error:"missing to_operator_id" }, callback);
+      if (!operator_id) return jsonpOrJson({ ok:false, error:"missing operator_id" }, callback);
+
+      // 1. 查 session
+      const sess = await env.DB.prepare(
+        `SELECT session,status,created_by_operator,owner_operator_id FROM sessions WHERE session=? LIMIT 1`
+      ).bind(session).first();
+      if (!sess) return jsonpOrJson({ ok:false, error:"session_not_found" }, callback);
+      if (String(sess.status || "").toUpperCase() !== "OPEN") return jsonpOrJson({ ok:false, error:"session_not_open" }, callback);
+
+      // 2. 确认当前 owner，不信前端传值
+      const currentOwner = String(sess.owner_operator_id || sess.created_by_operator || "");
+      if (from_operator_id && from_operator_id !== currentOwner) {
+        return jsonpOrJson({ ok:false, error:"owner_mismatch", current_owner: currentOwner }, callback);
+      }
+      if (to_operator_id === currentOwner) {
+        return jsonpOrJson({ ok:false, error:"already_owner" }, callback);
+      }
+
+      // 3. to_operator_id 必须在 active 列表
+      const stub = locksStub(env);
+      const lr = await stub.fetch("https://locks/do", {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({ action:"locks_by_session", session })
+      });
+      const lockData = await lr.json();
+      const activeList = lockData.active || [];
+      const toInActive = activeList.some(lk => String(lk.badge || "") === to_operator_id);
+      if (!toInActive) return jsonpOrJson({ ok:false, error:"to_operator_not_active" }, callback);
+
+      // 4. to_operator_id 不能已有阻塞性 OPEN session（复用 start 同口径）
+      const blocking = await env.DB.prepare(
+        `SELECT session,biz,task FROM sessions
+         WHERE status='OPEN' AND COALESCE(owner_operator_id, created_by_operator)=?
+         AND session!=?
+         AND NOT (biz='B2C' AND task='拣货')
+         AND NOT (biz='B2B' AND task='B2B卸货')
+         AND NOT (biz='进口' AND task='卸货')
+         ORDER BY created_ms DESC LIMIT 1`
+      ).bind(to_operator_id, session).first();
+      if (blocking) {
+        return jsonpOrJson({
+          ok:false, error:"to_operator_has_open_session",
+          open_session: String(blocking.session),
+          open_biz: String(blocking.biz || ""),
+          open_task: String(blocking.task || "")
+        }, callback);
+      }
+
+      // 5. 更新 owner
+      const transferTs = Date.now();
+      await env.DB.prepare(
+        `UPDATE sessions SET owner_operator_id=?, owner_changed_at=?, owner_changed_by=? WHERE session=?`
+      ).bind(to_operator_id, transferTs, operator_id, session).run();
+
+      // 6. 审计记录
+      const transferEvId = "owner_transfer_" + session + "_" + transferTs;
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO events(server_ms, client_ms, event_id, event, badge, biz, task, session, wave_id, operator_id, ok, note)
+         VALUES(?, ?, ?, 'owner_transfer', ?, ?, ?, ?, '', ?, 1, ?)`
+      ).bind(
+        transferTs, transferTs, transferEvId,
+        to_operator_id,
+        sess.biz || "", sess.task || "", session,
+        operator_id,
+        "from:" + currentOwner + " to:" + to_operator_id
+      ).run();
+
+      return jsonpOrJson({
+        ok:true,
+        session,
+        from_operator_id: currentOwner,
+        to_operator_id,
+        owner_changed_at: transferTs
+      }, callback);
     }
 
     if (action === "admin_force_leave") {
@@ -1667,7 +1766,7 @@ export default {
       if (since_ms) { where += " AND (closed_ms IS NULL OR closed_ms >= ?)"; binds.push(since_ms); }
       if (until_ms) { where += " AND created_ms <= ?"; binds.push(until_ms); }
 
-      const sessionsSql = `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator,source FROM sessions ${where} ORDER BY created_ms DESC LIMIT ?`;
+      const sessionsSql = `SELECT session,status,biz,task,created_ms,created_by_operator,closed_ms,closed_by_operator,source,owner_operator_id FROM sessions ${where} ORDER BY created_ms DESC LIMIT ?`;
       binds.push(limit);
       const sessionRows = (await env.DB.prepare(sessionsSql).bind(...binds).all()).results || [];
       const stub = locksStub(env);
@@ -1697,6 +1796,7 @@ export default {
           closed_ms: s.closed_ms || 0,
           closed_by_operator: s.closed_by_operator || "",
           source: s.source || "scan",
+          owner_operator_id: s.owner_operator_id || s.created_by_operator || "",
           active: activeLocks
         });
       }

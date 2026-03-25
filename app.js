@@ -372,6 +372,7 @@ var b2bWorkorderBindings = {}; // { orderNo: { source_type, match_status, day_ks
 var _b2bBindingsLoaded = false; // true after first loadB2bBindings() success
 var _b2bSelfHealPending = false; // guard: one self-heal reload at a time
 var b2bWorkorderResults = {};  // { resultKey: { operation_mode, box_count, pallet_count, ... } }  key = day_kst||source_type||source_order_no
+var _sessionOwnerInfo = null; // { created_by_operator, owner_operator_id, owner_changed_at, owner_changed_by }
 
 var lastScanAt = 0;
 var scanBusy = false;
@@ -738,6 +739,14 @@ async function syncActiveFromServer_(){
   try{
     var res = await jsonp(LOCK_URL, { action:"session_info", session: currentSessionId }, { skipBusy: true });
     if(!res || !res.ok) return;
+    // 缓存 owner 信息
+    _sessionOwnerInfo = {
+      created_by_operator: res.created_by_operator || "",
+      owner_operator_id: res.owner_operator_id || res.created_by_operator || "",
+      owner_changed_at: res.owner_changed_at || 0,
+      owner_changed_by: res.owner_changed_by || ""
+    };
+    updateB2bOwnerDisplay_();
     var serverLocks = res.active || [];
     // 按 task 分组
     var byTask = {};
@@ -2062,7 +2071,7 @@ function renderB2bTallyUI(){
 }
 
 /** ===== B2B Workorder (like B2C BulkOut) ===== */
-function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); b2bWorkorderBindings = {}; _b2bBindingsLoaded = false; _b2bSelfHealPending = false; b2bWorkorderResults = {}; }, renderB2bWorkorderUI); }
+function startB2bWorkorder(e){ startGeneric_(e, "B2B", "B2B工单操作", "b2b_workorder", function(){ scannedB2bWorkorders = new Set(); activeB2bWorkorder = new Set(); b2bWorkorderBindings = {}; _b2bBindingsLoaded = false; _b2bSelfHealPending = false; b2bWorkorderResults = {}; _sessionOwnerInfo = null; }, renderB2bWorkorderUI); }
 async function endB2bWorkorder(){ if(!acquireBusy_()) return; try{ await endSessionGlobal_(); }finally{ releaseBusy_(); } }
 
 function callB2bOpBind(orderNo){
@@ -3765,6 +3774,7 @@ function renderB2bWorkorderUI(){
   var c = document.getElementById("b2bWorkorderOrderCount");
   var l = document.getElementById("b2bWorkorderOrderList");
   if(c) c.textContent = String(scannedB2bWorkorders.size);
+  updateB2bOwnerDisplay_();
 
   // 跨天 session 提示
   var banner = document.getElementById("b2bCrossDayBanner");
@@ -3807,6 +3817,104 @@ function renderB2bWorkorderUI(){
     html += sec.items.map(function(x){ return renderB2bBindCard_(x); }).join("");
   });
   l.innerHTML = html;
+}
+
+function updateB2bOwnerDisplay_(){
+  var area = document.getElementById("b2bOwnerArea");
+  if(!area) return;
+  if(!currentSessionId || !_sessionOwnerInfo){
+    area.style.display = "none";
+    return;
+  }
+  area.style.display = "";
+  var creatorEl = document.getElementById("b2bSessionCreator");
+  var ownerEl = document.getElementById("b2bSessionOwner");
+  var btnEl = document.getElementById("btnTransferOwner");
+  if(creatorEl) creatorEl.textContent = _sessionOwnerInfo.created_by_operator || "-";
+  if(ownerEl) ownerEl.textContent = _sessionOwnerInfo.owner_operator_id || "-";
+
+  // 按钮：只有当前操作员===当前owner 且 active>=2 时显示
+  if(btnEl){
+    var curOp = getOperatorId();
+    var isOwner = curOp && curOp === _sessionOwnerInfo.owner_operator_id;
+    // 检查 active 人数（从 B2B工单操作 task registry）
+    var reg = null;
+    for(var i=0;i<TASK_REGISTRY.length;i++){ if(TASK_REGISTRY[i].task==="B2B工单操作"){ reg=TASK_REGISTRY[i]; break; } }
+    var activeCount = reg ? reg.get().size : 0;
+    btnEl.style.display = (isOwner && activeCount >= 2) ? "" : "none";
+  }
+}
+
+async function transferSessionOwner(){
+  if(!currentSessionId){ alert("无当前趟次"); return; }
+  if(!_sessionOwnerInfo){ alert("负责人信息未加载，请稍后重试"); return; }
+  var curOp = getOperatorId();
+  if(!curOp){ alert("未设置操作员"); return; }
+  if(curOp !== _sessionOwnerInfo.owner_operator_id){
+    alert("只有当前负责人才能交接。\n当前负责人: " + _sessionOwnerInfo.owner_operator_id);
+    return;
+  }
+
+  // 从 active 列表排除当前 owner
+  var reg = null;
+  for(var i=0;i<TASK_REGISTRY.length;i++){ if(TASK_REGISTRY[i].task==="B2B工单操作"){ reg=TASK_REGISTRY[i]; break; } }
+  if(!reg){ alert("任务注册未找到"); return; }
+  var activeSet = reg.get();
+  var candidates = [];
+  activeSet.forEach(function(b){ if(b !== curOp) candidates.push(b); });
+  if(candidates.length === 0){ alert("当前无其他在岗人员可交接"); return; }
+
+  // 选择目标
+  var msg = "选择交接目标（输入序号）：\n";
+  candidates.forEach(function(b, idx){
+    var p = parseBadge(b);
+    msg += (idx+1) + ". " + (p.name ? p.id + " " + p.name : b) + "\n";
+  });
+  var choice = prompt(msg);
+  if(!choice) return;
+  var idx = parseInt(choice, 10) - 1;
+  if(isNaN(idx) || idx < 0 || idx >= candidates.length){ alert("无效选择"); return; }
+  var toOp = candidates[idx];
+  var toP = parseBadge(toOp);
+  var toLabel = toP.name ? toP.id + " " + toP.name : toOp;
+
+  if(!confirm("确认将负责人交接给 " + toLabel + " ？\n\n交接后对方将成为该趟次负责人。")) return;
+
+  try{
+    setStatus("正在交接负责人... ⏳", true);
+    var res = await jsonp(LOCK_URL, {
+      action: "session_transfer_owner",
+      session: currentSessionId,
+      from_operator_id: curOp,
+      to_operator_id: toOp,
+      operator_id: curOp
+    }, { skipBusy: false });
+    if(!res || !res.ok){
+      var errMsg = "交接失败";
+      if(res && res.error === "owner_mismatch") errMsg = "负责人已变更为 " + (res.current_owner || "?") + "，请刷新重试";
+      else if(res && res.error === "to_operator_not_active") errMsg = "目标人员已不在作业中";
+      else if(res && res.error === "to_operator_has_open_session") errMsg = "目标人员已有其他未结束趟次（" + (res.open_biz||"") + "/" + (res.open_task||"") + "）";
+      else if(res && res.error === "already_owner") errMsg = "目标已是当前负责人";
+      else if(res && res.error) errMsg += "：" + res.error;
+      setStatus("交接失败 ❌", false);
+      alert(errMsg);
+      return;
+    }
+    // 成功：刷新
+    _sessionOwnerInfo = {
+      created_by_operator: _sessionOwnerInfo.created_by_operator,
+      owner_operator_id: toOp,
+      owner_changed_at: res.owner_changed_at || Date.now(),
+      owner_changed_by: curOp
+    };
+    updateB2bOwnerDisplay_();
+    fetchOperatorOpenSessions();
+    setStatus("负责人已交接给 " + toLabel + " ✅", false);
+    alert("负责人已交接给 " + toLabel);
+  }catch(e){
+    setStatus("交接失败（网络错误）❌", false);
+    alert("交接失败，请检查网络后重试");
+  }
 }
 
 function renderB2bBindCard_(x){
