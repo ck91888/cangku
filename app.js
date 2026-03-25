@@ -421,7 +421,20 @@ var SM_T = {
   leave_confirm:         ["确认离开本环节？","이 작업에서 나가시겠습니까?"],
   scan_worker_title:     ["扫码工牌（加入工单）","명찰 스캔 (작업지시 참여)"],
   no_active_labor:       ["当前无人在此工单作业","현재 이 작업지시에 참여자가 없습니다"],
-  order_not_working:     ["该工单不在作业中状态","이 작업지시는 작업중 상태가 아닙니다"]
+  order_not_working:     ["该工单不在作业中状态","이 작업지시는 작업중 상태가 아닙니다"],
+  confirm_submit:        ["⚠️ 确认完成提交？\n\n完成后该结果将进入正式统计。","⚠️ 제출을 확인하시겠습니까?\n\n제출 후 정식 통계에 반영됩니다."],
+  confirm_submit_full:   ["⚠️ 确认完成提交？\n\n完成后该结果将进入正式统计，请确认数据无误。","⚠️ 제출을 확인하시겠습니까?\n\n정식 통계에 반영되니 데이터를 확인해 주세요."],
+  badge_confirm_title:   ["🔒 扫职员工牌确认完成","🔒 직원 명찰 스캔으로 완료 확인"],
+  badge_confirm_wo:      ["工单","작업지시"],
+  badge_confirm_req:     ["必须扫描职员工牌（EMP-...），不支持手动输入","직원 명찰(EMP-...) 스캔 필수, 수동 입력 불가"],
+  badge_confirm_ph:      ["等待扫描职员工牌...","직원 명찰 스캔 대기중..."],
+  badge_confirm_scan:    ["📷 开始扫描职员工牌","📷 직원 명찰 스캔 시작"],
+  badge_confirm_cancel:  ["取消","취소"],
+  badge_confirm_ok:      ["确认完成","확인 완료"],
+  badge_scan_first:      ["请先点击「开始扫描职员工牌」扫描 EMP 工牌\n\n不支持手动输入","먼저 「직원 명찰 스캔 시작」을 눌러 EMP 명찰을 스캔하세요\n\n수동 입력 불가"],
+  badge_invalid_emp:     ["工牌格式无效，必须是职员工牌（EMP-...）","명찰 형식 오류, 직원 명찰(EMP-...) 필수"],
+  form_data_lost:        ["表单数据丢失，请重新操作","양식 데이터 소실, 다시 시도하세요"],
+  revert_draft_confirm:  ["确认退回草稿？\n将清除完成确认记录，状态改回草稿。","초안으로 되돌리시겠습니까?\n완료 확인 기록이 삭제되고 초안 상태로 변경됩니다."]
 };
 function smt_(key){ var t = SM_T[key]; return t ? t[0] + " / " + t[1] : key; }
 function smtz_(key){ var t = SM_T[key]; return t ? t[0] : key; } // 仅中文
@@ -2548,7 +2561,7 @@ function submitResult(st){
   if(_smIsSimpleMode && getHashPage() === "b2b_workorder_simple"){
     if(st === "completed"){
       // 简化模式下不允许直接 complete，引导用户通过"结束工单"按钮
-      if(!confirm("⚠️ 确认完成提交？\n\n完成后该结果将进入正式统计。")) return;
+      if(!confirm(smt_("confirm_submit"))) return;
       _showBadgeConfirmLayer();
       return;
     }
@@ -2560,7 +2573,7 @@ function submitResult(st){
   }
   if(st === "completed"){
     // 第一步：强确认
-    if(!confirm("⚠️ 确认完成提交？\n\n完成后该结果将进入正式统计，请确认数据无误。")) return;
+    if(!confirm(smt_("confirm_submit_full"))) return;
     // 第二步：弹出扫工牌确认层
     _showBadgeConfirmLayer();
     return;
@@ -2582,15 +2595,15 @@ function _showBadgeConfirmLayer(){
   window._rfConfirmBadgeRaw = "";
 
   body.innerHTML = '<div style="text-align:center;padding:20px 0;">' +
-    '<div style="font-size:18px;font-weight:800;margin-bottom:12px;">🔒 扫职员工牌确认完成</div>' +
-    '<div style="font-size:13px;color:#555;margin-bottom:12px;">工单: <b>'+esc(orderNo)+'</b></div>' +
-    '<div style="font-size:13px;color:#c00;margin-bottom:16px;">必须扫描职员工牌（EMP-...），不支持手动输入</div>' +
-    '<input id="rf-confirm-badge" type="text" readonly placeholder="等待扫描职员工牌..." ' +
+    '<div style="font-size:18px;font-weight:800;margin-bottom:12px;">'+smt_("badge_confirm_title")+'</div>' +
+    '<div style="font-size:13px;color:#555;margin-bottom:12px;">'+smt_("badge_confirm_wo")+': <b>'+esc(orderNo)+'</b></div>' +
+    '<div style="font-size:13px;color:#c00;margin-bottom:16px;">'+smt_("badge_confirm_req")+'</div>' +
+    '<input id="rf-confirm-badge" type="text" readonly placeholder="'+smt_("badge_confirm_ph")+'" ' +
       'style="width:90%;font-size:18px;padding:12px;text-align:center;border:2px solid #2e7d32;border-radius:8px;margin-bottom:12px;background:#f5f5f5;" />' +
-    '<button onclick="_openBadgeScanner()" style="width:90%;padding:12px;font-size:15px;background:#1565c0;color:#fff;border:none;border-radius:8px;margin-bottom:12px;cursor:pointer;">📷 开始扫描职员工牌</button>' +
+    '<button onclick="_openBadgeScanner()" style="width:90%;padding:12px;font-size:15px;background:#1565c0;color:#fff;border:none;border-radius:8px;margin-bottom:12px;cursor:pointer;">'+smt_("badge_confirm_scan")+'</button>' +
     '<div style="display:flex;gap:8px;justify-content:center;">' +
-      '<button onclick="_cancelBadgeConfirm()" style="flex:1;padding:10px;font-size:14px;">取消</button>' +
-      '<button onclick="_doBadgeConfirmSubmit()" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">确认完成</button>' +
+      '<button onclick="_cancelBadgeConfirm()" style="flex:1;padding:10px;font-size:14px;">'+smt_("badge_confirm_cancel")+'</button>' +
+      '<button onclick="_doBadgeConfirmSubmit()" style="flex:1;padding:10px;font-size:14px;background:#2e7d32;color:#fff;border:none;border-radius:6px;">'+smt_("badge_confirm_ok")+'</button>' +
     '</div>' +
   '</div>';
 }
@@ -2616,16 +2629,16 @@ function _cancelBadgeConfirm(){
 function _doBadgeConfirmSubmit(){
   var badgeRaw = window._rfConfirmBadgeRaw || "";
   if(!badgeRaw){
-    alert("请先点击「开始扫描职员工牌」扫描 EMP 工牌\n\n不支持手动输入");
+    alert(smt_("badge_scan_first"));
     return;
   }
   var p = parseBadge(badgeRaw);
   if(!isEmpId(p.id)){
-    alert("工牌格式无效，必须是职员工牌（EMP-...）");
+    alert(smt_("badge_invalid_emp"));
     return;
   }
   var payload = window._rfPendingPayload;
-  if(!payload){ alert("表单数据丢失，请重新操作"); closeResultForm(); return; }
+  if(!payload){ alert(smt_("form_data_lost")); closeResultForm(); return; }
   payload.confirm_badge = p.id;
   payload.confirmed_by = p.name || p.id;
   window._rfPendingPayload = null;
@@ -2634,7 +2647,7 @@ function _doBadgeConfirmSubmit(){
 }
 
 function revertResultToDraft(orderNo){
-  if(!confirm("确认退回草稿？\n将清除完成确认记录，状态改回草稿。")) return;
+  if(!confirm(smt_("revert_draft_confirm"))) return;
   var binding = b2bWorkorderBindings[orderNo];
   if(!binding || !binding.day_kst){ alert("绑定信息缺失，请刷新后重试"); return; }
   var kstDay = binding.day_kst;
