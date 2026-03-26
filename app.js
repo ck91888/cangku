@@ -5307,7 +5307,7 @@ async function openScannerCommon(){
       scanBusy = true;
       try{
         await smHandleLeaveScan_(code);
-        // 不关闭扫码器，允许连续扫多人离开
+        await closeScanner();
       }finally{ scanBusy = false; }
       return;
     }
