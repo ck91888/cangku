@@ -439,7 +439,8 @@ var SM_T = {
   leave_scan_title:      ["扫描离开员工工牌","퇴장 작업자 명찰 스캔"],
   leave_scan_hint:       ["请扫描要离开的员工工牌","퇴장할 작업자 명찰을 스캔하세요"],
   leave_not_active:      ["该员工当前不在本环节","해당 직원은 현재 이 작업에 참여 중이 아닙니다"],
-  leave_one_ok:          ["已离开","퇴장 완료"]
+  leave_one_ok:          ["已离开","퇴장 완료"],
+  end_blocked_pending:   ["仍有工单尚未录入结果，不能结束趟次","아직 결과 입력이 완료되지 않은 작업지시가 있어 세션을 종료할 수 없습니다"]
 };
 function smt_(key){ var t = SM_T[key]; return t ? t[0] + " / " + t[1] : key; }
 function smtz_(key){ var t = SM_T[key]; return t ? t[0] : key; } // 仅中文
@@ -4657,6 +4658,22 @@ async function smHandleLeaveScan_(code){
 // --- 结束趟次 ---
 async function smEndSession(){
   if(!currentSessionId){ setStatus(smt_("no_session"), false); return; }
+  // 前端预校验：检查工单状态
+  var blockWorking = [];
+  var blockPending = [];
+  for(var rk in b2bWorkorderResults){
+    var r = b2bWorkorderResults[rk];
+    if(r.workflow_status === "working") blockWorking.push(r.source_order_no);
+    if(r.workflow_status === "pending_result") blockPending.push(r.source_order_no);
+  }
+  if(blockWorking.length > 0){
+    alert(smt_("end_blocked_working") + "\n\n" + blockWorking.join(", "));
+    return;
+  }
+  if(blockPending.length > 0){
+    alert(smt_("end_blocked_pending") + "\n\n" + blockPending.join(", "));
+    return;
+  }
   if(!acquireBusy_()) return;
   try{
     // 简化模式关闭：传 simple_mode=1
@@ -4673,7 +4690,9 @@ async function smEndSession(){
       } else if(res.reason === "unpaired_joins"){
         alert("有未配对的 join / 매칭되지 않은 참여자\n\n" + (res.badges||[]).join(", "));
       } else if(res.reason === "working_b2b_orders"){
-        alert(smtz_("end_blocked_working") + "\n\n" + (res.pending_orders||[]).map(function(o){ return o.source_order_no; }).join(", "));
+        alert(smt_("end_blocked_working") + "\n\n" + (res.pending_orders||[]).map(function(o){ return o.source_order_no; }).join(", "));
+      } else if(res.reason === "pending_result_b2b_orders"){
+        alert(smt_("end_blocked_pending") + "\n\n" + (res.pending_orders||[]).map(function(o){ return o.source_order_no; }).join(", "));
       } else {
         alert("无法结束: " + (res.reason||""));
       }

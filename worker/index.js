@@ -1092,15 +1092,19 @@ export default {
 
       // ★ 简化模式预清理：在标准锁/配平检查之前，自动处理所有 leave + 释放锁
       if (simple_mode_b2b) {
-        // 1) 阻塞：仍有 working 工单
-        const workingRs = await env.DB.prepare(
-          `SELECT r.source_order_no FROM b2b_operation_results r
+        // 1) 阻塞：仍有 working 或 pending_result 工单
+        const blockRs = await env.DB.prepare(
+          `SELECT r.source_order_no, r.workflow_status FROM b2b_operation_results r
            JOIN b2b_operation_bindings b ON b.day_kst=r.day_kst AND b.source_type=r.source_type AND b.source_order_no=r.source_order_no AND b.session_id=?
-           WHERE r.workflow_status='working'`
+           WHERE r.workflow_status IN ('working','pending_result')`
         ).bind(session).all();
-        if ((workingRs.results || []).length > 0) {
-          const workingOrders = (workingRs.results || []).map(r => ({ source_order_no: r.source_order_no, result_status: "working" }));
-          return jsonpOrJson({ ok:true, blocked:true, reason:"working_b2b_orders", session, pending_orders: workingOrders }, callback);
+        const blockOrders = (blockRs.results || []);
+        if (blockOrders.length > 0) {
+          const hasWorking = blockOrders.some(r => r.workflow_status === 'working');
+          return jsonpOrJson({ ok:true, blocked:true,
+            reason: hasWorking ? "working_b2b_orders" : "pending_result_b2b_orders",
+            session, pending_orders: blockOrders.map(r => ({ source_order_no: r.source_order_no, result_status: r.workflow_status }))
+          }, callback);
         }
         // 2) 关闭所有残留 active labor details
         await env.DB.prepare(
