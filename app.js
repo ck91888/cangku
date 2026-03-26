@@ -4611,24 +4611,28 @@ async function smHandleLeaveScan_(code){
   }
   var p = parseBadge(code);
   if(!currentSessionId){ setStatus("趟次丢失 / 세션 없음", false); return; }
-  // 检查该员工是否在岗
-  var isActive = _smLabor.some(function(l){
+  // 检查该员工是否在 task 级在岗（task registry）或工单级 active labor
+  var reg = taskReg_("B2B工单操作");
+  var inTaskRegistry = reg && reg.get().has(p.raw);
+  var hasActiveLabor = _smLabor.some(function(l){
     return l.operator_badge === p.id && l.status === "active";
   });
-  if(!isActive){
+  if(!inTaskRegistry && !hasActiveLabor){
     setStatus("⚠️ " + (p.name||p.id) + " " + smt_("leave_not_active"), false);
     try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
     return;
   }
   scanBusy = true;
   try{
-    // 1. 关闭该员工的 active labor details
-    await jsonp(LOCK_URL, {
-      action:"b2b_simple_labor_leave",
-      session_id: currentSessionId,
-      source_order_no: _smCurrentOrder,
-      operator_badge: p.id
-    }, { skipBusy:true });
+    // 1. 关闭该员工的 active labor details（如有）
+    if(hasActiveLabor){
+      await jsonp(LOCK_URL, {
+        action:"b2b_simple_labor_leave",
+        session_id: currentSessionId,
+        source_order_no: _smCurrentOrder,
+        operator_badge: p.id
+      }, { skipBusy:true });
+    }
     // 2. 主系统 leave
     var evId = makeEventId({ event:"leave", biz:"B2B", task:"B2B工单操作", wave_id:"", badgeRaw: p.raw });
     if(!hasRecent(evId)){
@@ -4636,9 +4640,10 @@ async function smHandleLeaveScan_(code){
       addRecent(evId);
     }
     // 3. 更新本地 active list（只移除这一个人）
-    var reg = taskReg_("B2B工单操作");
     if(reg){ var s = reg.get(); s.delete(p.raw); reg.set(s); renderActiveLists(); }
-    showScanFeedback_((p.name||p.id) + " " + smt_("leave_one_ok") + " ✅", "#e6ffe6", "#006400", 1500);
+    var feedbackMsg = (p.name||p.id) + " " + smt_("leave_one_ok") + " ✅";
+    if(!hasActiveLabor) feedbackMsg = (p.name||p.id) + " " + smt_("leave_one_ok") + " ✅ (无进行中工单作业 / 진행 중 작업 없음)";
+    showScanFeedback_(feedbackMsg, "#e6ffe6", "#006400", 2000);
     smLoadLabor_();
     smRender_();
     try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
