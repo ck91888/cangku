@@ -434,7 +434,11 @@ var SM_T = {
   badge_scan_first:      ["请先点击「开始扫描职员工牌」扫描 EMP 工牌\n\n不支持手动输入","먼저 「직원 명찰 스캔 시작」을 눌러 EMP 명찰을 스캔하세요\n\n수동 입력 불가"],
   badge_invalid_emp:     ["工牌格式无效，必须是职员工牌（EMP-...）","명찰 형식 오류, 직원 명찰(EMP-...) 필수"],
   form_data_lost:        ["表单数据丢失，请重新操作","양식 데이터 소실, 다시 시도하세요"],
-  revert_draft_confirm:  ["确认退回草稿？\n将清除完成确认记录，状态改回草稿。","초안으로 되돌리시겠습니까?\n완료 확인 기록이 삭제되고 초안 상태로 변경됩니다."]
+  revert_draft_confirm:  ["确认退回草稿？\n将清除完成确认记录，状态改回草稿。","초안으로 되돌리시겠습니까?\n완료 확인 기록이 삭제되고 초안 상태로 변경됩니다."],
+  leave_scan_title:      ["扫描离开员工工牌","퇴장 작업자 명찰 스캔"],
+  leave_scan_hint:       ["请扫描要离开的员工工牌","퇴장할 작업자 명찰을 스캔하세요"],
+  leave_not_active:      ["该员工当前不在本环节","해당 직원은 현재 이 작업에 참여 중이 아닙니다"],
+  leave_one_ok:          ["已离开","퇴장 완료"]
 };
 function smt_(key){ var t = SM_T[key]; return t ? t[0] + " / " + t[1] : key; }
 function smtz_(key){ var t = SM_T[key]; return t ? t[0] : key; } // 仅中文
@@ -4584,39 +4588,64 @@ async function _smDoConfirm(){
 
 // --- 离开本环节 ---
 async function smLeaveTask(){
-  if(!confirm(smt_("leave_confirm"))) return;
-  if(!acquireBusy_()) return;
+  if(!currentSessionId){ alert("趟次丢失，请刷新页面 / 세션 없음, 새로고침하세요"); return; }
+  if(!_smCurrentOrder && scannedB2bWorkorders.size === 1){
+    _smCurrentOrder = Array.from(scannedB2bWorkorders)[0];
+    _smPersistCurrentOrder_();
+    smRender_();
+  }
+  if(!_smCurrentOrder){ alert(smt_("no_current_order")); return; }
+  // 打开扫码器，等待扫描单个离开工牌
+  scanMode = "b2b_simple_leave";
+  document.getElementById("scanTitle").textContent = smt_("leave_scan_title");
+  setStatus(smt_("leave_scan_hint"), false);
+  await openScannerCommon();
+}
+
+// 处理简化模式扫到的离开工牌
+async function smHandleLeaveScan_(code){
+  if(!isOperatorBadge(code)){
+    setStatus("无效工牌 / 유효하지 않은 명찰: " + code, false);
+    return;
+  }
+  var p = parseBadge(code);
+  if(!currentSessionId){ setStatus("趟次丢失 / 세션 없음", false); return; }
+  // 检查该员工是否在岗
+  var isActive = _smLabor.some(function(l){
+    return l.operator_badge === p.id && l.status === "active";
+  });
+  if(!isActive){
+    setStatus("⚠️ " + (p.name||p.id) + " " + smt_("leave_not_active"), false);
+    try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
+    return;
+  }
+  scanBusy = true;
   try{
-    // 1. 关闭所有 active labor details（全 session，不限单人）
-    if(currentSessionId){
-      await jsonp(LOCK_URL, {
-        action:"b2b_simple_labor_leave_all",
-        session_id: currentSessionId
-      }, { skipBusy:true });
+    // 1. 关闭该员工的 active labor details
+    await jsonp(LOCK_URL, {
+      action:"b2b_simple_labor_leave",
+      session_id: currentSessionId,
+      source_order_no: _smCurrentOrder,
+      operator_badge: p.id
+    }, { skipBusy:true });
+    // 2. 主系统 leave
+    var evId = makeEventId({ event:"leave", biz:"B2B", task:"B2B工单操作", wave_id:"", badgeRaw: p.raw });
+    if(!hasRecent(evId)){
+      await submitEventSync_({ event:"leave", event_id: evId, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, da_id: p.raw }, true);
+      addRecent(evId);
     }
-    // 2. 批量 leave 所有已 join 的工人（通过 task registry 拿到在岗列表）
+    // 3. 更新本地 active list（只移除这一个人）
     var reg = taskReg_("B2B工单操作");
-    var badges = reg ? Array.from(reg.get()) : [];
-    for(var i=0; i<badges.length; i++){
-      var bRaw = badges[i];
-      var evId = makeEventId({ event:"leave", biz:"B2B", task:"B2B工单操作", wave_id:"", badgeRaw: bRaw });
-      if(!hasRecent(evId)){
-        try{
-          await submitEventSync_({ event:"leave", event_id: evId, biz:"B2B", task:"B2B工单操作", pick_session_id: currentSessionId, da_id: bRaw }, true);
-          addRecent(evId);
-        }catch(e){ console.error("batch leave error for " + bRaw, e); }
-      }
-    }
-    // 清空本地 active list
-    if(reg){ reg.set(new Set()); renderActiveLists(); }
-    _smClearCurrentOrder_();
-    _smIsSimpleMode = false;
-    _smBindingInFlight = false;
-    setStatus("已离开本环节 / 나가기 완료 ✅", true);
-    back();
+    if(reg){ var s = reg.get(); s.delete(p.raw); reg.set(s); renderActiveLists(); }
+    showScanFeedback_((p.name||p.id) + " " + smt_("leave_one_ok") + " ✅", "#e6ffe6", "#006400", 1500);
+    smLoadLabor_();
+    smRender_();
+    try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
   }catch(e){
-    setStatus("离开失败: " + e, false);
-  }finally{ releaseBusy_(); }
+    setStatus("离开失败 / 퇴장 실패: " + e, false);
+  }finally{
+    scanBusy = false;
+  }
 }
 
 // --- 结束趟次 ---
@@ -5219,7 +5248,7 @@ async function openScannerCommon(){
     lastScanAt = now;
 
     // ✅ 乱码检测：对非 QR 码场景（工单/单号扫码）自动拦截可疑结果
-    if(scanMode !== "operator_setup" && scanMode !== "session_join" && scanMode !== "labor" && scanMode !== "badgeBind" && scanMode !== "leaderLoginPick" && scanMode !== "b2b_result_confirm_badge" && scanMode !== "b2b_simple_worker" && scanMode !== "b2b_simple_confirm_badge"){
+    if(scanMode !== "operator_setup" && scanMode !== "session_join" && scanMode !== "labor" && scanMode !== "badgeBind" && scanMode !== "leaderLoginPick" && scanMode !== "b2b_result_confirm_badge" && scanMode !== "b2b_simple_worker" && scanMode !== "b2b_simple_confirm_badge" && scanMode !== "b2b_simple_leave"){
       if(looksGarbled_(code)){
         setStatus("⚠️ 扫码结果异常（疑似乱码）：" + code + " — 请重新扫码或手动输入", false);
         return;
@@ -5263,6 +5292,16 @@ async function openScannerCommon(){
       try{
         await smHandleWorkerScan_(code);
         await closeScanner();
+      }finally{ scanBusy = false; }
+      return;
+    }
+
+    // B2B Simple Mode: 扫离开工牌
+    if(scanMode === "b2b_simple_leave"){
+      scanBusy = true;
+      try{
+        await smHandleLeaveScan_(code);
+        // 不关闭扫码器，允许连续扫多人离开
       }finally{ scanBusy = false; }
       return;
     }
