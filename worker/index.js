@@ -1092,17 +1092,16 @@ export default {
 
       // ★ 简化模式预清理：在标准锁/配平检查之前，自动处理所有 leave + 释放锁
       if (simple_mode_b2b) {
-        // 1) 阻塞：仍有 working 或 pending_result 工单
+        // 1) 阻塞：仍有 working 工单（有人在岗）
         const blockRs = await env.DB.prepare(
           `SELECT r.source_order_no, r.workflow_status FROM b2b_operation_results r
            JOIN b2b_operation_bindings b ON b.day_kst=r.day_kst AND b.source_type=r.source_type AND b.source_order_no=r.source_order_no AND b.session_id=?
-           WHERE r.workflow_status IN ('working','pending_result')`
+           WHERE r.workflow_status IN ('working')`
         ).bind(session).all();
         const blockOrders = (blockRs.results || []);
         if (blockOrders.length > 0) {
-          const hasWorking = blockOrders.some(r => r.workflow_status === 'working');
           return jsonpOrJson({ ok:true, blocked:true,
-            reason: hasWorking ? "working_b2b_orders" : "pending_result_b2b_orders",
+            reason: "working_b2b_orders",
             session, pending_orders: blockOrders.map(r => ({ source_order_no: r.source_order_no, result_status: r.workflow_status }))
           }, callback);
         }
@@ -4504,6 +4503,13 @@ export default {
       ).bind(session_id, source_order_no).first();
       if (!bind) return jsonpOrJson({ ok:false, error:"workorder_not_bound" }, callback);
 
+      // completed 工单不允许再加人
+      const chkResult = await env.DB.prepare(
+        `SELECT workflow_status, status FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+      ).bind(bind.day_kst, bind.source_type, source_order_no).first();
+      if (chkResult && (chkResult.workflow_status === "completed" || chkResult.status === "completed"))
+        return jsonpOrJson({ ok:false, error:"workorder_completed" }, callback);
+
       // 已 active 则去重
       const existingLd = await env.DB.prepare(
         `SELECT id FROM b2b_operation_labor_details WHERE session_id=? AND source_order_no=? AND operator_badge=? AND status='active'`
@@ -4567,6 +4573,13 @@ export default {
       ).bind(session_id, source_order_no).first();
       if (!bind) return jsonpOrJson({ ok:false, error:"workorder_not_bound" }, callback);
 
+      // completed 工单不允许再暂时完成
+      const chkR = await env.DB.prepare(
+        `SELECT workflow_status, status FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+      ).bind(bind.day_kst, bind.source_type, source_order_no).first();
+      if (chkR && (chkR.workflow_status === "completed" || chkR.status === "completed"))
+        return jsonpOrJson({ ok:false, error:"workorder_completed" }, callback);
+
       // 关闭所有 active labor details
       const activeLabor = await env.DB.prepare(
         `SELECT id, join_ms, operator_badge FROM b2b_operation_labor_details WHERE session_id=? AND source_order_no=? AND status='active'`
@@ -4619,6 +4632,43 @@ export default {
         closed++;
       }
       return jsonpOrJson({ ok:true, closed }, callback);
+    }
+
+    // ===== 删除空工单（误扫移除）=====
+    if (action === "b2b_simple_delete_empty") {
+      const session_id = String(p.session_id || "").trim();
+      const source_order_no = String(p.source_order_no || "").trim();
+      if (!session_id || !source_order_no)
+        return jsonpOrJson({ ok:false, error:"missing required fields" }, callback);
+
+      // 安全检查1: 该 binding 存在
+      const bind = await env.DB.prepare(
+        `SELECT id, day_kst, source_type FROM b2b_operation_bindings WHERE session_id=? AND source_order_no=?`
+      ).bind(session_id, source_order_no).first();
+      if (!bind) return jsonpOrJson({ ok:false, error:"binding_not_found" }, callback);
+
+      // 安全检查2: 不存在任何 labor_details 记录（含已关闭的）
+      const anyLab = await env.DB.prepare(
+        `SELECT COUNT(*) as cnt FROM b2b_operation_labor_details WHERE session_id=? AND source_order_no=?`
+      ).bind(session_id, source_order_no).first();
+      if (anyLab && anyLab.cnt > 0)
+        return jsonpOrJson({ ok:false, error:"has_labor_history" }, callback);
+
+      // 安全检查3: 不存在非 draft 的 result
+      const result = await env.DB.prepare(
+        `SELECT id, workflow_status, status FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
+      ).bind(bind.day_kst, bind.source_type, source_order_no).first();
+      if (result && (result.status !== "draft" || (result.workflow_status && result.workflow_status !== "draft" && result.workflow_status !== "working")))
+        return jsonpOrJson({ ok:false, error:"has_non_draft_result" }, callback);
+
+      // 删除 binding
+      await env.DB.prepare(`DELETE FROM b2b_operation_bindings WHERE id=?`).bind(bind.id).run();
+      // 删除 draft result（如有）
+      if (result) {
+        await env.DB.prepare(`DELETE FROM b2b_operation_results WHERE id=?`).bind(result.id).run();
+      }
+
+      return jsonpOrJson({ ok:true, deleted_order: source_order_no }, callback);
     }
 
     if (action === "b2b_simple_labor_list") {
@@ -5051,7 +5101,10 @@ export default {
       function calcDisplayStatus(result, wo) {
         if (!result) return "无结果单";
         const wfs = (result.workflow_status || "").trim();
-        if (wfs === "temporary_completed") return "暂时完成";
+        if (wfs === "completed") return "已完成";
+        if (wfs === "pending_result") return "暂时完成";
+        if (wfs === "pending_review") return "待审核";
+        if (wfs === "working") return "操作中";
         const st = (result.status || "").trim();
         if (st === "completed") return "已完成";
         if (st === "draft") return "草稿";
@@ -5068,6 +5121,7 @@ export default {
 
         if (filterStatus) {
           if (filterStatus === "draft" && ds !== "草稿") continue;
+          if (filterStatus === "working" && ds !== "操作中") continue;
           if (filterStatus === "temporary_completed" && ds !== "暂时完成") continue;
           if (filterStatus === "completed" && ds !== "已完成") continue;
           if (filterStatus === "no_result" && ds !== "无结果单") continue;

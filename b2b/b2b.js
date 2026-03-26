@@ -907,7 +907,9 @@ var _woKwTimer = null;
 
 var WO_DISPLAY_STATUS_CLS = {
   "草稿": "st st-draft",
+  "操作中": "st st-issued",
   "暂时完成": "st st-issued",
+  "待审核": "st st-issued",
   "已完成": "st st-completed",
   "无结果单": "st st-cancelled"
 };

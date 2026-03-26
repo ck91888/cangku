@@ -398,7 +398,9 @@ var SM_T = {
   end_session:    ["结束趟次","세션 종료"],
   no_session:     ["无当前趟次","현재 세션 없음"],
   working:        ["作业中","작업중"],
+  pending_worker: ["待操作","작업자 대기"],
   pending_result: ["待录结果","결과 대기"],
+  paused:         ["暂停中","일시정지"],
   pending_review: ["待确认","확인 대기"],
   completed:      ["已完成","완료"],
   no_worker:      ["无","없음"],
@@ -440,24 +442,78 @@ var SM_T = {
   leave_scan_hint:       ["请扫描要离开的员工工牌","퇴장할 작업자 명찰을 스캔하세요"],
   leave_not_active:      ["该员工当前不在本环节","해당 직원은 현재 이 작업에 참여 중이 아닙니다"],
   leave_one_ok:          ["已离开","퇴장 완료"],
-  end_blocked_pending:   ["仍有工单尚未录入结果，不能结束趟次","아직 결과 입력이 완료되지 않은 작업지시가 있어 세션을 종료할 수 없습니다"]
+  end_blocked_pending_worker: ["当前工单为待操作：已扫工单但尚未扫入人员，不能直接结束趟次。\n请先开始操作并完成/暂时完成工单；如为误扫，请删除空工单。","작업지시가 대기 상태입니다. 먼저 작업자를 스캔하거나, 오스캔인 경우 빈 작업지시를 삭제하세요."],
+  end_blocked_paused:    ["当前工单处于暂停中，不代表已收口，不能直接结束趟次。\n请先恢复操作并结束工单，或点击暂时完成。","작업지시가 일시정지 상태입니다. 작업을 재개하여 완료하거나, 임시 완료를 눌러주세요."],
+  end_blocked_pending:   ["仍有工单尚未录入结果，不能结束趟次","아직 결과 입력이 완료되지 않은 작업지시가 있어 세션을 종료할 수 없습니다"],
+  delete_empty_confirm:  ["确认删除此空工单？\n该工单从未有人操作过，删除后不可恢复。","이 빈 작업지시를 삭제하시겠습니까?\n삭제 후 복구할 수 없습니다."],
+  delete_empty_ok:       ["空工单已删除","빈 작업지시 삭제됨"],
+  delete_empty_fail:     ["删除失败：该工单已有操作数据，不允许删除","삭제 실패: 이 작업지시에 이미 데이터가 있습니다"]
 };
 function smt_(key){ var t = SM_T[key]; return t ? t[0] + " / " + t[1] : key; }
 function smtz_(key){ var t = SM_T[key]; return t ? t[0] : key; } // 仅中文
 function smtk_(key){ var t = SM_T[key]; return t ? t[1] : key; } // 仅韩文
 function smWfLabel_(wf){
+  if(wf==="pending_worker") return smt_("pending_worker");
   if(wf==="working") return smt_("working");
+  if(wf==="paused") return smt_("paused");
   if(wf==="pending_result") return smt_("pending_result");
   if(wf==="pending_review") return smt_("pending_review");
   if(wf==="completed") return smt_("completed");
   return "-";
 }
 function smWfColor_(wf){
+  if(wf==="pending_worker") return "#0277bd";
   if(wf==="working") return "#e65100";
+  if(wf==="paused") return "#ef6c00";
   if(wf==="pending_result") return "#f57f17";
   if(wf==="pending_review") return "#6a1b9a";
   if(wf==="completed") return "#2e7d32";
   return "#999";
+}
+
+// 基于 result + labor 实时计算工单的显示状态
+function smComputeWf_(orderNo){
+  var rk = b2bResultKeyFromBinding_(orderNo);
+  var r = rk ? b2bWorkorderResults[rk] : null;
+
+  // 已有 workflow_status 的情况
+  if(r && r.workflow_status === "completed") return "completed";
+  if(r && r.workflow_status === "pending_result") return "pending_result";
+  if(r && r.workflow_status === "pending_review") return "pending_review";
+  if(r && r.status === "completed") return "completed";
+
+  // 有没有活跃 labor
+  var hasActive = _smLabor.some(function(l){ return l.source_order_no === orderNo && l.status === "active"; });
+  if(hasActive) return "working";
+
+  // 有没有历史 labor（曾经有人进入过）
+  var hasAnyLabor = _smLabor.some(function(l){ return l.source_order_no === orderNo; });
+
+  // 有 result 行且 workflow_status=working 但此刻无人 → paused
+  if(r && r.workflow_status === "working") return hasAnyLabor ? "paused" : "pending_worker";
+
+  // 有历史 labor 但无活跃 → paused；无历史 labor → pending_worker
+  if(r && r.status === "draft"){
+    return hasAnyLabor ? "paused" : "pending_worker";
+  }
+
+  // 无 result 行：只绑定了，未操作过
+  if(!r) return hasAnyLabor ? "paused" : "pending_worker";
+
+  return "pending_worker";
+}
+
+// 判断工单是否为空壳（可安全删除）：无任何labor记录 + 无非draft result
+function smIsEmptyOrder_(orderNo){
+  // 有任何 labor 记录（含已关闭的）→ 不是空壳
+  var hasAny = _smLabor.some(function(l){ return l.source_order_no === orderNo; });
+  if(hasAny) return false;
+  var rk = b2bResultKeyFromBinding_(orderNo);
+  var r = rk ? b2bWorkorderResults[rk] : null;
+  // 有非 draft 结果 → 不是空壳
+  if(r && r.status !== "draft") return false;
+  if(r && r.workflow_status && r.workflow_status !== "draft" && r.workflow_status !== "working") return false;
+  return true;
 }
 
 var lastScanAt = 0;
@@ -4423,6 +4479,7 @@ async function smScanWorker(){
     smRender_();
   }
   if(!_smCurrentOrder){ alert("请先扫工单 / 먼저 작업지시를 스캔하세요"); return; }
+  if(smComputeWf_(_smCurrentOrder) === "completed"){ alert("该工单已完成，不能再加人 / 완료된 작업지시, 작업자 추가 불가"); return; }
   scanMode = "b2b_simple_worker";
   document.getElementById("scanTitle").textContent = smtz_("scan_worker_title");
   await openScannerCommon();
@@ -4454,6 +4511,10 @@ async function smHandleWorkerScan_(code){
   }
   if(!b2bWorkorderBindings[_smCurrentOrder]){
     setStatus("工单 " + _smCurrentOrder + " 绑定未完成，请稍候重试", false);
+    return;
+  }
+  if(smComputeWf_(_smCurrentOrder) === "completed"){
+    setStatus("⚠️ 该工单已完成，不能再加人 / 완료된 작업지시, 추가 불가", false);
     return;
   }
   scanBusy = true;
@@ -4498,6 +4559,7 @@ async function smTempComplete(){
   if(!currentSessionId){ alert("趟次丢失，请刷新页面 / 세션 없음, 새로고침하세요"); return; }
   if(_smBindingInFlight){ alert("工单绑定中，请稍候... / 바인딩 진행 중..."); return; }
   if(!_smCurrentOrder){ alert("请先扫工单 / 먼저 작업지시를 스캔하세요"); return; }
+  if(smComputeWf_(_smCurrentOrder) === "completed"){ alert("该工单已完成 / 이미 완료된 작업지시"); return; }
   if(!confirm(smtz_("temp_complete_confirm"))) return;
   if(!acquireBusy_()) return;
   try{
@@ -4526,6 +4588,7 @@ async function smTempComplete(){
 function smOpenResultForCurrent(){
   if(_smBindingInFlight){ alert("工单绑定中，请稍候... / 바인딩 진행 중..."); return; }
   if(!_smCurrentOrder){ alert("请先扫工单 / 먼저 작업지시를 스캔하세요"); return; }
+  if(smComputeWf_(_smCurrentOrder) === "completed"){ alert("该工单已完成，不能修改结果 / 완료된 작업지시, 결과 수정 불가"); return; }
   // 确保 bindings 已加载
   if(!b2bWorkorderBindings[_smCurrentOrder]){
     alert("工单绑定信息未加载，请稍后重试 / 바인딩 정보 미로드");
@@ -4538,6 +4601,7 @@ function smOpenResultForCurrent(){
 // --- 结束工单（扫确认工牌 → completed）---
 async function smConfirmWorkorder(){
   if(!_smCurrentOrder){ alert(smt_("no_current_order")); return; }
+  if(smComputeWf_(_smCurrentOrder) === "completed"){ alert("该工单已完成 / 이미 완료된 작업지시"); return; }
   var binding = b2bWorkorderBindings[_smCurrentOrder];
   if(!binding || !binding.day_kst){
     alert("工单绑定信息缺失 / 바인딩 정보 없음");
@@ -4728,20 +4792,14 @@ async function smHandleLeaveScan_(code){
 // --- 结束趟次 ---
 async function smEndSession(){
   if(!currentSessionId){ setStatus(smt_("no_session"), false); return; }
-  // 前端预校验：检查工单状态
+  // 前端预校验：只拦截 working 状态（有人在岗时不能结束趟次）
   var blockWorking = [];
-  var blockPending = [];
-  for(var rk in b2bWorkorderResults){
-    var r = b2bWorkorderResults[rk];
-    if(r.workflow_status === "working") blockWorking.push(r.source_order_no);
-    if(r.workflow_status === "pending_result") blockPending.push(r.source_order_no);
-  }
+  Array.from(scannedB2bWorkorders).forEach(function(orderNo){
+    var wf = smComputeWf_(orderNo);
+    if(wf === "working") blockWorking.push(orderNo);
+  });
   if(blockWorking.length > 0){
     alert(smt_("end_blocked_working") + "\n\n" + blockWorking.join(", "));
-    return;
-  }
-  if(blockPending.length > 0){
-    alert(smt_("end_blocked_pending") + "\n\n" + blockPending.join(", "));
     return;
   }
   if(!acquireBusy_()) return;
@@ -4817,12 +4875,10 @@ function smRender_(){
   if(elOwner) elOwner.textContent = (_sessionOwnerInfo && _sessionOwnerInfo.owner_operator_id) || getOperatorId() || "-";
   if(elCurOrder) elCurOrder.textContent = _smCurrentOrder || "-";
 
-  // 当前工单 workflow_status
+  // 当前工单 workflow_status（基于实时计算）
   var curWf = "";
   if(_smCurrentOrder){
-    var rk = b2bResultKeyFromBinding_(_smCurrentOrder);
-    var r = rk ? b2bWorkorderResults[rk] : null;
-    curWf = (r && r.workflow_status) || (r && r.status === "completed" ? "completed" : (r ? "pending_result" : ""));
+    curWf = smComputeWf_(_smCurrentOrder);
   }
   if(elCurStatus){
     if(curWf){
@@ -4877,28 +4933,21 @@ function smRender_(){
     if(allOrders.length === 0){
       elOrderList.innerHTML = '<span class="muted">无 / 없음</span>';
     } else {
-      // 分组
-      var groups = { working:[], pending_result:[], pending_review:[], completed:[], other:[] };
+      // 分组（使用实时计算的状态）
+      var groups = { pending_worker:[], working:[], paused:[], pending_result:[], pending_review:[], completed:[] };
       allOrders.forEach(function(orderNo){
-        var rk = b2bResultKeyFromBinding_(orderNo);
-        var r = rk ? b2bWorkorderResults[rk] : null;
-        var wf = (r && r.workflow_status) || "";
-        if(!wf){
-          // 推断 workflow_status from status
-          if(r && r.status === "completed") wf = "completed";
-          else if(r && r.status === "draft") wf = "pending_result";
-          else wf = "other";
-        }
+        var wf = smComputeWf_(orderNo);
         if(groups[wf]) groups[wf].push(orderNo);
-        else groups.other.push(orderNo);
+        else groups.pending_worker.push(orderNo);
       });
 
       var sections = [
         { key:"working", label:smt_("working"), color:"#e65100", items:groups.working },
+        { key:"pending_worker", label:smt_("pending_worker"), color:"#0277bd", items:groups.pending_worker },
+        { key:"paused", label:smt_("paused"), color:"#ef6c00", items:groups.paused },
         { key:"pending_result", label:smt_("pending_result"), color:"#f57f17", items:groups.pending_result },
         { key:"pending_review", label:smt_("pending_review"), color:"#6a1b9a", items:groups.pending_review },
-        { key:"completed", label:smt_("completed"), color:"#2e7d32", items:groups.completed },
-        { key:"other", label:"其他 / 기타", color:"#999", items:groups.other }
+        { key:"completed", label:smt_("completed"), color:"#2e7d32", items:groups.completed }
       ];
 
       var html = "";
@@ -4925,11 +4974,16 @@ function smRender_(){
             html += '<div style="font-size:11px;color:#444;">'+esc(fmtResultSummary(r))+'</div>';
           }
           // 操作按钮
-          html += '<div style="display:flex;gap:4px;margin-top:4px;">';
-          html += '<button onclick="event.stopPropagation();_smSelectOrder(\''+esc(orderNo)+'\');smOpenResultForCurrent()" style="font-size:10px;padding:2px 8px;border-radius:3px;background:#1976d2;color:#fff;border:none;cursor:pointer;">录结果</button>';
-          var wfSt = (r && r.workflow_status) || (r && r.status === "completed" ? "completed" : "");
-          if(wfSt !== "completed"){
+          var computedWf = smComputeWf_(orderNo);
+          html += '<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;">';
+          if(computedWf === "completed"){
+            html += '<span style="font-size:10px;color:#2e7d32;font-weight:700;">✅ 只读 / 읽기 전용</span>';
+          } else {
+            html += '<button onclick="event.stopPropagation();_smSelectOrder(\''+esc(orderNo)+'\');smOpenResultForCurrent()" style="font-size:10px;padding:2px 8px;border-radius:3px;background:#1976d2;color:#fff;border:none;cursor:pointer;">录结果</button>';
             html += '<button onclick="event.stopPropagation();_smSelectOrder(\''+esc(orderNo)+'\');smConfirmWorkorder()" style="font-size:10px;padding:2px 8px;border-radius:3px;background:#6a1b9a;color:#fff;border:none;cursor:pointer;">确认完成</button>';
+            if(computedWf === "pending_worker" && smIsEmptyOrder_(orderNo)){
+              html += '<button onclick="event.stopPropagation();smDeleteEmptyOrder(\''+esc(orderNo)+'\')" style="font-size:10px;padding:2px 8px;border-radius:3px;background:#c62828;color:#fff;border:none;cursor:pointer;">删除空工单</button>';
+            }
           }
           html += '</div>';
           html += '</div>';
@@ -4974,6 +5028,41 @@ function _smClearCurrentOrder_(){
     try{ localStorage.removeItem("sm_current_order_" + currentSessionId); }catch(e){}
   }
   _smCurrentOrder = null;
+}
+
+// --- 删除空工单（误扫）---
+async function smDeleteEmptyOrder(orderNo){
+  if(!orderNo || !currentSessionId) return;
+  if(!smIsEmptyOrder_(orderNo)){
+    alert("该工单有人员或结果记录，无法删除 / 작업자 또는 결과 기록이 있어 삭제 불가");
+    return;
+  }
+  if(!confirm(smt_("delete_empty_confirm").replace("{0}", orderNo))) return;
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"b2b_simple_delete_empty",
+      session_id: currentSessionId,
+      source_order_no: orderNo
+    });
+    if(!res || !res.ok){
+      alert(smt_("delete_empty_fail") + ": " + (res && res.error || ""));
+      return;
+    }
+    // 本地移除
+    scannedB2bWorkorders.delete(orderNo);
+    delete b2bWorkorderBindings[orderNo];
+    if(_smCurrentOrder === orderNo){
+      _smCurrentOrder = null;
+      _smClearCurrentOrder_();
+    }
+    smRender_();
+    setStatus(smt_("delete_empty_ok").replace("{0}", orderNo), true);
+  }catch(e){
+    alert(smt_("delete_empty_fail") + ": " + e);
+  }finally{
+    releaseBusy_();
+  }
 }
 
 function startPicking(e){ startGeneric_(e, "B2C", "拣货", "b2c_pick", function(){ scannedWaves = new Set(); activePick = new Set(); leaderPickOk = false; localStorage.setItem("leader_pick_ok", "0"); syncLeaderPickUI(); }); }
