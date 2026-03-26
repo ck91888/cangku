@@ -499,6 +499,10 @@
       </div>
 
       <button class="primary" onclick="openScannerInboundCount()">扫码入库单号 / 입고번호</button>
+      <div class="row" style="margin-top:8px;">
+        <input id="b2cTallyManualInput" type="text" placeholder="手动输入入库单号 / 수동 입력" style="flex:1;" onkeydown="if(event.key==='Enter')manualAddInboundOrder()" />
+        <button onclick="manualAddInboundOrder()" style="width:auto;min-width:80px;">添加</button>
+      </div>
 
       <div class="listBox">
         <div><b>已扫入库单（去重）</b>：<span id="inboundCount">0</span></div>
@@ -532,6 +536,10 @@
       </div>
 
       <button class="primary" onclick="openScannerBulkOutOrder()">扫码出库单号 / 출고번호</button>
+      <div class="row" style="margin-top:8px;">
+        <input id="b2cBulkoutManualInput" type="text" placeholder="手动输入出库单号 / 수동 입력" style="flex:1;" onkeydown="if(event.key==='Enter')manualAddBulkOutOrder()" />
+        <button onclick="manualAddBulkOutOrder()" style="width:auto;min-width:80px;">添加</button>
+      </div>
 
       <div class="listBox">
         <div><b>已扫出库单（去重）</b>：<span id="bulkoutOrderCount">0</span></div>
@@ -633,6 +641,10 @@
       </div>
 
       <button class="primary" onclick="openScannerWave()">扫码波次 / 웨이브</button>
+      <div class="row" style="margin-top:8px;">
+        <input id="b2cPickManualInput" type="text" placeholder="手动输入波次号 / 수동 입력" style="flex:1;" onkeydown="if(event.key==='Enter')manualAddWave()" />
+        <button onclick="manualAddWave()" style="width:auto;min-width:80px;">添加</button>
+      </div>
 
       <div class="listBox">
         <div><b>已扫波次（去重）</b>：<span id="waveCount">0</span></div>

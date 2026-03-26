@@ -1519,6 +1519,73 @@ function renderBulkOutUI(){
   }
 }
 
+/** ===== B2C Manual Input (手动输入单号) ===== */
+async function manualAddInboundOrder(){
+  var inp = document.getElementById("b2cTallyManualInput");
+  if(!inp) return;
+  var val = String(inp.value || "").trim();
+  if(!val){ alert("请输入入库单号"); inp.focus(); return; }
+  if(!currentSessionId){ alert("请先点【开始理货】"); inp.focus(); return; }
+  if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再录入入库单，请重新开始。"))){ inp.focus(); return; }
+  if(scannedInbounds.has(val)){
+    alert("已记录（去重）\n" + val);
+    renderInboundCountUI(); inp.value = ""; inp.focus(); return;
+  }
+  scannedInbounds.add(val);
+  persistState(); renderInboundCountUI();
+  var evId = makeEventId({ event:"wave", biz:"B2C", task:"理货", wave_id: val, badgeRaw:"" });
+  if(!hasRecent(evId)){
+    submitEvent({ event:"wave", event_id: evId, biz:"B2C", task:"理货", pick_session_id: currentSessionId, wave_id: val });
+    addRecent(evId);
+  }
+  setStatus("已记录入库单（待上传）✅ " + val, true);
+  inp.value = ""; inp.focus();
+}
+
+async function manualAddWave(){
+  var inp = document.getElementById("b2cPickManualInput");
+  if(!inp) return;
+  var val = String(inp.value || "").trim();
+  if(!val){ alert("请输入波次号"); inp.focus(); return; }
+  if(!currentSessionId){ alert("请先点【开始拣货】"); inp.focus(); return; }
+  if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再录入波次，请重新开始。"))){ inp.focus(); return; }
+  if(scannedWaves.has(val)){
+    alert("已记录（去重）\n" + val);
+    renderWaveUI(); inp.value = ""; inp.focus(); return;
+  }
+  scannedWaves.add(val);
+  persistState(); renderWaveUI();
+  var evId = makeEventId({ event:"wave", biz:"B2C", task:"拣货", wave_id: val, badgeRaw:"" });
+  if(!hasRecent(evId)){
+    submitEvent({ event:"wave", event_id: evId, biz:"B2C", task:"拣货", pick_session_id: currentSessionId, wave_id: val });
+    addRecent(evId);
+  }
+  setStatus("已记录波次（待上传）✅ " + val, true);
+  inp.value = ""; inp.focus();
+}
+
+async function manualAddBulkOutOrder(){
+  var inp = document.getElementById("b2cBulkoutManualInput");
+  if(!inp) return;
+  var val = String(inp.value || "").trim();
+  if(!val){ alert("请输入出库单号"); inp.focus(); return; }
+  if(!currentSessionId){ alert("请先点【开始批量出库】"); inp.focus(); return; }
+  if(!(await guardSessionOpenOrAlert_("该趟次已结束：不能再录入出库单，请重新开始。"))){ inp.focus(); return; }
+  if(scannedBulkOutOrders.has(val)){
+    alert("已记录（去重）\n" + val);
+    renderBulkOutUI(); inp.value = ""; inp.focus(); return;
+  }
+  scannedBulkOutOrders.add(val);
+  persistState(); renderBulkOutUI();
+  var evId = makeEventId({ event:"wave", biz:"B2C", task:"批量出库", wave_id: val, badgeRaw:"" });
+  if(!hasRecent(evId)){
+    submitEvent({ event:"wave", event_id: evId, biz:"B2C", task:"批量出库", pick_session_id: currentSessionId, wave_id: val });
+    addRecent(evId);
+  }
+  setStatus("已记录出库单（待上传）✅ " + val, true);
+  inp.value = ""; inp.focus();
+}
+
 /** ===== Global Active Now (legacy) ===== */
 function esc(s){
   return String(s||"").replace(/[&<>"']/g,function(c){
