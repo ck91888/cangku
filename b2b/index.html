@@ -491,15 +491,38 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <div style="font-size:16px;font-weight:700;">作业记录</div>
         <div class="view-toggle" id="docViewToggle">
-          <button class="vt-active" onclick="switchDocView('summary')">按单号汇总</button>
+          <button class="vt-active" onclick="switchDocView('workorder')">按工单明细</button>
           <button onclick="switchDocView('session')">按Session明细</button>
-          <button onclick="switchDocView('raw')">原始流水</button>
         </div>
       </div>
-      <div style="font-size:11px;color:#999;margin-bottom:10px;">V1口径：参与人数/工牌列表 = session内join事件的DISTINCT badge，非按wave时间窗精确切片</div>
 
-      <!-- 台账筛选 -->
-      <div id="docFilterArea">
+      <!-- 工单明细 筛选区 -->
+      <div id="woFilterArea">
+        <div class="row">
+          <div class="form-group"><label>开始日期</label><input id="wo-start" type="date" /></div>
+          <div class="form-group"><label>结束日期</label><input id="wo-end" type="date" /></div>
+          <div class="form-group">
+            <label>状态</label>
+            <select id="wo-status">
+              <option value="">全部</option>
+              <option value="draft">草稿</option>
+              <option value="temporary_completed">暂时完成</option>
+              <option value="completed">已完成</option>
+              <option value="no_result">无结果单</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:4px;">
+            <button class="primary" style="width:auto;min-width:70px;" onclick="loadWoDetail()">查询</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <input id="wo-keyword" placeholder="搜索（工单号 / 客户名 / session / 工牌 / 姓名），回车确认" style="width:100%;box-sizing:border-box;" onkeyup="woKeywordKeyup(event)" />
+        </div>
+      </div>
+
+      <!-- Session明细 筛选区（沿用旧逻辑） -->
+      <div id="docFilterArea" style="display:none;">
+        <div style="font-size:11px;color:#999;margin-bottom:10px;">V1口径：参与人数/工牌列表 = session内join事件的DISTINCT badge，非按wave时间窗精确切片</div>
         <div class="row">
           <div class="form-group"><label>开始日期</label><input id="dl-start" type="date" /></div>
           <div class="form-group"><label>结束日期</label><input id="dl-end" type="date" /></div>
@@ -525,21 +548,18 @@
         </div>
       </div>
 
+      <div id="wo-result" style="margin-top:10px;"></div>
+      <div id="wo-pager" class="pager" style="display:none;"></div>
       <div id="dl-result" style="margin-top:10px;"></div>
       <div id="dl-pager" class="pager" style="display:none;"></div>
     </div>
   </div>
 
-  <!-- 作业记录：原始波次流水（保留） -->
+  <!-- 作业记录：原始波次流水（保留底层能力，主界面隐藏） -->
   <div id="v-wave_list" style="display:none;">
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <div style="font-size:16px;font-weight:700;">原始作业流水</div>
-        <div class="view-toggle">
-          <button onclick="switchDocView('summary')">按单号汇总</button>
-          <button onclick="switchDocView('session')">按Session明细</button>
-          <button class="vt-active" onclick="switchDocView('raw')">原始流水</button>
-        </div>
       </div>
       <div style="font-size:12px;color:#888;margin-bottom:10px;">现场已扫过 / 记录过的波次、单号、工单号、FO号（调试用）</div>
       <div class="row">

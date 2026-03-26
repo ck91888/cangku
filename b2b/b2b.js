@@ -822,7 +822,7 @@ function goPlanDetail(plan_id, _skipNav){
 var _docListData = [];
 var _docListFiltered = [];
 var _docRendered = [];   // renderDocList 当次渲染的 docs，供 showExternalWoDoc 索引
-var _docViewMode = "summary";  // summary | session | raw
+var _docViewMode = "workorder";  // workorder | session
 var _docPage = 1;
 var _docPageSize = 50;
 var _docTotal = 0;
@@ -854,24 +854,270 @@ function linkStatusCls(ls){
 
 function switchDocView(mode){
   _docViewMode = mode;
-  if(mode === "raw"){
-    goView("wave_list");
-    return;
-  }
   goView("doc_list");
 }
 
 function initDocList(){
   var today = kstToday();
-  if(!document.getElementById("dl-start").value) document.getElementById("dl-start").value = today;
-  if(!document.getElementById("dl-end").value) document.getElementById("dl-end").value = today;
   // 更新 toggle 按钮状态
   var btns = document.querySelectorAll("#docViewToggle button");
   for(var i=0;i<btns.length;i++) btns[i].className = "";
-  if(_docViewMode === "summary") btns[0].className = "vt-active";
+  if(_docViewMode === "workorder") btns[0].className = "vt-active";
   else if(_docViewMode === "session") btns[1].className = "vt-active";
-  _docPage = 1;
-  loadDocList();
+
+  // 切换筛选区可见性
+  var woFilter = document.getElementById("woFilterArea");
+  var dlFilter = document.getElementById("docFilterArea");
+  var woResult = document.getElementById("wo-result");
+  var woPager  = document.getElementById("wo-pager");
+  var dlResult = document.getElementById("dl-result");
+  var dlPager  = document.getElementById("dl-pager");
+
+  if(_docViewMode === "workorder"){
+    if(woFilter) woFilter.style.display = "";
+    if(dlFilter) dlFilter.style.display = "none";
+    if(woResult) woResult.style.display = "";
+    if(woPager) woPager.style.display = "";
+    if(dlResult) dlResult.style.display = "none";
+    if(dlPager) dlPager.style.display = "none";
+    if(!document.getElementById("wo-start").value) document.getElementById("wo-start").value = today;
+    if(!document.getElementById("wo-end").value) document.getElementById("wo-end").value = today;
+    _woPage = 1;
+    loadWoDetail();
+  } else {
+    if(woFilter) woFilter.style.display = "none";
+    if(dlFilter) dlFilter.style.display = "";
+    if(woResult) woResult.style.display = "none";
+    if(woPager) woPager.style.display = "none";
+    if(dlResult) dlResult.style.display = "";
+    if(dlPager) dlPager.style.display = "";
+    if(!document.getElementById("dl-start").value) document.getElementById("dl-start").value = today;
+    if(!document.getElementById("dl-end").value) document.getElementById("dl-end").value = today;
+    _docPage = 1;
+    loadDocList();
+  }
+}
+
+// ===== 按工单明细视图 =====
+var _woPage = 1;
+var _woPageSize = 50;
+var _woTotal = 0;
+var _woData = [];
+var _woKwTimer = null;
+
+var WO_DISPLAY_STATUS_CLS = {
+  "草稿": "st st-draft",
+  "暂时完成": "st st-issued",
+  "已完成": "st st-completed",
+  "无结果单": "st st-cancelled"
+};
+
+function loadWoDetail(){
+  var s = document.getElementById("wo-start").value;
+  var e = document.getElementById("wo-end").value;
+  if(!s || !e){ alert("请选择日期"); return; }
+  var el = document.getElementById("wo-result");
+  el.innerHTML = '<div class="q-empty">加载中...</div>';
+  document.getElementById("wo-pager").style.display = "none";
+
+  var statusVal = (document.getElementById("wo-status").value||"").trim();
+  var kw = (document.getElementById("wo-keyword").value||"").trim();
+  var params = {
+    action: "collab_workorder_detail",
+    start_day: s, end_day: e,
+    page: _woPage, page_size: _woPageSize
+  };
+  if(statusVal) params.status = statusVal;
+  if(kw) params.q = kw;
+
+  fetchApi(params).then(function(res){
+    if(!res || !res.ok){
+      el.innerHTML = '<div class="bad">查询失败: '+esc(res&&res.error||"")+'</div>';
+      return;
+    }
+    _woData = res.docs || [];
+    _woTotal = res.total || 0;
+    renderWoDetail(_woData);
+    renderWoPager();
+  });
+}
+
+function woKeywordKeyup(ev){
+  if(ev && ev.key === "Enter"){
+    if(_woKwTimer) clearTimeout(_woKwTimer);
+    _woPage = 1;
+    loadWoDetail();
+    return;
+  }
+  if(_woKwTimer) clearTimeout(_woKwTimer);
+  _woKwTimer = setTimeout(function(){ _woPage = 1; loadWoDetail(); }, 500);
+}
+
+function renderWoDetail(docs){
+  var el = document.getElementById("wo-result");
+  if(!docs.length){
+    el.innerHTML = '<div class="q-empty">暂无工单记录</div>';
+    return;
+  }
+  var html = '<div style="font-size:12px;color:#888;margin-bottom:4px;">本页 '+docs.length+' 条 / 共 '+_woTotal+' 条</div>';
+
+  html += docs.map(function(d, idx){
+    var dsCls = WO_DISPLAY_STATUS_CLS[d.display_status] || "st";
+    var dsLabel = d.display_status || "-";
+
+    // 主信息行
+    var line1 = '<code style="font-size:14px;font-weight:700;">'+esc(d.workorder_id)+'</code>';
+    line1 += ' <span class="'+dsCls+'" style="font-size:12px;">'+esc(dsLabel)+'</span>';
+    if(d.customer_name) line1 += ' · '+esc(d.customer_name);
+
+    // wo_info 补充
+    if(d.wo_info){
+      if(d.wo_info.has_cancel_notice) line1 += ' <span class="cancel-notice-tag">已取消</span>';
+      if(d.wo_info.has_update_notice) line1 += ' <span class="notice-tag">已变更</span>';
+    }
+
+    // 第二行：日期 + 工时 + 人数 + session数
+    var line2parts = [];
+    line2parts.push(esc(d.operation_day || ""));
+    line2parts.push('总工时: <b>'+formatMinutes(d.total_minutes)+'</b>');
+    line2parts.push(d.worker_count + '人参与');
+    line2parts.push(d.session_count + ' session');
+    if(d.last_activity_at) line2parts.push('最后活动: '+fmtTime(d.last_activity_at));
+
+    // 旧口径提示
+    var isLegacy = d.worker_count === 0 && d.total_minutes === 0;
+    if(isLegacy){
+      line2parts.push('<span style="color:#e67e22;font-weight:700;">旧口径数据</span>');
+    }
+
+    // 人员明细
+    var workerHtml = '';
+    if(isLegacy){
+      workerHtml = '<div style="margin-top:4px;font-size:11px;color:#e67e22;">该工单在旧模式下操作，无逐人工时明细</div>';
+    } else if(d.workers && d.workers.length){
+      workerHtml = '<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">';
+      d.workers.forEach(function(w){
+        workerHtml += '<span class="tag" style="font-size:11px;">'+esc(w.display_name)+' '+formatMinutes(w.minutes)+'</span>';
+      });
+      workerHtml += '</div>';
+    }
+
+    // 结果单摘要
+    var resultHtml = '';
+    if(d.result_summary){
+      var rs = d.result_summary;
+      var parts = [];
+      if(rs.operation_mode) parts.push(esc(RESULT_OP_MODE_LABEL[rs.operation_mode]||rs.operation_mode));
+      if(rs.box_count) parts.push('箱:'+rs.box_count);
+      if(rs.pallet_count) parts.push('托:'+rs.pallet_count);
+      if(rs.packed_qty) parts.push('件:'+rs.packed_qty);
+      if(rs.sku_kind_count) parts.push('SKU:'+rs.sku_kind_count);
+      if(rs.label_count) parts.push('标签:'+rs.label_count);
+      if(rs.packed_box_count) parts.push('打包箱:'+rs.packed_box_count);
+      if(rs.did_rebox) parts.push('换箱:'+rs.rebox_count);
+      if(rs.needs_forklift_pick) parts.push('叉车托:'+rs.forklift_pallet_count);
+      if(rs.remark) parts.push('备注:'+esc(rs.remark));
+      if(parts.length) resultHtml = '<div class="meta" style="margin-top:2px;">'+parts.join(' · ')+'</div>';
+      if(rs.confirm_badge) resultHtml += '<div class="meta">确认: '+esc(rs.confirm_badge)+(rs.confirmed_by?' ('+esc(rs.confirmed_by)+')':'')+'</div>';
+    }
+
+    // 展开区（sessions + 结果详情）
+    var expandId = 'wo-expand-'+idx;
+    var expandHtml = '<div id="'+expandId+'" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #eee;">';
+    // sessions 列表
+    if(d.sessions && d.sessions.length){
+      expandHtml += '<div style="font-size:12px;font-weight:700;margin-bottom:4px;">Sessions ('+d.sessions.length+')</div>';
+      d.sessions.forEach(function(ss){
+        var sStatus = ss.status === "OPEN" ? '<span style="color:#27ae60;">进行中</span>' : '<span style="color:#888;">已结束</span>';
+        expandHtml += '<div style="font-size:11px;padding:2px 0;color:#555;">' +
+          '<code>'+esc((ss.session_id||"").slice(-12))+'</code> ' + sStatus +
+          (ss.owner_badge ? ' · 负责人:'+esc(ss.owner_badge) : '') +
+          (ss.started_at ? ' · 开始:'+fmtTime(ss.started_at) : '') +
+          (ss.ended_at ? ' · 结束:'+fmtTime(ss.ended_at) : '') +
+          '</div>';
+      });
+    }
+    // 结果单详情
+    if(d.result_summary){
+      var rs2 = d.result_summary;
+      expandHtml += '<div style="font-size:12px;font-weight:700;margin:8px 0 4px;">结果单详情</div>';
+      var detailParts = [];
+      detailParts.push('状态: '+esc(rs2.status||"-"));
+      if(rs2.workflow_status) detailParts.push('流程状态: '+esc(rs2.workflow_status));
+      if(rs2.operation_mode) detailParts.push('操作模式: '+esc(RESULT_OP_MODE_LABEL[rs2.operation_mode]||rs2.operation_mode));
+      if(rs2.box_count) detailParts.push('箱数: '+rs2.box_count);
+      if(rs2.pallet_count) detailParts.push('托数: '+rs2.pallet_count);
+      if(rs2.packed_qty) detailParts.push('件数: '+rs2.packed_qty);
+      if(rs2.sku_kind_count) detailParts.push('SKU种数: '+rs2.sku_kind_count);
+      if(rs2.packed_box_count) detailParts.push('打包箱数: '+rs2.packed_box_count);
+      if(rs2.label_count) detailParts.push('标签数: '+rs2.label_count);
+      if(rs2.photo_count) detailParts.push('照片数: '+rs2.photo_count);
+      if(rs2.did_pack) detailParts.push('是否打包: 是');
+      if(rs2.did_rebox) detailParts.push('换箱次数: '+rs2.rebox_count);
+      if(rs2.needs_forklift_pick) detailParts.push('叉车托数: '+rs2.forklift_pallet_count);
+      if(rs2.rack_pick_location_count) detailParts.push('库位数: '+rs2.rack_pick_location_count);
+      if(rs2.remark) detailParts.push('备注: '+esc(rs2.remark));
+      expandHtml += '<div style="font-size:11px;color:#555;">'+detailParts.join(' · ')+'</div>';
+    } else {
+      expandHtml += '<div style="font-size:11px;color:#999;margin-top:4px;">无结果单</div>';
+    }
+    expandHtml += '</div>';
+
+    // 跳转按钮
+    var btnSt = 'style="width:auto;padding:2px 10px;font-size:11px;margin:2px 4px 0 0;"';
+    var btns = '';
+    if(d.source_type === "internal_b2b_workorder" || d.internal_workorder_id){
+      var woId = d.internal_workorder_id || d.workorder_id;
+      btns = '<button '+btnSt+' onclick="event.stopPropagation();goWoDetail(\''+esc(woId)+'\')">查看工单</button>';
+    }
+
+    return '<div class="doc-row" style="cursor:pointer;" onclick="toggleWoExpand('+idx+')">' +
+      '<div>'+line1+'</div>' +
+      '<div class="meta">'+line2parts.join(' · ')+'</div>' +
+      workerHtml + resultHtml +
+      (btns ? '<div style="margin-top:4px;">'+btns+'</div>' : '') +
+      expandHtml +
+    '</div>';
+  }).join("");
+
+  el.innerHTML = html;
+}
+
+function toggleWoExpand(idx){
+  var el = document.getElementById("wo-expand-"+idx);
+  if(!el) return;
+  el.style.display = el.style.display === "none" ? "" : "none";
+}
+
+function renderWoPager(){
+  var pagerEl = document.getElementById("wo-pager");
+  var totalPages = Math.ceil(_woTotal / _woPageSize) || 1;
+  if(totalPages <= 1){ pagerEl.style.display = "none"; return; }
+  pagerEl.style.display = "";
+  pagerEl.innerHTML =
+    '<button '+((_woPage<=1)?'disabled':'')+' onclick="woPageGo(-1)">上一页</button>' +
+    '<span>第 '+_woPage+' / '+totalPages+' 页</span>' +
+    '<button '+((_woPage>=totalPages)?'disabled':'')+' onclick="woPageGo(1)">下一页</button>';
+}
+
+function woPageGo(delta){
+  _woPage += delta;
+  if(_woPage < 1) _woPage = 1;
+  loadWoDetail();
+}
+
+function formatMinutes(m){
+  if(!m || m <= 0) return "0分";
+  var h = Math.floor(m / 60);
+  var min = Math.round(m % 60);
+  if(h > 0) return h + "h" + (min > 0 ? min + "m" : "");
+  return min + "分";
+}
+
+function fmtTime(ms){
+  if(!ms) return "";
+  var d = new Date(ms);
+  return (d.getMonth()+1)+"/"+d.getDate()+" "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
 }
 
 function loadDocList(){
@@ -887,7 +1133,7 @@ function loadDocList(){
   var params = {
     action: "collab_doc_list",
     start_day: s, end_day: e,
-    summary_mode: _docViewMode === "summary" ? "1" : "0",
+    summary_mode: "0",
     page: _docPage, page_size: _docPageSize
   };
   if(kind) params.wave_kind = kind;
@@ -942,7 +1188,7 @@ function renderDocList(docs){
     el.innerHTML = '<div class="q-empty">暂无记录</div>';
     return;
   }
-  var isSummary = _docViewMode === "summary";
+  var isSummary = false;  // summary模式已移除，session明细始终为非summary
   var html = '<div style="font-size:12px;color:#888;margin-bottom:4px;">本页 '+docs.length+' 条 / 共 '+_docTotal+' 条</div>';
 
   html += docs.map(function(d, dIdx){
@@ -1059,7 +1305,7 @@ function exportDocCsv(){
   params.set("k", getKey());
   params.set("start_day", s);
   params.set("end_day", e);
-  params.set("summary_mode", _docViewMode === "summary" ? "1" : "0");
+  params.set("summary_mode", "0");
   if(kind) params.set("wave_kind", kind);
   if(kw) params.set("keyword", kw);
 
