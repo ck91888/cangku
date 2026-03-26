@@ -2173,7 +2173,8 @@ function callB2bOpBind(orderNo){
       // 服务端失败：回滚本地去重，允许重试
       scannedB2bWorkorders.delete(orderNo);
       delete b2bWorkorderBindings[orderNo];
-      persistState(); renderB2bWorkorderUI();
+      persistState();
+      if(_smIsSimpleMode){ smRender_(); } else { renderB2bWorkorderUI(); }
       setStatus("⚠️ 绑定失败，请重试: " + orderNo, false);
       return;
     }
@@ -2189,13 +2190,14 @@ function callB2bOpBind(orderNo){
         showScanFeedback_("已记录外部工单 " + orderNo + "，待WMS匹配", "#fff3e0", "#e65100", 2000);
       }
     }
-    renderB2bWorkorderUI();
+    if(_smIsSimpleMode){ smRender_(); } else { renderB2bWorkorderUI(); }
   }).catch(function(e){
     console.error("b2b_op_bind error", e);
     // 网络失败：回滚本地去重，允许重试
     scannedB2bWorkorders.delete(orderNo);
     delete b2bWorkorderBindings[orderNo];
-    persistState(); renderB2bWorkorderUI();
+    persistState();
+    if(_smIsSimpleMode){ smRender_(); } else { renderB2bWorkorderUI(); }
     setStatus("⚠️ 绑定失败（网络错误），请重试: " + orderNo, false);
   });
 }
@@ -2223,6 +2225,7 @@ function loadB2bBindings(onDone){
     _b2bSelfHealPending = false;
     persistState();
     renderB2bWorkorderUI();
+    if(_smIsSimpleMode) smRender_();
     if(typeof onDone === "function") onDone();
   }).catch(function(e){ console.error("b2b_op_bind_list error", e); if(currentSessionId === reqSid){ _b2bBindingsLoaded = true; _b2bSelfHealPending = false; } if(typeof onDone === "function") onDone(); });
 }
