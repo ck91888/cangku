@@ -262,6 +262,7 @@ var PAGE_CTX = {
   // ===== B2B =====
   "b2b_unload":    { biz:"B2B", task:"B2B卸货" },
   "b2b_tally":     { biz:"B2B", task:"B2B入库理货" },
+  "b2b_workorder_simple": { biz:"B2B", task:"B2B工单操作" },
   "b2b_workorder": { biz:"B2B", task:"B2B工单操作" },
   "b2b_outbound":  { biz:"B2B", task:"B2B出库" },
   "b2b_inventory": { biz:"B2B", task:"B2B盘点" },
@@ -1315,11 +1316,11 @@ async function endSessionGlobal_(){
       var msg = "当前还有未完成提交的工单结果单，不能结束本趟作业。\n\n请先完成以下工单的结果单：\n" + orders +
         "\n\n趟次：" + currentSessionId;
       setStatus("有未完成结果单，禁止结束", false);
-      if(getHashPage() !== "b2b_workorder"){
+      if(getHashPage() !== "b2b_workorder" && getHashPage() !== "b2b_workorder_simple"){
         msg += "\n\n点【确定】跳转到B2B工单操作页处理。";
         if(confirm(msg)){
           setSess_("B2B", "B2B工单操作", currentSessionId);
-          go("b2b_workorder");
+          go("b2b_workorder_simple");
         }
       } else {
         alert(msg);
@@ -2055,7 +2056,7 @@ async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
           "\n\n趟次：" + currentSessionId + "\n\n点【确定】跳转到B2B工单操作页处理。";
         if(confirm(goMsg)){
           setSess_("B2B", "B2B工单操作", currentSessionId);
-          go("b2b_workorder");
+          go("b2b_workorder_simple");
         }
       } else {
         setStatus("旧趟次未能释放，无法开始新任务", false);
@@ -2300,7 +2301,7 @@ async function tryRecoverB2bSession_(){
     if(!found) return;
     // 自动恢复
     currentSessionId = found.session;
-    CUR_CTX = { biz: "B2B", task: "B2B工单操作", page: "b2b_workorder" };
+    CUR_CTX = { biz: "B2B", task: "B2B工单操作", page: "b2b_workorder_simple" };
     setSess_("B2B", "B2B工单操作", found.session);
     SESSION_INFO_CACHE = { sid: null, ts: 0, data: null };
     restoreState();
@@ -2993,7 +2994,7 @@ async function startB2bFieldOp(e){
             "\n\n趟次：" + currentSessionId + "\n\n点【确定】跳转到B2B工单操作页处理。";
           if(confirm(goMsg2)){
             setSess_("B2B", "B2B工单操作", currentSessionId);
-            go("b2b_workorder");
+            go("b2b_workorder_simple");
           }
         } else {
           setStatus("旧趟次未能释放，无法开始新任务", false);
@@ -3299,7 +3300,7 @@ function loadTempSwitchCtx_(){
     }
     // 兼容旧格式（最老版本）
     if(!ctx.sourceBiz && ctx.workorderSession){
-      ctx.sourceBiz = "B2B"; ctx.sourceTask = "B2B工单操作"; ctx.sourcePage = "b2b_workorder";
+      ctx.sourceBiz = "B2B"; ctx.sourceTask = "B2B工单操作"; ctx.sourcePage = "b2b_workorder_simple";
       ctx.sourceSession = ctx.workorderSession;
       ctx.scannedItems = ctx.workorders || [];
       ctx.unloadBiz = "B2B"; ctx.unloadTask = "B2B卸货"; ctx.unloadPage = "b2b_unload";

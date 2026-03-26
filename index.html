@@ -708,7 +708,8 @@
       <button class="primary" onclick="go('b2b_unload')">卸货 / 하차</button>
       <button class="primary" onclick="go('b2b_tally')">入库理货 / 입고검수</button>
       <button class="primary" onclick="go('b2b_workorder_simple')" style="background:#0d47a1;border-color:#0d47a1;font-size:16px;padding:14px;">工单操作（简化）/ 작업지시 (간편)</button>
-      <button class="primary" onclick="go('b2b_workorder')" style="background:#546e7a;border-color:#546e7a;font-size:13px;padding:8px;">工单操作（高级管理）/ 작업지시 (고급)</button>
+      <!-- 旧模式保留代码，普通菜单隐藏；管理员可通过 go('b2b_workorder') 进入 -->
+      <button class="primary" onclick="go('b2b_workorder')" style="display:none;background:#546e7a;border-color:#546e7a;font-size:13px;padding:8px;">工单操作（高级管理）/ 작업지시 (고급)</button>
       <button class="primary" onclick="go('b2b_outbound')">出库 / 출고</button>
       <button class="primary" onclick="go('b2b_inventory')">盘点 / 재고조사</button>
       <button class="primary" onclick="go('b2b_field_op')" style="background:#8e24aa;border-color:#8e24aa;">现场记录 / 현장작업</button>
