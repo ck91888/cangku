@@ -6194,11 +6194,11 @@ function buildReportSummary_(){
   var anomaliesList = [];
 
   // session-level collection
-  var sessionInfo = {}; // session -> {biz, task, start_ms, end_ms, operator, badges:Set, waves:Set}
+  var sessionInfo = {}; // session -> {biz, task, start_ms, end_ms, operator, badges:{}, waves:{}, waves_in_range:{}}
 
   function ensureSession(sid, biz, task){
     if(!sid) return;
-    if(!sessionInfo[sid]) sessionInfo[sid] = { biz:biz||"", task:task||"", start_ms:0, end_ms:0, operator:"", badges:{}, waves:{} };
+    if(!sessionInfo[sid]) sessionInfo[sid] = { biz:biz||"", task:task||"", start_ms:0, end_ms:0, operator:"", badges:{}, waves:{}, waves_in_range:{} };
   }
 
   function addDur(badge, biz, task, dur){
@@ -6263,7 +6263,13 @@ function buildReportSummary_(){
       if(!sessionInfo[sid].end_ms || t > sessionInfo[sid].end_ms) sessionInfo[sid].end_ms = t;
     }else if(ev === "wave" && sid){
       ensureSession(sid, biz, task);
-      if(waveId) sessionInfo[sid].waves[waveId] = true;
+      if(waveId){
+        sessionInfo[sid].waves[waveId] = true;
+        // 按 server_ms 判断是否落在实际查询区间内
+        if(t >= reportSinceMs && t <= reportUntilMs){
+          sessionInfo[sid].waves_in_range[waveId] = true;
+        }
+      }
     }
 
     // join/leave processing
@@ -6274,8 +6280,10 @@ function buildReportSummary_(){
         var clampedStart = Math.max(active[badge].t, reportSinceMs);
         var clampedEnd = Math.min(t, reportUntilMs);
         var durRejoin = Math.max(0, clampedEnd - clampedStart);
-        addDur(badge, active[badge].biz, active[badge].task, durRejoin);
-        addTimeline(badge, active[badge].biz, active[badge].task, clampedStart, clampedEnd, "AUTO_CLOSE_REJOIN", active[badge].session, active[badge].note);
+        if(clampedEnd > clampedStart && durRejoin > 0){
+          addDur(badge, active[badge].biz, active[badge].task, durRejoin);
+          addTimeline(badge, active[badge].biz, active[badge].task, clampedStart, clampedEnd, "AUTO_CLOSE_REJOIN", active[badge].session, active[badge].note);
+        }
         anomalies.rejoin_without_leave++;
         addAnomaly("rejoin_without_leave", badge, active[badge].biz, active[badge].task, t, "join 前未 leave，已自动截断上一段");
       }
@@ -6291,8 +6299,10 @@ function buildReportSummary_(){
         var clampedStart2 = Math.max(active[badge].t, reportSinceMs);
         var clampedEnd2 = Math.min(t, reportUntilMs);
         var durLeave = Math.max(0, clampedEnd2 - clampedStart2);
-        addDur(badge, active[badge].biz, active[badge].task, durLeave);
-        addTimeline(badge, active[badge].biz, active[badge].task, clampedStart2, clampedEnd2, "NORMAL", active[badge].session, active[badge].note);
+        if(clampedEnd2 > clampedStart2 && durLeave > 0){
+          addDur(badge, active[badge].biz, active[badge].task, durLeave);
+          addTimeline(badge, active[badge].biz, active[badge].task, clampedStart2, clampedEnd2, "NORMAL", active[badge].session, active[badge].note);
+        }
         delete active[badge];
       }else{
         anomalies.leave_without_join++;
@@ -6303,25 +6313,30 @@ function buildReportSummary_(){
 
   // 还在岗的按 reportUntilMs 结算（历史查询不会算到现在）
   Object.keys(active).forEach(function(b){
-    anomalies.open++;
     var capMs = reportUntilMs;
-    var durOpen = Math.max(0, capMs - Math.max(active[b].t, reportSinceMs));
-    addDur(b, active[b].biz, active[b].task, durOpen);
-    addTimeline(b, active[b].biz, active[b].task, active[b].t, capMs, "OPEN", active[b].session, active[b].note);
-    addAnomaly("open_not_left", b, active[b].biz, active[b].task, capMs, "统计截止时仍在岗");
+    var clampedStartOpen = Math.max(active[b].t, reportSinceMs);
+    var durOpen = Math.max(0, capMs - clampedStartOpen);
+    if(capMs > clampedStartOpen && durOpen > 0){
+      anomalies.open++;
+      addDur(b, active[b].biz, active[b].task, durOpen);
+      addTimeline(b, active[b].biz, active[b].task, clampedStartOpen, capMs, "OPEN", active[b].session, active[b].note);
+      addAnomaly("open_not_left", b, active[b].biz, active[b].task, capMs, "统计截止时仍在岗");
+    }
   });
 
-  // 展平成表格
+  // 展平成表格（过滤 0 工时 badge 和 0 分钟 task row）
   var out = [];
   var people = [];
   Object.keys(acc).sort().forEach(function(badge){
     var obj = acc[badge];
+    if(!obj || obj.total_ms <= 0) return; // 排除无正工时的人
     var tasks = obj.tasks || {};
 
     var taskRows = [];
     Object.keys(tasks).sort().forEach(function(k){
       var parts = k.split("|");
       var mins = msToMin_(tasks[k]);
+      if(mins <= 0) return; // 排除 0 分钟 task row
       taskRows.push({ biz: parts[0]||"", task: parts[1]||"", minutes: mins });
 
       out.push({
@@ -6330,6 +6345,7 @@ function buildReportSummary_(){
       });
     });
 
+    if(taskRows.length === 0) return; // 全部 task 都是 0 分钟，排除此人
     taskRows.sort(function(a,b){ return b.minutes - a.minutes; });
     people.push({ badge: badge, total_minutes: msToMin_(obj.total_ms), tasks: taskRows });
   });
@@ -6382,23 +6398,33 @@ function buildReportSummary_(){
     });
   });
 
-  // Build session_summary (趟次汇总): one row per session
+  // Build session_summary (趟次汇总): only sessions with positive in-range duration
   var sessionSummary = [];
-  Object.keys(sessionInfo).sort().forEach(function(sid){
-    var s = sessionInfo[sid];
-    var badgeList = Object.keys(s.badges).sort();
-    var waveList = Object.keys(s.waves).sort();
-    var totalMs = 0;
-    // sum durations from timeline segments belonging to this session
-    timeline.forEach(function(tl){
-      (tl.items||[]).forEach(function(it){
-        if(it.session === sid) totalMs += (it.minutes||0);
-      });
+  // Pre-collect: which badges have positive timeline minutes per session
+  var sessionBadgeMinutes = {}; // sid -> { badge -> totalMinutes }
+  timeline.forEach(function(tl){
+    (tl.items||[]).forEach(function(it){
+      if(!it.session || it.minutes <= 0) return;
+      if(!sessionBadgeMinutes[it.session]) sessionBadgeMinutes[it.session] = {};
+      var sbm = sessionBadgeMinutes[it.session];
+      sbm[tl.badge] = (sbm[tl.badge]||0) + it.minutes;
     });
+  });
+  Object.keys(sessionInfo).sort().forEach(function(sid){
+    var sbm = sessionBadgeMinutes[sid];
+    if(!sbm) return; // session 在区间内无正工时分段，跳过
+    var s = sessionInfo[sid];
+    // 只统计该 session 在区间内有正工时的人
+    var badgeList = Object.keys(sbm).sort();
+    var totalMin = 0;
+    badgeList.forEach(function(b){ totalMin += sbm[b]; });
+    if(totalMin <= 0) return;
+    // wave 只统计 server_ms 落在 [reportSinceMs, reportUntilMs] 内的
+    var waveList = Object.keys(s.waves_in_range || {}).sort();
     sessionSummary.push({
       session: sid, biz: s.biz, task: s.task,
       start_time: fmtKST_(s.start_ms), end_time: fmtKST_(s.end_ms),
-      total_minutes: totalMs, worker_count: badgeList.length,
+      total_minutes: totalMin, worker_count: badgeList.length,
       wave_count: waveList.length,
       wave_list: waveList.join("; "),
       workers: badgeList.join("; "),
@@ -6406,11 +6432,23 @@ function buildReportSummary_(){
     });
   });
 
+  // 统计区间内有效事件数
+  var rangeRows = 0;
+  for(var ri=0;ri<rows.length;ri++){
+    var rowRi = rows[ri];
+    if(!rowRi) continue;
+    var tRi = Number(rowRi[iServer]||0) || 0;
+    if(tRi >= reportSinceMs && tRi <= reportUntilMs) rangeRows++;
+  }
+
   REPORT_CACHE.summary = out;
   REPORT_CACHE.people = people;
   REPORT_CACHE.timeline = timeline;
   REPORT_CACHE.anomalies_list = anomaliesList;
   REPORT_CACHE.meta.anomalies = anomalies;
+  REPORT_CACHE.meta.fetched_rows = rows.length;
+  REPORT_CACHE.meta.range_rows = rangeRows;
+  REPORT_CACHE.meta.people_count = people.length;
   REPORT_CACHE.detail_rows = detailRows;
   REPORT_CACHE.session_summary = sessionSummary;
 
@@ -6457,7 +6495,9 @@ function renderReport_(){
 
   if(metaEl) metaEl.textContent =
     "区间(KST): " + (m.rangeLabel||"-") +
-    " ｜ 事件数=" + (REPORT_CACHE.rows||[]).length +
+    " ｜ 预取事件=" + (m.fetched_rows||0) +
+    " ｜ 区间事件=" + (m.range_rows||0) +
+    " ｜ 出勤人数=" + (m.people_count||0) +
     (anomalies.open > 0 ? " ｜ 仍在岗=" + anomalies.open : "");
 
   // ===== 总览卡片 =====
@@ -6511,6 +6551,7 @@ function renderReport_(){
     var taskTotals = {};
     var taskWorkerSets = {};
     sum.forEach(function(s){
+      if(s.minutes <= 0) return; // 双重保险：只统计正工时
       var k = s.biz + "|" + s.task;
       taskTotals[k] = (taskTotals[k] || 0) + s.minutes;
       if(!taskWorkerSets[k]) taskWorkerSets[k] = {};
