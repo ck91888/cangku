@@ -246,7 +246,7 @@ function navRestoreState(entry){
     _currentWoScope = st.scope || "today";
     // 恢复标题
     var titleEl = document.getElementById("wl-title");
-    if(_currentWoScope === "next3") titleEl.textContent = "未来三天出库作业单";
+    if(_currentWoScope === "next4") titleEl.textContent = "未来四天出库作业单";
     else if(_currentWoScope === "overdue") titleEl.textContent = "逾期未完成出库作业单";
     else if(_currentWoScope === "today") titleEl.textContent = "今日出库作业单";
     else titleEl.textContent = "出库作业单列表";
@@ -320,7 +320,7 @@ function goTab(tab){
   }
   if(tab === "home"){ goHome(); return; }
   if(tab === "plan"){ _planListScope = "unfinished"; goView("plan_list"); return; }
-  if(tab === "wo"){ _woListScope = "next3"; goView("wo_list"); return; }
+  if(tab === "wo"){ _woListScope = "next4"; goView("wo_list"); return; }
   if(tab === "fo"){ goView("fo_list"); return; }
   if(tab === "sc"){ goView("sc_list"); return; }
   if(tab === "wave"){ goView("doc_list"); return; }
@@ -1876,11 +1876,11 @@ function initWoList(){
   _currentWoScope = scope;
   var titleEl = document.getElementById("wl-title");
 
-  if(scope === "next3"){
-    titleEl.textContent = "未来三天出库作业单";
+  if(scope === "next4"){
+    titleEl.textContent = "未来四天出库作业单";
     document.getElementById("wl-start").value = today;
-    document.getElementById("wl-end").value = kstDayOffset(2);
-    loadWoListByScope("next3");
+    document.getElementById("wl-end").value = kstDayOffset(3);
+    loadWoListByScope("next4");
   } else if(scope === "tomorrow"){
     titleEl.textContent = "明日出库作业单";
     document.getElementById("wl-start").value = tmr;
@@ -1927,8 +1927,8 @@ function loadWoListByScope(scope){
       var overdue = all.filter(function(w){ return WO_INCOMPLETE_STATUS[w.status]; });
       renderWoList(el, [], applyWoFilters(overdue));
     });
-  } else if(scope === "next3"){
-    var endDay = kstDayOffset(2);
+  } else if(scope === "next4"){
+    var endDay = kstDayOffset(3);
     Promise.all([
       fetchApi({ action:"b2b_wo_list", start_day:today, end_day:endDay }),
       fetchApi({ action:"b2b_wo_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday })
@@ -1972,7 +1972,7 @@ function renderWoList(container, wos, overdueWos){
       return (a.is_accounted||0) - (b.is_accounted||0);
     });
     if(overdueWos.length > 0){
-      var woSectionTitle = (_currentWoScope === "next3") ? "未来三天作业单" : "当期作业单";
+      var woSectionTitle = (_currentWoScope === "next4") ? "未来四天作业单" : "当期作业单";
       html += '<div class="list-section-title" style="margin-top:12px;">📦 '+woSectionTitle+'（'+wos.length+' 单）</div>';
     }
     html += wos.map(renderWoRow).join("");
@@ -2324,7 +2324,7 @@ function reloadCurrentPlanList(){
   }
 }
 function reloadCurrentWoList(){
-  if(_currentWoScope === "next3" || _currentWoScope === "today" || _currentWoScope === "overdue"){
+  if(_currentWoScope === "next4" || _currentWoScope === "today" || _currentWoScope === "overdue"){
     loadWoListByScope(_currentWoScope);
   } else {
     loadWoList();
