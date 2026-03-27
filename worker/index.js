@@ -973,6 +973,32 @@ export default {
           try { await env.DB.prepare(`ALTER TABLE b2b_operation_results ADD COLUMN workflow_status TEXT NOT NULL DEFAULT ''`).run(); } catch(e) {}
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v25_b2b_simple_mode', ?)`).bind(Date.now()).run();
         }
+
+        const m26 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v26_fo_multi_bind'`).first();
+        if (!m26) {
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS b2b_field_op_wo_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id TEXT NOT NULL,
+            workorder_id TEXT NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            bind_note TEXT DEFAULT '',
+            bound_by TEXT NOT NULL DEFAULT '',
+            bound_at INTEGER NOT NULL,
+            UNIQUE(record_id, workorder_id)
+          )`).run();
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_fowb_record ON b2b_field_op_wo_bindings(record_id)`).run();
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_fowb_wo ON b2b_field_op_wo_bindings(workorder_id)`).run();
+          // 迁移旧数据：把 field_ops.bound_workorder_id 写入 bindings 表
+          const oldBinds = await env.DB.prepare(
+            `SELECT record_id, bound_workorder_id, bound_at FROM b2b_field_ops WHERE bound_workorder_id IS NOT NULL AND bound_workorder_id != ''`
+          ).all();
+          for (const ob of (oldBinds.results || [])) {
+            await env.DB.prepare(
+              `INSERT OR IGNORE INTO b2b_field_op_wo_bindings(record_id, workorder_id, is_primary, bound_by, bound_at) VALUES(?,?,1,'migrated',?)`
+            ).bind(ob.record_id, ob.bound_workorder_id, ob.bound_at || Date.now()).run();
+          }
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v26_fo_multi_bind', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -4038,6 +4064,8 @@ export default {
 
       const row = await env.DB.prepare(`SELECT * FROM b2b_field_ops WHERE record_id=?`).bind(record_id).first();
       if (!row) return jsonpOrJson({ ok:false, error:"record_id not found" }, callback);
+      const brs = await env.DB.prepare(`SELECT id, workorder_id, is_primary, bind_note, bound_by, bound_at FROM b2b_field_op_wo_bindings WHERE record_id=? ORDER BY is_primary DESC, bound_at ASC`).bind(record_id).all();
+      row.bindings = brs.results || [];
       return jsonpOrJson({ ok:true, record: row }, callback);
     }
 
@@ -4137,29 +4165,54 @@ export default {
         return jsonpOrJson({ ok:true, record_id, status: new_status }, callback);
       }
 
-      // --- 绑定作业单：只允许 completed 且当前未绑定 ---
+      // --- 绑定作业单（多绑定） ---
       if (sub === "bind") {
         if (existing.status !== "completed") {
           return jsonpOrJson({ ok:false, error:"only completed records can be bound" }, callback);
         }
-        if (existing.bound_workorder_id) {
-          return jsonpOrJson({ ok:false, error:"already bound to " + existing.bound_workorder_id + ", cannot rebind" }, callback);
-        }
         const workorder_id = String(p.workorder_id || "").trim();
         if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+        const bind_note = String(p.bind_note || "").trim();
+        const bound_by = String(p.bound_by || "").trim();
 
-        // 校验作业单存在
         const wo = await env.DB.prepare(`SELECT workorder_id FROM b2b_workorders WHERE workorder_id=?`).bind(workorder_id).first();
         if (!wo) return jsonpOrJson({ ok:false, error:"workorder_id not found: " + workorder_id }, callback);
 
-        await env.DB.prepare(
-          `UPDATE b2b_field_ops SET bound_workorder_id=?, bound_at=? WHERE record_id=?`
-        ).bind(workorder_id, now, record_id).run();
+        // 检查是否已绑定过同一个
+        const dup = await env.DB.prepare(`SELECT 1 FROM b2b_field_op_wo_bindings WHERE record_id=? AND workorder_id=?`).bind(record_id, workorder_id).first();
+        if (dup) return jsonpOrJson({ ok:false, error:"已绑定过该作业单: " + workorder_id }, callback);
 
-        return jsonpOrJson({ ok:true, record_id, bound_workorder_id: workorder_id }, callback);
+        // 判断是否为第一条绑定（设为 primary）
+        const cnt = await env.DB.prepare(`SELECT COUNT(*) AS c FROM b2b_field_op_wo_bindings WHERE record_id=?`).bind(record_id).first();
+        const isPrimary = (cnt && cnt.c > 0) ? 0 : 1;
+
+        await env.DB.prepare(
+          `INSERT INTO b2b_field_op_wo_bindings(record_id, workorder_id, is_primary, bind_note, bound_by, bound_at) VALUES(?,?,?,?,?,?)`
+        ).bind(record_id, workorder_id, isPrimary, bind_note, bound_by, now).run();
+
+        // 同步 field_ops.bound_workorder_id（兼容旧读取）
+        if (!existing.bound_workorder_id) {
+          await env.DB.prepare(`UPDATE b2b_field_ops SET bound_workorder_id=?, bound_at=? WHERE record_id=?`).bind(workorder_id, now, record_id).run();
+        }
+
+        return jsonpOrJson({ ok:true, record_id, workorder_id }, callback);
       }
 
-      return jsonpOrJson({ ok:false, error:"invalid sub, must be: edit/status/bind" }, callback);
+      // --- 解绑作业单 ---
+      if (sub === "unbind") {
+        const workorder_id = String(p.workorder_id || "").trim();
+        if (!workorder_id) return jsonpOrJson({ ok:false, error:"missing workorder_id" }, callback);
+
+        await env.DB.prepare(`DELETE FROM b2b_field_op_wo_bindings WHERE record_id=? AND workorder_id=?`).bind(record_id, workorder_id).run();
+
+        // 同步 field_ops.bound_workorder_id
+        const remain = await env.DB.prepare(`SELECT workorder_id FROM b2b_field_op_wo_bindings WHERE record_id=? ORDER BY is_primary DESC, bound_at ASC LIMIT 1`).bind(record_id).first();
+        await env.DB.prepare(`UPDATE b2b_field_ops SET bound_workorder_id=?, bound_at=? WHERE record_id=?`).bind(remain ? remain.workorder_id : null, remain ? now : null, record_id).run();
+
+        return jsonpOrJson({ ok:true, record_id, unbound: workorder_id }, callback);
+      }
+
+      return jsonpOrJson({ ok:false, error:"invalid sub, must be: edit/status/bind/unbind" }, callback);
     }
 
     // ===== 扫码绑定作业对象 =====

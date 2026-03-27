@@ -3046,7 +3046,7 @@ function renderFoListDate(container, records){
 
 function renderFoRow(r){
   var dimClass = (r.status==="cancelled") ? " row-dim" : "";
-  var boundTag = r.bound_workorder_id ? ' <span class="bound-badge">已绑定 '+esc(r.bound_workorder_id)+'</span>' : '';
+  var boundTag = r.bound_workorder_id ? ' <span class="bound-badge">已绑定</span>' : '';
   var srcTag = r.source_plan_id ? ' <span class="muted" style="font-size:11px;">← '+esc(r.source_plan_id)+'</span>' : '';
   var times = r.created_at ? '建单: '+fmtShortTime_(r.created_at) : '';
   if(r.plan_day) times += (times ? ' · ' : '') + '作业日: '+esc(r.plan_day);
@@ -3079,21 +3079,33 @@ function goFoDetail(id, _skipNav){
     var editBtn = FO_EDITABLE[r.status] ?
       ' <button onclick="goEditFo(\''+esc(r.record_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;">编辑</button>' : '';
 
-    // 绑定按钮：仅 completed 且未绑定
-    var bindBtn = (r.status === "completed" && !r.bound_workorder_id) ?
-      ' <button onclick="showBindWo(\''+esc(r.record_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;background:#8e24aa;color:#fff;">绑定作业单</button>' : '';
+    // 绑定按钮：completed 状态可绑定
+    var bindings = r.bindings || [];
+    var bindBtn = (r.status === "completed") ?
+      ' <button onclick="showBindWo(\''+esc(r.record_id)+'\')" style="width:auto;padding:8px 16px;font-size:13px;background:#8e24aa;color:#fff;">'+(bindings.length ? '继续绑定作业单' : '绑定作业单')+'</button>' : '';
 
-    // 绑定信息
-    var boundInfo = r.bound_workorder_id ?
-      '<div class="detail-field" style="background:#f3e5f5;padding:8px 12px;border-radius:8px;margin:8px 0;">' +
-      '<b>已绑定作业单:</b> <span style="color:#8e24aa;font-weight:700;">'+esc(r.bound_workorder_id)+'</span>' +
-      (r.bound_at ? ' · 绑定时间: '+new Date(r.bound_at).toLocaleString() : '') +
-      ' <button onclick="goWoDetail(\''+esc(r.bound_workorder_id)+'\')" style="width:auto;padding:4px 12px;font-size:12px;margin-left:8px;">查看作业单</button></div>' : '';
+    // 绑定列表
+    var boundInfo = '';
+    if(bindings.length){
+      boundInfo = '<div style="background:#f3e5f5;padding:8px 12px;border-radius:8px;margin:8px 0;">' +
+        '<b>已绑定作业单（'+bindings.length+'）:</b>';
+      bindings.forEach(function(b){
+        boundInfo += '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;padding:4px 0;border-bottom:1px solid #e1bee7;">' +
+          '<span style="color:#8e24aa;font-weight:700;">'+esc(b.workorder_id)+'</span>' +
+          (b.is_primary ? ' <span style="font-size:10px;background:#8e24aa;color:#fff;padding:1px 6px;border-radius:4px;">主</span>' : '') +
+          (b.bind_note ? ' <span class="muted" style="font-size:11px;">'+esc(b.bind_note)+'</span>' : '') +
+          (b.bound_at ? ' <span class="muted" style="font-size:11px;">'+new Date(b.bound_at).toLocaleString()+'</span>' : '') +
+          ' <button onclick="goWoDetail(\''+esc(b.workorder_id)+'\')" style="width:auto;padding:2px 10px;font-size:11px;">查看</button>' +
+          ' <button onclick="doUnbindWo(\''+esc(r.record_id)+'\',\''+esc(b.workorder_id)+'\')" style="width:auto;padding:2px 10px;font-size:11px;color:#c62828;">解绑</button>' +
+        '</div>';
+      });
+      boundInfo += '</div>';
+    }
 
     card.innerHTML =
       '<div style="font-size:18px;font-weight:800;margin-bottom:10px;">' +
         esc(r.record_id) + ' <span class="st st-'+esc(r.status)+'">'+esc(FO_STATUS_LABEL[r.status]||r.status)+'</span>' +
-        (r.bound_workorder_id ? ' <span class="bound-badge">已绑定</span>' : '') +
+        (bindings.length ? ' <span class="bound-badge">已绑定'+bindings.length+'单</span>' : '') +
       '</div>' +
       (r.source_plan_id ? '<div class="detail-field" style="color:#2e7d32;"><b>来源入库计划:</b> '+esc(r.source_plan_id)+'</div>' : '<div class="detail-field muted"><b>来源:</b> 独立新建</div>') +
       '<div class="detail-field"><b>客户:</b> '+esc(r.customer_name)+'</div>' +
@@ -3166,7 +3178,7 @@ function doBindWo(record_id){
   if(!sel) return;
   var workorder_id = sel.value;
   if(!workorder_id){ alert("请选择作业单"); return; }
-  if(!confirm("确认将 "+record_id+" 绑定到 "+workorder_id+"？\n绑定后不可更改。")) return;
+  if(!confirm("确认将 "+record_id+" 绑定到 "+workorder_id+"？")) return;
 
   fetchApi({ action:"b2b_field_op_update", record_id:record_id, sub:"bind", workorder_id:workorder_id }).then(function(res){
     if(res && res.ok){
@@ -3174,6 +3186,17 @@ function doBindWo(record_id){
       goFoDetail(record_id, true);
     } else {
       alert("绑定失败: "+(res&&res.error||"unknown"));
+    }
+  });
+}
+
+function doUnbindWo(record_id, workorder_id){
+  if(!confirm("确认解绑 "+record_id+" 与 "+workorder_id+" 的关联？")) return;
+  fetchApi({ action:"b2b_field_op_update", record_id:record_id, sub:"unbind", workorder_id:workorder_id }).then(function(res){
+    if(res && res.ok){
+      goFoDetail(record_id, true);
+    } else {
+      alert("解绑失败: "+(res&&res.error||"unknown"));
     }
   });
 }
