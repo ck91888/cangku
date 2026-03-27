@@ -2922,37 +2922,115 @@ function goEditFo(record_id){
 }
 
 // ===== 现场作业记录列表 =====
-function initFoList(){
-  var today = kstToday();
-  document.getElementById("fl-start").value = today;
-  document.getElementById("fl-end").value = today;
-  loadFoList();
+var _foMode = "default"; // "default" | "date"
+var _foRawIncomplete = [];
+var _foRawRecent = [];
+var _foRawDate = [];
+
+function _kstDaysAgo(n){
+  var d = new Date(Date.now() + 9*3600*1000 - n*24*3600*1000);
+  return d.getUTCFullYear() + "-" + pad2(d.getUTCMonth()+1) + "-" + pad2(d.getUTCDate());
 }
 
-function loadFoList(){
+function initFoList(){
+  var today = kstToday();
+  var dayBefore = _kstDaysAgo(2);
+  document.getElementById("fl-start").value = dayBefore;
+  document.getElementById("fl-end").value = today;
+  document.getElementById("fl-status").value = "";
+  loadFoListDefault();
+}
+
+function loadFoListDefault(){
+  _foMode = "default";
+  var el = document.getElementById("fl-result");
+  el.innerHTML = '<div class="q-empty">加载中...</div>';
+  var today = kstToday();
+  var dayBefore = _kstDaysAgo(2);
+
+  var p1 = fetchApi({ action:"b2b_field_op_list", status:"draft,recording" }).then(function(res){
+    return (res && res.ok) ? (res.records||[]) : null;
+  }).catch(function(){ return null; });
+
+  var p2 = fetchApi({ action:"b2b_field_op_list", start_day:dayBefore, end_day:today }).then(function(res){
+    return (res && res.ok) ? (res.records||[]) : null;
+  }).catch(function(){ return null; });
+
+  Promise.all([p1, p2]).then(function(arr){
+    var incRaw = arr[0], recentRaw = arr[1];
+    if(incRaw === null && recentRaw === null){
+      el.innerHTML = '<div class="bad">查询失败</div>';
+      return;
+    }
+    _foRawIncomplete = incRaw || [];
+    // 近3天去重：排除已在未完成列表中的
+    var incIds = {};
+    _foRawIncomplete.forEach(function(r){ incIds[r.record_id] = 1; });
+    _foRawRecent = (recentRaw || []).filter(function(r){ return !incIds[r.record_id]; });
+    applyFoStatusFilter();
+  });
+}
+
+function loadFoListByDate(){
   var s = document.getElementById("fl-start").value;
   var e = document.getElementById("fl-end").value;
   if(!s || !e){ alert("请选择日期"); return; }
+  _foMode = "date";
   var el = document.getElementById("fl-result");
   el.innerHTML = '<div class="q-empty">加载中...</div>';
   fetchApi({ action:"b2b_field_op_list", start_day:s, end_day:e }).then(function(res){
     if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败</div>'; return; }
-    renderFoList(el, res.records||[]);
+    _foRawDate = res.records||[];
+    applyFoStatusFilter();
   });
 }
 
-function renderFoList(container, records){
+function applyFoStatusFilter(){
+  var st = document.getElementById("fl-status").value;
+  var fn = st ? function(r){ return r.status === st; } : function(){ return true; };
+  var el = document.getElementById("fl-result");
+
+  if(_foMode === "default"){
+    var inc = _foRawIncomplete.filter(fn);
+    var rec = _foRawRecent.filter(fn);
+    renderFoListDefault(el, inc, rec);
+  } else {
+    renderFoListDate(el, _foRawDate.filter(fn));
+  }
+}
+
+function _sortByPriority(arr){
+  arr.sort(function(a,b){ return (FO_STATUS_PRIORITY[a.status]||9) - (FO_STATUS_PRIORITY[b.status]||9); });
+  return arr;
+}
+
+function renderFoListDefault(container, incomplete, recent){
+  if(!incomplete.length && !recent.length){
+    container.innerHTML = '<div class="q-empty">暂无记录</div>';
+    return;
+  }
+  _sortByPriority(incomplete);
+  _sortByPriority(recent);
+
+  var html = '';
+  html += '<div class="list-section-title">未完成动态单（'+incomplete.length+' 条）</div>';
+  html += incomplete.length ? incomplete.map(renderFoRow).join("") : '<div class="q-empty" style="padding:6px 0;">无</div>';
+
+  html += '<div class="list-section-title" style="margin-top:12px;">近3天动态单（'+recent.length+' 条）</div>';
+  html += recent.length ? recent.map(renderFoRow).join("") : '<div class="q-empty" style="padding:6px 0;">无</div>';
+
+  container.innerHTML = html;
+}
+
+function renderFoListDate(container, records){
   if(!records.length){
     container.innerHTML = '<div class="q-empty">暂无记录</div>';
     return;
   }
-
-  // 分区：未完成在前
   var incomplete = records.filter(function(r){ return FO_INCOMPLETE_STATUS[r.status]; });
   var done = records.filter(function(r){ return !FO_INCOMPLETE_STATUS[r.status]; });
-
-  incomplete.sort(function(a,b){ return (FO_STATUS_PRIORITY[a.status]||9) - (FO_STATUS_PRIORITY[b.status]||9); });
-  done.sort(function(a,b){ return (FO_STATUS_PRIORITY[a.status]||9) - (FO_STATUS_PRIORITY[b.status]||9); });
+  _sortByPriority(incomplete);
+  _sortByPriority(done);
 
   var html = '';
   if(incomplete.length > 0){
