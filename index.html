@@ -63,6 +63,9 @@
         <button class="primary" onclick="go('warehouse_cleanup')">
           仓库整理 / 창고 정리<br><small>开始/结束扫工牌</small>
         </button>
+        <button class="primary" onclick="go('scan_op')" style="background:#00695c;border-color:#00695c;">
+          按单操作 / 주문별 작업<br><small>理货·工单·出库 统一入口</small>
+        </button>
       </div>
     </div>
 
@@ -486,6 +489,9 @@
     </div>
 
     <div class="card">
+      <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px;color:#e65100;">
+        ⚠️ 此页面即将停用，请使用新版 <a href="#/scan_op" style="color:#0d47a1;font-weight:700;">【按单操作】</a> 入口。
+      </div>
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 入库单号扫码（去重计数）。</div>
 
       <button class="primary" onclick="startTally(event)">开始理货 / 시작</button>
@@ -523,6 +529,9 @@
     </div>
 
     <div class="card">
+      <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px;color:#e65100;">
+        ⚠️ 此页面即将停用，请使用新版 <a href="#/scan_op" style="color:#0d47a1;font-weight:700;">【按单操作】</a> 入口。
+      </div>
       <div class="muted">口径：开始/结束 + 人员加入/退出 + 出库单号扫码（去重计数）。</div>
 
       <button class="primary" onclick="startBulkOut(event)">开始批量出库 / 시작</button>
@@ -873,6 +882,90 @@
 
       <!-- 结束趟次 -->
       <button class="primary" onclick="smEndSession()" style="background:#c62828;border-color:#c62828;margin-top:8px;">结束趟次 / 세션 종료</button>
+    </div>
+  </div>
+
+  <!-- ===== 统一按单操作 / 扫单作业 ===== -->
+  <div id="page-scan_op" class="page" style="display:none;">
+    <div class="topbar">
+      <button class="back small" onclick="scanOpBack()">返回 / 뒤로</button>
+      <div class="grow pill" id="soTopTitle">按单操作 / 스캔 작업</div>
+    </div>
+
+    <!-- 选择业务任务 -->
+    <div id="soSelectTask" class="card">
+      <h3>选择作业类型 / 작업 유형 선택</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <button class="primary" onclick="scanOpSelectTask('b2c_inbound_tally')" style="background:#1565c0;border-color:#1565c0;">B2C 入库理货<br><small>입고 검수</small></button>
+        <button class="primary" onclick="scanOpSelectTask('b2c_workorder_op')" style="background:#0d47a1;border-color:#0d47a1;">B2C 批量出库<br>（按单操作）<br><small>대량출고 (주문별)</small></button>
+        <button class="primary" onclick="scanOpSelectTask('b2b_inbound_tally')" style="background:#e65100;border-color:#e65100;">B2B 入库理货<br><small>B2B 입고 검수</small></button>
+        <button class="primary" onclick="scanOpSelectTask('b2b_workorder_op')" style="background:#6a1b9a;border-color:#6a1b9a;">B2B 工单操作<br><small>B2B 작업지시</small></button>
+      </div>
+    </div>
+
+    <!-- 通用作业面板（选择任务后显示） -->
+    <div id="soWorkPanel" class="card" style="display:none;">
+      <!-- 顶部状态区 -->
+      <div id="soStatusArea" style="background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
+        <div style="font-size:12px;color:#555;">
+          趟次 / 세션: <b id="soSessionId">-</b>
+        </div>
+        <div style="font-size:12px;color:#555;margin-top:4px;">
+          当前单号 / 현재 주문: <b id="soCurrentOrder" style="color:#0d47a1;font-size:14px;">-</b>
+          &nbsp;状态 / 상태: <span id="soCurrentStatus">-</span>
+        </div>
+        <div style="font-size:12px;color:#555;margin-top:4px;">
+          参与人数 / 참여자: <b id="soWorkerCount">0</b>
+          &nbsp;累计工时 / 누적시간: <span id="soTotalMinutes">-</span>
+        </div>
+      </div>
+
+      <!-- 主按钮区 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+        <button class="primary" onclick="soScanOrder()" style="background:#1565c0;border-color:#1565c0;">扫单号 / 주문 스캔</button>
+        <button class="primary" onclick="soScanWorker()" style="background:#2e7d32;border-color:#2e7d32;">扫人员 / 작업자 스캔</button>
+        <button class="primary" onclick="soTempComplete()" style="background:#e65100;border-color:#e65100;">暂时完成 / 임시 완료</button>
+        <button class="primary" onclick="soOpenResultForm()" style="background:#00695c;border-color:#00695c;">录结果 / 결과 입력</button>
+        <button class="primary" onclick="soConfirmComplete()" style="background:#6a1b9a;border-color:#6a1b9a;">确认完成 / 확인 완료</button>
+        <button class="primary" onclick="soLeaveWorker()" style="background:#757575;border-color:#757575;">人员退出 / 퇴장</button>
+      </div>
+
+      <!-- 手动输入单号 -->
+      <div class="row" style="margin-bottom:8px;">
+        <input id="soManualOrderInput" type="text" style="flex:1;" onkeydown="if(event.key==='Enter')soManualAddOrder()" />
+        <button onclick="soManualAddOrder()" style="width:auto;min-width:80px;">添加 / 추가</button>
+      </div>
+
+      <!-- 当前参与人员 -->
+      <div id="soLaborArea" style="background:#f5f5f5;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:700;">当前参与人员 / 현재 참여자</div>
+        <div id="soLaborList" class="muted" style="font-size:12px;margin-top:4px;">无 / 없음</div>
+      </div>
+
+      <!-- 单据列表 -->
+      <div class="listBox">
+        <div style="font-size:13px;font-weight:700;">
+          <span id="soOrderListTitle">单据列表</span>
+          <span id="soOrderTotal" style="color:#0d47a1;">(0)</span>
+        </div>
+        <div id="soOrderList" class="muted">无 / 없음</div>
+      </div>
+
+      <!-- 结束趟次 -->
+      <button class="primary" onclick="soEndSession()" style="background:#c62828;border-color:#c62828;margin-top:8px;">结束趟次 / 세션 종료</button>
+    </div>
+  </div>
+
+  <!-- 按单操作 - 结果录入弹窗 -->
+  <div id="soResultModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:999;justify-content:center;align-items:center;">
+    <div style="background:#fff;border-radius:12px;padding:20px;max-width:420px;width:92%;max-height:85vh;overflow:auto;position:relative;">
+      <button onclick="soCloseResultForm()" style="position:absolute;top:10px;right:14px;background:none;border:none;font-size:22px;cursor:pointer;">&times;</button>
+      <h3 id="soResultTitle">录入结果</h3>
+      <div id="soResultBody"></div>
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <button class="primary" onclick="soSaveResult()" style="flex:1;background:#2e7d32;border-color:#2e7d32;">保存 / 저장</button>
+        <button onclick="soCloseResultForm()" style="flex:1;">取消 / 취소</button>
+      </div>
     </div>
   </div>
 

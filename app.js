@@ -15,7 +15,7 @@ var pages = [
   "import_menu","import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
   "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_workorder_simple","b2b_outbound","b2b_inventory","b2b_field_op","b2b_scan_check",
   "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_inventory","b2c_disposal","b2c_relabel",
-  "warehouse_cleanup",
+  "warehouse_cleanup","scan_op",
   "active_now",
   "report",
   "global_sessions",
@@ -162,6 +162,7 @@ function renderPages(){
   if(cur==="b2b_scan_check"){ initScanCheckPage(); }
   if(cur==="b2c_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="warehouse_cleanup"){ restoreState(); renderActiveLists(); refreshUI(); }
+  if(cur==="scan_op"){ soInitPage_(); }
 
   // 离开页面时清除定时器
   if(_activeNowTimer){ clearInterval(_activeNowTimer); _activeNowTimer = null; }
@@ -189,7 +190,7 @@ function renderPages(){
   var taskPages = ["b2c_tally","b2c_bulkout","b2c_pick","b2c_pack","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
     "import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
     "b2b_unload","b2b_tally","b2b_workorder","b2b_workorder_simple","b2b_outbound",
-    "b2b_inventory","b2b_field_op","b2c_inventory","warehouse_cleanup"];
+    "b2b_inventory","b2b_field_op","b2c_inventory","warehouse_cleanup","scan_op"];
   if(taskPages.indexOf(cur) >= 0 && currentSessionId){
     syncActiveFromServer_();
   }
@@ -5432,7 +5433,7 @@ async function openScannerCommon(){
     lastScanAt = now;
 
     // ✅ 乱码检测：对非 QR 码场景（工单/单号扫码）自动拦截可疑结果
-    if(scanMode !== "operator_setup" && scanMode !== "session_join" && scanMode !== "labor" && scanMode !== "badgeBind" && scanMode !== "leaderLoginPick" && scanMode !== "b2b_result_confirm_badge" && scanMode !== "b2b_simple_worker" && scanMode !== "b2b_simple_confirm_badge" && scanMode !== "b2b_simple_leave"){
+    if(scanMode !== "operator_setup" && scanMode !== "session_join" && scanMode !== "labor" && scanMode !== "badgeBind" && scanMode !== "leaderLoginPick" && scanMode !== "b2b_result_confirm_badge" && scanMode !== "b2b_simple_worker" && scanMode !== "b2b_simple_confirm_badge" && scanMode !== "b2b_simple_leave" && scanMode !== "scan_op_worker_join" && scanMode !== "scan_op_worker_leave" && scanMode !== "scan_op_confirm_badge"){
       if(looksGarbled_(code)){
         setStatus("⚠️ 扫码结果异常（疑似乱码）：" + code + " — 请重新扫码或手动输入", false);
         return;
@@ -5503,6 +5504,24 @@ async function openScannerCommon(){
       if(inpSm) inpSm.value = (bpSm.name ? bpSm.name + " (" + bpSm.id + ")" : bpSm.id);
       await closeScanner();
       setStatus("职员工牌已扫描 / 직원 명찰 스캔됨 ✅ " + bpSm.id, true);
+      return;
+    }
+
+    // ===== 统一按单操作扫码分支 =====
+    if(scanMode === "scan_op_order"){
+      await _soHandleScanOrder(code);
+      return;
+    }
+    if(scanMode === "scan_op_worker_join"){
+      await _soHandleScanWorkerJoin(code);
+      return;
+    }
+    if(scanMode === "scan_op_worker_leave"){
+      await _soHandleScanWorkerLeave(code);
+      return;
+    }
+    if(scanMode === "scan_op_confirm_badge"){
+      await _soHandleScanConfirmBadge(code);
       return;
     }
 
@@ -8059,6 +8078,657 @@ function scExitScan(){
   document.getElementById("scLastResult").style.display = "none";
   // 回到选择区，不离开页面
   initScanCheckPage();
+}
+
+/** ===== 统一按单操作引擎 (scan_op) ===== */
+
+var SCAN_OP_CONFIG = {
+  "b2c_inbound_tally": {
+    biz: "B2C", task: "B2C入库理货", source_type: "b2c_inbound_tally",
+    label: "B2C 入库理货", orderLabel: "入库单号",
+    resultFields: [
+      { key:"tallied_qty", label:"理货件数 / 검수 수량", type:"number", required:true },
+      { key:"label_count", label:"贴标数量 / 라벨 수", type:"number" },
+      { key:"remark", label:"备注 / 비고", type:"text" }
+    ]
+  },
+  "b2c_workorder_op": {
+    biz: "B2C", task: "B2C工单操作", source_type: "b2c_workorder_op",
+    label: "B2C 批量出库（按单操作）", orderLabel: "出库单号",
+    resultFields: [
+      { key:"box_count", label:"箱数 / 박스", type:"number" },
+      { key:"pallet_count", label:"托盘数 / 팔레트", type:"number" },
+      { key:"packed_qty", label:"打包件数 / 포장 수량", type:"number" },
+      { key:"sku_kind_count", label:"SKU种类 / SKU 종류", type:"number" },
+      { key:"label_count", label:"贴标数 / 라벨 수", type:"number" },
+      { key:"packed_box_count", label:"封箱数 / 봉함 수", type:"number" },
+      { key:"rebox_count", label:"换箱数 / 재포장 수", type:"number" },
+      { key:"forklift_pallet_count", label:"叉车托数 / 지게차 팔레트", type:"number" },
+      { key:"remark", label:"备注 / 비고", type:"text" }
+    ]
+  },
+  "b2b_inbound_tally": {
+    biz: "B2B", task: "B2B入库理货", source_type: "b2b_inbound_tally",
+    label: "B2B 入库理货", orderLabel: "入库计划单号",
+    resultFields: [
+      { key:"tallied_qty", label:"理货件数 / 검수 수량", type:"number", required:true },
+      { key:"label_count", label:"贴标数量 / 라벨 수", type:"number" },
+      { key:"remark", label:"备注 / 비고", type:"text" }
+    ]
+  },
+  "b2b_workorder_op": {
+    biz: "B2B", task: "B2B工单操作", source_type: "internal_b2b_workorder",
+    label: "B2B 工单操作", orderLabel: "工单号",
+    resultFields: [
+      { key:"box_count", label:"箱数 / 박스", type:"number" },
+      { key:"pallet_count", label:"托盘数 / 팔레트", type:"number" },
+      { key:"packed_qty", label:"打包件数 / 포장 수량", type:"number" },
+      { key:"sku_kind_count", label:"SKU种类 / SKU 종류", type:"number" },
+      { key:"label_count", label:"贴标数 / 라벨 수", type:"number" },
+      { key:"packed_box_count", label:"封箱数 / 봉함 수", type:"number" },
+      { key:"rebox_count", label:"换箱数 / 재포장 수", type:"number" },
+      { key:"forklift_pallet_count", label:"叉车托数 / 지게차 팔레트", type:"number" },
+      { key:"remark", label:"备注 / 비고", type:"text" }
+    ]
+  }
+};
+
+var _soConfigKey = null;   // 当前选中的 config key
+var _soSessionId = null;   // 当前按单操作的 session id
+var _soCurrentOrder = null; // 当前聚焦的单号
+var _soOrders = [];        // 后端返回的单据列表缓存
+var _soRefreshTimer = null;
+
+function _soConfig(){ return _soConfigKey ? SCAN_OP_CONFIG[_soConfigKey] : null; }
+
+function soInitPage_(){
+  // 如果已经选了任务且有 session，恢复面板
+  var savedKey = localStorage.getItem("so_config_key") || null;
+  var savedSid = localStorage.getItem("so_session_id") || null;
+  if(savedKey && savedSid && SCAN_OP_CONFIG[savedKey]){
+    _soConfigKey = savedKey;
+    _soSessionId = savedSid;
+    _soShowWorkPanel();
+    soRefreshOrderList_();
+  } else {
+    _soShowSelectTask();
+  }
+}
+
+function _soShowSelectTask(){
+  var el1 = document.getElementById("soSelectTask");
+  var el2 = document.getElementById("soWorkPanel");
+  if(el1) el1.style.display = "block";
+  if(el2) el2.style.display = "none";
+  var t = document.getElementById("soTopTitle");
+  if(t) t.textContent = "按单操作 / 스캔 작업";
+}
+
+function _soShowWorkPanel(){
+  var el1 = document.getElementById("soSelectTask");
+  var el2 = document.getElementById("soWorkPanel");
+  if(el1) el1.style.display = "none";
+  if(el2) el2.style.display = "block";
+  var cfg = _soConfig();
+  var t = document.getElementById("soTopTitle");
+  if(t && cfg) t.textContent = cfg.label;
+  var inp = document.getElementById("soManualOrderInput");
+  if(inp && cfg) inp.placeholder = "手动输入" + cfg.orderLabel + " / 수동 입력";
+  var lt = document.getElementById("soOrderListTitle");
+  if(lt && cfg) lt.textContent = cfg.orderLabel + "列表";
+  _soUpdateStatusArea();
+}
+
+function _soUpdateStatusArea(){
+  var sid = document.getElementById("soSessionId");
+  if(sid) sid.textContent = _soSessionId ? _soSessionId.slice(-12) : "-";
+
+  var co = document.getElementById("soCurrentOrder");
+  if(co) co.textContent = _soCurrentOrder || "-";
+
+  // 从 _soOrders 找当前单的状态
+  var cur = null;
+  if(_soCurrentOrder){
+    for(var i=0;i<_soOrders.length;i++){
+      if(_soOrders[i].source_order_no === _soCurrentOrder){ cur = _soOrders[i]; break; }
+    }
+  }
+  var statusEl = document.getElementById("soCurrentStatus");
+  if(statusEl) statusEl.textContent = cur ? _soWfLabel(cur.workflow_status) : "-";
+  var wcEl = document.getElementById("soWorkerCount");
+  if(wcEl) wcEl.textContent = cur ? String(cur.active_count || 0) : "0";
+  var tmEl = document.getElementById("soTotalMinutes");
+  if(tmEl) tmEl.textContent = cur ? (cur.total_minutes > 0 ? cur.total_minutes.toFixed(1) + "min" : "-") : "-";
+
+  // labor list
+  var labEl = document.getElementById("soLaborList");
+  if(labEl){
+    if(cur && cur.active_workers && cur.active_workers.length > 0){
+      labEl.innerHTML = cur.active_workers.map(function(w){
+        return '<span class="tag" style="margin:2px;">' + esc(w.badge) + (w.name ? " " + esc(w.name) : "") + '</span>';
+      }).join("");
+    } else {
+      labEl.innerHTML = '<span class="muted">无 / 없음</span>';
+    }
+  }
+}
+
+function _soWfLabel(ws){
+  var m = { pending_worker:"待操作", working:"操作中", paused:"暂停中", pending_result:"暂时完成", completed:"已完成" };
+  return m[ws] || ws || "-";
+}
+
+function scanOpBack(){
+  if(_soConfigKey && _soSessionId){
+    // 有进行中的任务，回到选择页而不是离开
+    var ok = confirm("当前有进行中的作业，确认返回吗？\n（趟次不会结束，可以随时回来继续）");
+    if(!ok) return;
+  }
+  back();
+}
+
+// ── 选择业务任务 ──
+function scanOpSelectTask(configKey){
+  if(!SCAN_OP_CONFIG[configKey]){ alert("无效的作业类型"); return; }
+  _soConfigKey = configKey;
+  var cfg = SCAN_OP_CONFIG[configKey];
+
+  // 检查是否有已保存的 session
+  var savedSid = getSess_(cfg.biz, cfg.task);
+  if(savedSid){
+    _soSessionId = savedSid;
+    currentSessionId = savedSid;
+    CUR_CTX = { biz: cfg.biz, task: cfg.task, page:"scan_op" };
+    _soSavePref();
+    _soShowWorkPanel();
+    soRefreshOrderList_();
+    return;
+  }
+
+  // 创建新 session
+  _soStartSession(cfg);
+}
+
+async function _soStartSession(cfg){
+  if(!acquireBusy_()) return;
+  try{
+    var newSid = makePickSessionId();
+    var evId = makeEventId({ event:"start", biz:cfg.biz, task:cfg.task, wave_id:"", badgeRaw:"" });
+    await submitEventSync_({ event:"start", event_id: evId, biz:cfg.biz, task:cfg.task, pick_session_id: newSid }, true);
+
+    _soSessionId = newSid;
+    currentSessionId = newSid;
+    CUR_CTX = { biz: cfg.biz, task: cfg.task, page:"scan_op" };
+    setSess_(cfg.biz, cfg.task, newSid);
+    _soSavePref();
+    _soCurrentOrder = null;
+    _soOrders = [];
+
+    _soShowWorkPanel();
+    setStatus(cfg.label + " 开始 — 趟次: " + newSid, true);
+  }catch(e){
+    alert("创建趟次失败：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+function _soSavePref(){
+  localStorage.setItem("so_config_key", _soConfigKey || "");
+  localStorage.setItem("so_session_id", _soSessionId || "");
+}
+
+// ── 扫单号 ──
+function soScanOrder(){
+  if(!_soSessionId){ alert("请先选择作业类型"); return; }
+  var cfg = _soConfig();
+  scanMode = "scan_op_order";
+  document.getElementById("scanTitle").textContent = "扫" + (cfg ? cfg.orderLabel : "单号");
+  openScannerCommon();
+}
+
+async function soManualAddOrder(){
+  var inp = document.getElementById("soManualOrderInput");
+  var val = String(inp.value || "").trim();
+  if(!val){ alert("请输入单号"); inp.focus(); return; }
+  if(!_soSessionId){ alert("请先开始作业"); return; }
+  inp.value = "";
+  inp.focus();
+  await _soBindOrder(val);
+}
+
+async function _soBindOrder(orderNo){
+  if(!_soSessionId || !_soConfigKey) return;
+  var cfg = _soConfig();
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"scan_op_bind_order",
+      session_id: _soSessionId,
+      biz: cfg.biz,
+      task: cfg.task,
+      source_order_no: orderNo,
+      badge: getOperatorId()
+    });
+    if(!res || !res.ok){
+      alert("绑定失败：" + (res && res.error ? res.error : "未知错误"));
+      return;
+    }
+    if(res.duplicate){
+      setStatus("该单号已绑定 — " + orderNo, true);
+    } else {
+      setStatus("已绑定 — " + orderNo, true);
+    }
+    // 也发送 wave 事件以保持与 events 表的兼容（协同中心等读取）
+    var evId = makeEventId({ event:"wave", biz:cfg.biz, task:cfg.task, wave_id:orderNo, badgeRaw:"" });
+    if(!hasRecent(evId)){
+      submitEvent({ event:"wave", event_id:evId, biz:cfg.biz, task:cfg.task, pick_session_id:_soSessionId, wave_id:orderNo });
+      addRecent(evId);
+    }
+    _soCurrentOrder = orderNo;
+    await soRefreshOrderList_();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+// ── 扫人员 ──
+function soScanWorker(){
+  if(!_soSessionId){ alert("请先开始作业"); return; }
+  if(!_soCurrentOrder){ alert("请先扫/选择一个单号"); return; }
+  scanMode = "scan_op_worker_join";
+  document.getElementById("scanTitle").textContent = "扫码工牌（加入） / 명찰 스캔";
+  openScannerCommon();
+}
+
+function soLeaveWorker(){
+  if(!_soSessionId){ alert("请先开始作业"); return; }
+  if(!_soCurrentOrder){ alert("请先选择一个单号"); return; }
+  scanMode = "scan_op_worker_leave";
+  document.getElementById("scanTitle").textContent = "扫码工牌（退出） / 명찰 스캔 (퇴장)";
+  openScannerCommon();
+}
+
+async function _soWorkerJoin(badge, name){
+  if(!_soSessionId || !_soCurrentOrder) return;
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"scan_op_labor_join",
+      session_id: _soSessionId,
+      source_order_no: _soCurrentOrder,
+      operator_badge: badge,
+      operator_name: name || ""
+    });
+    if(!res || !res.ok){
+      if(res && res.error === "order_completed"){ alert("该单已完成，不能再加人"); return; }
+      alert("加入失败：" + (res && res.error ? res.error : "未知错误")); return;
+    }
+    if(res.duplicate){
+      setStatus("该人员已在岗 — " + badge, true);
+    } else {
+      setStatus("已加入 — " + badge, true);
+    }
+    // 也发送 join 事件以保持 Locks DO 兼容
+    var evId = makeEventId({ event:"join", biz:_soConfig().biz, task:_soConfig().task, wave_id:"", badgeRaw:badge });
+    if(!hasRecent(evId)){
+      submitEvent({ event:"join", event_id:evId, biz:_soConfig().biz, task:_soConfig().task, pick_session_id:_soSessionId, da_id:badge });
+      addRecent(evId);
+    }
+    await soRefreshOrderList_();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+async function _soWorkerLeave(badge){
+  if(!_soSessionId) return;
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"scan_op_labor_leave",
+      session_id: _soSessionId,
+      source_order_no: _soCurrentOrder || "",
+      operator_badge: badge
+    });
+    if(!res || !res.ok){
+      alert("退出失败：" + (res && res.error ? res.error : "未知错误")); return;
+    }
+    setStatus("已退出 — " + badge + " (关闭" + (res.closed||0) + "段)", true);
+    // 发送 leave 事件以释放 Locks DO
+    var evId = makeEventId({ event:"leave", biz:_soConfig().biz, task:_soConfig().task, wave_id:"", badgeRaw:badge });
+    if(!hasRecent(evId)){
+      submitEvent({ event:"leave", event_id:evId, biz:_soConfig().biz, task:_soConfig().task, pick_session_id:_soSessionId, da_id:badge });
+      addRecent(evId);
+    }
+    await soRefreshOrderList_();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+// ── 暂时完成 ──
+async function soTempComplete(){
+  if(!_soSessionId || !_soCurrentOrder){ alert("请先选择一个单号"); return; }
+  if(!confirm("确认暂时完成 " + _soCurrentOrder + " ？\n所有在岗人员将自动离开。")) return;
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"scan_op_temp_complete",
+      session_id: _soSessionId,
+      source_order_no: _soCurrentOrder
+    });
+    if(!res || !res.ok){
+      alert("操作失败：" + (res && res.error ? res.error : "未知错误")); return;
+    }
+    setStatus("暂时完成 — " + _soCurrentOrder + " (关闭" + (res.closed_labor||0) + "人)", true);
+    await soRefreshOrderList_();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+// ── 录结果 ──
+function soOpenResultForm(){
+  if(!_soCurrentOrder){ alert("请先选择一个单号"); return; }
+  var cfg = _soConfig();
+  if(!cfg) return;
+
+  var modal = document.getElementById("soResultModal");
+  var title = document.getElementById("soResultTitle");
+  var body = document.getElementById("soResultBody");
+  if(!modal || !body) return;
+
+  title.textContent = "录入结果 — " + _soCurrentOrder;
+
+  // 从缓存中取现有结果
+  var existing = null;
+  for(var i=0;i<_soOrders.length;i++){
+    if(_soOrders[i].source_order_no === _soCurrentOrder){ existing = _soOrders[i].result; break; }
+  }
+
+  var html = "";
+  cfg.resultFields.forEach(function(f){
+    var val = existing ? (existing[f.key] || "") : "";
+    if(f.type === "number") val = (val && Number(val) > 0) ? val : "";
+    html += '<div style="margin-bottom:8px;">';
+    html += '<label style="font-size:13px;font-weight:600;">' + esc(f.label) + (f.required ? ' <span style="color:red;">*</span>' : '') + '</label>';
+    if(f.type === "text"){
+      html += '<textarea id="soR_' + f.key + '" rows="2" style="width:100%;margin-top:2px;">' + esc(String(val)) + '</textarea>';
+    } else {
+      html += '<input id="soR_' + f.key + '" type="number" value="' + esc(String(val)) + '" style="width:100%;margin-top:2px;" />';
+    }
+    html += '</div>';
+  });
+  body.innerHTML = html;
+  modal.style.display = "flex";
+}
+
+function soCloseResultForm(){
+  var modal = document.getElementById("soResultModal");
+  if(modal) modal.style.display = "none";
+}
+
+async function soSaveResult(){
+  if(!_soSessionId || !_soCurrentOrder) return;
+  var cfg = _soConfig();
+  if(!cfg) return;
+
+  var params = {
+    action: "scan_op_save_result",
+    session_id: _soSessionId,
+    source_order_no: _soCurrentOrder,
+    operator_badge: getOperatorId(),
+    operator_name: ""
+  };
+
+  var valid = true;
+  cfg.resultFields.forEach(function(f){
+    var el = document.getElementById("soR_" + f.key);
+    var v = el ? el.value.trim() : "";
+    if(f.required && !v){ valid = false; alert(f.label + " 为必填"); }
+    params[f.key] = v;
+  });
+  if(!valid) return;
+
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, params);
+    if(!res || !res.ok){
+      alert("保存失败：" + (res && res.error ? res.error : "未知错误")); return;
+    }
+    setStatus("结果已保存 — " + _soCurrentOrder, true);
+    soCloseResultForm();
+    await soRefreshOrderList_();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+// ── 确认完成 ──
+async function soConfirmComplete(){
+  if(!_soCurrentOrder){ alert("请先选择一个单号"); return; }
+
+  // 需要职员工牌确认
+  scanMode = "scan_op_confirm_badge";
+  document.getElementById("scanTitle").textContent = "扫职员工牌确认完成 / 직원 명찰 확인";
+  openScannerCommon();
+}
+
+async function _soDoComplete(confirmBadge, confirmedByName){
+  if(!_soSessionId || !_soCurrentOrder) return;
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"scan_op_complete",
+      session_id: _soSessionId,
+      source_order_no: _soCurrentOrder,
+      confirm_badge: confirmBadge,
+      confirmed_by: confirmedByName || ""
+    });
+    if(!res || !res.ok){
+      if(res && res.error === "cross_session_active_labor"){
+        alert("该单还有作业中的人员：\n" + (res.active_labor||[]).join(", ") + "\n请先完成或暂停。");
+        return;
+      }
+      alert("完成失败：" + (res && res.error ? res.error : "未知错误")); return;
+    }
+    setStatus("已完成 — " + _soCurrentOrder, true);
+    await soRefreshOrderList_();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+// ── 删除误扫空单 ──
+async function soDeleteEmpty(orderNo){
+  if(!confirm("确认删除 " + orderNo + " ？\n仅限无人员记录的空单可删除。")) return;
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"scan_op_delete_empty",
+      session_id: _soSessionId,
+      source_order_no: orderNo
+    });
+    if(!res || !res.ok){
+      alert("删除失败：" + (res && res.error ? res.error : "未知错误")); return;
+    }
+    setStatus("已删除 — " + orderNo, true);
+    if(_soCurrentOrder === orderNo) _soCurrentOrder = null;
+    await soRefreshOrderList_();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+// ── 结束趟次 ──
+async function soEndSession(){
+  if(!_soSessionId){ alert("没有进行中的趟次"); return; }
+  if(!confirm("确认结束趟次？\n所有未完成的单据需先暂时完成或确认完成。")) return;
+  if(!acquireBusy_()) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"session_close",
+      session: _soSessionId,
+      operator_id: getOperatorId(),
+      scan_op: "1"
+    });
+    if(!res || !res.ok){
+      alert("结束失败：" + (res && res.error ? res.error : "未知错误")); return;
+    }
+    if(res.blocked){
+      if(res.reason === "working_orders"){
+        var orders = (res.pending_orders||[]).map(function(o){ return o.source_order_no; }).join(", ");
+        alert("还有操作中的单据：\n" + orders + "\n请先暂时完成或确认完成。");
+        return;
+      }
+      if(res.reason === "still_active"){
+        alert("还有人在岗，请先退出所有人员。");
+        return;
+      }
+      if(res.reason === "unpaired_joins"){
+        alert("有未配对的 join 事件（badge: " + (res.badges||[]).join(",") + "），请先退出。");
+        return;
+      }
+      alert("无法结束：" + JSON.stringify(res));
+      return;
+    }
+    setStatus("趟次已结束", true);
+    var cfg = _soConfig();
+    if(cfg) setSess_(cfg.biz, cfg.task, "");
+    _soSessionId = null;
+    _soConfigKey = null;
+    _soCurrentOrder = null;
+    _soOrders = [];
+    localStorage.removeItem("so_config_key");
+    localStorage.removeItem("so_session_id");
+    currentSessionId = null;
+    CUR_CTX = { biz:null, task:null, page:null };
+    _soShowSelectTask();
+  }catch(e){
+    alert("网络错误：" + String(e));
+  }finally{
+    releaseBusy_();
+  }
+}
+
+// ── 刷新单据列表 ──
+async function soRefreshOrderList_(){
+  if(!_soSessionId) return;
+  try{
+    var res = await jsonp(LOCK_URL, {
+      action:"scan_op_order_list",
+      session_id: _soSessionId
+    }, { skipBusy:true });
+    if(!res || !res.ok) return;
+    _soOrders = res.orders || [];
+  }catch(e){ return; }
+  _soRenderOrderList();
+  _soUpdateStatusArea();
+}
+
+function _soRenderOrderList(){
+  var el = document.getElementById("soOrderList");
+  var total = document.getElementById("soOrderTotal");
+  if(!el) return;
+  if(total) total.textContent = "(" + _soOrders.length + ")";
+
+  if(_soOrders.length === 0){
+    el.innerHTML = '<span class="muted">无 / 없음</span>';
+    return;
+  }
+
+  var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+  html += '<tr style="background:#f0f0f0;"><th style="padding:4px;">单号</th><th>状态</th><th>人数</th><th>工时</th><th>操作</th></tr>';
+  _soOrders.forEach(function(o){
+    var isCur = (o.source_order_no === _soCurrentOrder);
+    var bg = isCur ? "#e3f2fd" : "#fff";
+    var wsLabel = _soWfLabel(o.workflow_status);
+    var wsColor = o.workflow_status === "completed" ? "#2e7d32" : o.workflow_status === "working" ? "#e65100" : "#555";
+    html += '<tr style="background:' + bg + ';border-bottom:1px solid #eee;" onclick="soSelectOrder(\'' + esc(o.source_order_no) + '\')">';
+    html += '<td style="padding:4px;font-weight:' + (isCur ? '700' : '400') + ';">' + esc(o.source_order_no.length > 16 ? o.source_order_no.slice(-12) : o.source_order_no) + '</td>';
+    html += '<td style="color:' + wsColor + ';">' + wsLabel + '</td>';
+    html += '<td>' + (o.active_count || 0) + '/' + (o.worker_count || 0) + '</td>';
+    html += '<td>' + (o.total_minutes > 0 ? o.total_minutes.toFixed(1) : "-") + '</td>';
+    html += '<td>';
+    if(o.workflow_status !== "completed" && o.worker_count === 0){
+      html += '<button onclick="event.stopPropagation();soDeleteEmpty(\'' + esc(o.source_order_no) + '\')" style="font-size:10px;padding:2px 6px;background:#eee;border:1px solid #ccc;border-radius:4px;">删</button>';
+    }
+    html += '</td>';
+    html += '</tr>';
+  });
+  html += '</table>';
+  el.innerHTML = html;
+}
+
+function soSelectOrder(orderNo){
+  _soCurrentOrder = orderNo;
+  _soUpdateStatusArea();
+  _soRenderOrderList();
+}
+
+// ── onScan 处理器（需要在 onScan 分支中添加） ──
+// 这些函数被 onScan 回调调用
+
+async function _soHandleScanOrder(code){
+  if(!code) return;
+  scanBusy = true;
+  await pauseScanner();
+  try{
+    await _soBindOrder(code);
+    await closeScanner();
+  }finally{ scanBusy = false; }
+}
+
+async function _soHandleScanWorkerJoin(code){
+  if(!isOperatorBadge(code)){ setStatus("无效工牌", false); return; }
+  var p = parseBadge(code);
+  scanBusy = true;
+  await pauseScanner();
+  try{
+    await _soWorkerJoin(p.raw, p.name || "");
+    await closeScanner();
+  }finally{ scanBusy = false; }
+}
+
+async function _soHandleScanWorkerLeave(code){
+  if(!isOperatorBadge(code)){ setStatus("无效工牌", false); return; }
+  var p = parseBadge(code);
+  scanBusy = true;
+  await pauseScanner();
+  try{
+    await _soWorkerLeave(p.raw);
+    await closeScanner();
+  }finally{ scanBusy = false; }
+}
+
+async function _soHandleScanConfirmBadge(code){
+  if(!isOperatorBadge(code)){ setStatus("无效工牌", false); return; }
+  var p = parseBadge(code);
+  if(!/^EMP-.+$/.test(p.id || p.raw)){
+    alert("需要职员工牌 (EMP-...) 确认，不能用日当工牌");
+    return;
+  }
+  scanBusy = true;
+  await pauseScanner();
+  try{
+    await _soDoComplete(p.raw, p.name || "");
+    await closeScanner();
+  }finally{ scanBusy = false; }
 }
 
 /** ===== init ===== */
