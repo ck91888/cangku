@@ -695,7 +695,10 @@ var EFF_KEY_TASKS = [
   { biz:"B2C", task:"换单", label:"换单" },
   { biz:"B2C", task:"退件入库", label:"退件入库" },
   { biz:"B2C", task:"质检", label:"质检" },
-  { biz:"B2B", task:"B2B工单操作", label:"B2B工单操作", hasDetail:true }
+  { biz:"B2B", task:"B2B工单操作", label:"B2B工单操作", hasDetail:true, showBoxPallet:true },
+  { biz:"B2C", task:"B2C入库理货", label:"B2C入库理货" },
+  { biz:"B2C", task:"B2C工单操作", label:"B2C批量出库（按单操作）", showBoxPallet:true },
+  { biz:"B2B", task:"B2B入库理货", label:"B2B入库理货" }
 ];
 
 async function loadEfficiency(){
@@ -752,8 +755,8 @@ async function loadEfficiency(){
       var workers = f ? f.unique_workers : "—";
       var eff = f ? (f.efficiency_per_person_hour > 0 ? f.efficiency_per_person_hour : "0") : "—";
 
-      // B2B工单操作：件量列改为显示箱/托
-      if(kt.hasDetail && f){
+      // 工单操作类：件量列改为显示箱/托
+      if(kt.showBoxPallet && f){
         var parts = [];
         if(f.wms_box_count) parts.push(f.wms_box_count + "箱");
         if(f.wms_pallet_count) parts.push(f.wms_pallet_count + "托");
