@@ -154,6 +154,13 @@ export class LocksDO {
       return Response.json({ ok:true, released:true });
     }
 
+    if (action === "locks_clear_all") {
+      const before = Object.keys(this._locks || {}).length;
+      this._locks = {};
+      await this._save();
+      return Response.json({ ok:true, cleared: before });
+    }
+
     if (action === "ping") {
       return Response.json({ ok:true, asof: now, pong:true });
     }
@@ -3274,6 +3281,190 @@ export default {
       return jsonpOrJson({ ok:true, refreshed: features.length, features, post_warnings }, callback);
       } catch (e) {
         return jsonpOrJson({ ok:false, error:"admin_refresh_daily failed: " + String(e && e.message || e) }, callback);
+      }
+    }
+
+    // ===== Admin: 一次性运行数据重置 =====
+    if (action === "admin_reset_runtime_data") {
+      if (!isAdmin_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
+
+      const confirm = String(p.confirm || "").trim();
+      if (confirm !== "RESET_2026-03-30") {
+        return jsonpOrJson({ ok:false, error:"missing or wrong confirm token. Expected: RESET_2026-03-30" }, callback);
+      }
+
+      const dryRun = String(p.dry_run || "0") === "1";
+      const keptBatchId = String(p.kept_batch_id || "").trim();
+      const allowMissingKeptBatch = String(p.allow_missing_kept_batch || "0") === "1";
+
+      try {
+        // --- 1. Validate kept_batch (查 b2b_scan_batches) ---
+        let keptBatchExists = false;
+        if (keptBatchId) {
+          const row = await env.DB.prepare(`SELECT 1 FROM b2b_scan_batches WHERE batch_id=? LIMIT 1`).bind(keptBatchId).first();
+          keptBatchExists = !!row;
+        }
+
+        if (keptBatchId && !keptBatchExists && !allowMissingKeptBatch) {
+          return jsonpOrJson({
+            ok: false,
+            error: "kept_batch_not_found",
+            message: `kept_batch_id="${keptBatchId}" does not exist in b2b_scan_batches. Pass allow_missing_kept_batch=1 to proceed anyway.`
+          }, callback);
+        }
+
+        // --- 2. Table lists ---
+        // 全量清除（DELETE all rows）
+        const fullClearTables = [
+          "b2b_field_op_wo_bindings",
+          "b2b_field_ops",
+          "b2b_operation_labor_details",
+          "b2b_operation_bindings",
+          "b2b_operation_results",
+          "daily_productivity_features",
+          "wms_import_batch_chunks",
+          "wms_import_batches",
+          "wms_outputs",
+          "api_idempotency_keys",
+          "api_idempotency_keys_v2",
+          "task_state"
+        ];
+
+        // 部分清除（保留 batch_id = kept_batch_id 的行）
+        const partialClearTables = [
+          "b2b_scan_logs",
+          "b2b_scan_items",
+          "b2b_scan_batches"
+        ];
+
+        // --- 3. Count rows ---
+        const report = {};
+
+        for (const tbl of fullClearTables) {
+          try {
+            const r = await env.DB.prepare(`SELECT COUNT(*) AS cnt FROM ${tbl}`).first();
+            report[tbl] = { total: r ? r.cnt : 0, to_keep: 0, to_delete: r ? r.cnt : 0 };
+          } catch (e) {
+            report[tbl] = { total: 0, to_keep: 0, to_delete: 0, note: "table_not_found" };
+          }
+        }
+
+        for (const tbl of partialClearTables) {
+          try {
+            const rTotal = await env.DB.prepare(`SELECT COUNT(*) AS cnt FROM ${tbl}`).first();
+            const total = rTotal ? rTotal.cnt : 0;
+            let kept = 0;
+            if (keptBatchId && keptBatchExists) {
+              const rKept = await env.DB.prepare(`SELECT COUNT(*) AS cnt FROM ${tbl} WHERE batch_id=?`).bind(keptBatchId).first();
+              kept = rKept ? rKept.cnt : 0;
+            }
+            report[tbl] = { total, to_keep: kept, to_delete: total - kept };
+          } catch (e) {
+            report[tbl] = { total: 0, to_keep: 0, to_delete: 0, note: "table_not_found" };
+          }
+        }
+
+        // events / sessions 单独统计（最大表）
+        for (const tbl of ["events", "sessions"]) {
+          try {
+            const r = await env.DB.prepare(`SELECT COUNT(*) AS cnt FROM ${tbl}`).first();
+            report[tbl] = { total: r ? r.cnt : 0, to_keep: 0, to_delete: r ? r.cnt : 0 };
+          } catch (e) {
+            report[tbl] = { total: 0, to_keep: 0, to_delete: 0, note: "table_not_found" };
+          }
+        }
+
+        // LocksDO count
+        let locksCount = 0;
+        try {
+          const stub = locksStub(env);
+          const locksRes = await stub.fetch(new Request("https://do/", { method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify({ action: "locks_all" }) }));
+          const locksData = await locksRes.json();
+          locksCount = (locksData.active || []).length;
+        } catch (e) { /* ignore */ }
+        report["LocksDO"] = { total: locksCount, to_keep: 0, to_delete: locksCount };
+
+        if (dryRun) {
+          return jsonpOrJson({ ok: true, dry_run: true, kept_batch_id: keptBatchId || null, kept_batch_exists: keptBatchExists, report }, callback);
+        }
+
+        // --- 4. Execute deletions (dependency-safe order) ---
+        const deleted = {};
+        const BATCH_SIZE = 5000;
+
+        async function batchDelete(tbl, whereClause, binds) {
+          let totalDeleted = 0;
+          const sql = whereClause
+            ? `DELETE FROM ${tbl} WHERE rowid IN (SELECT rowid FROM ${tbl} WHERE ${whereClause} LIMIT ${BATCH_SIZE})`
+            : `DELETE FROM ${tbl} WHERE rowid IN (SELECT rowid FROM ${tbl} LIMIT ${BATCH_SIZE})`;
+          while (true) {
+            const r = binds
+              ? await env.DB.prepare(sql).bind(...binds).run()
+              : await env.DB.prepare(sql).run();
+            const affected = r.meta && r.meta.changes ? r.meta.changes : 0;
+            totalDeleted += affected;
+            if (affected < BATCH_SIZE) break;
+          }
+          return totalDeleted;
+        }
+
+        // Phase A: 部分清除 b2b_scan_* (保留 kept_batch_id)
+        for (const tbl of partialClearTables) {
+          try {
+            if (keptBatchId && keptBatchExists) {
+              deleted[tbl] = await batchDelete(tbl, "batch_id != ?", [keptBatchId]);
+            } else {
+              deleted[tbl] = await batchDelete(tbl, null, null);
+            }
+          } catch (e) {
+            deleted[tbl] = { error: String(e && e.message || e) };
+          }
+        }
+
+        // Phase B: 全量清除 leaf tables
+        for (const tbl of fullClearTables) {
+          try {
+            deleted[tbl] = await batchDelete(tbl, null, null);
+          } catch (e) {
+            deleted[tbl] = { error: String(e && e.message || e) };
+          }
+        }
+
+        // Phase C: events (最大表，batch delete)
+        try {
+          deleted["events"] = await batchDelete("events", null, null);
+        } catch (e) {
+          deleted["events"] = { error: String(e && e.message || e) };
+        }
+
+        // Phase D: sessions (在 events / task_state 之后)
+        try {
+          deleted["sessions"] = await batchDelete("sessions", null, null);
+        } catch (e) {
+          deleted["sessions"] = { error: String(e && e.message || e) };
+        }
+
+        // Phase E: LocksDO clear
+        let locksClearResult = null;
+        try {
+          const stub = locksStub(env);
+          const res = await stub.fetch(new Request("https://do/", { method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify({ action: "locks_clear_all" }) }));
+          locksClearResult = await res.json();
+        } catch (e) {
+          locksClearResult = { error: String(e && e.message || e) };
+        }
+        deleted["LocksDO"] = locksClearResult;
+
+        return jsonpOrJson({
+          ok: true,
+          dry_run: false,
+          kept_batch_id: keptBatchId || null,
+          kept_batch_exists: keptBatchExists,
+          report,
+          deleted
+        }, callback);
+      } catch (e) {
+        return jsonpOrJson({ ok: false, error: "admin_reset_runtime_data failed: " + String(e && e.message || e) }, callback);
       }
     }
 
