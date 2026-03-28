@@ -3471,10 +3471,21 @@ async function tempSwitchToLoadout(){
     await tempSwitchToTarget_("loadout");
   }finally{ releaseBusy_(); }
 }
-// 简化模式热修：临时切走前关闭当前工单所有 active labor detail
+// 简化模式/scan_op热修：临时切走前关闭当前工单所有 active labor detail
 async function _smCloseLaborBeforeTempSwitch_(){
+  // scan_op 模式
+  if(_soSessionId && _soConfigKey){
+    try{
+      await jsonp(LOCK_URL, {
+        action: "scan_op_labor_leave_all",
+        session_id: _soSessionId,
+        temp_switch: "1"
+      }, { skipBusy:true });
+    }catch(e){ console.error("_soCloseLaborBeforeTempSwitch_ error", e); }
+    return;
+  }
+  // 旧简化模式
   if(!_smIsSimpleMode || !currentSessionId) return;
-  // 关闭当前 session 下所有 active labor（不限单张工单，因为切走是整人切走）
   try{
     await jsonp(LOCK_URL, {
       action: "b2b_simple_labor_leave_all",
@@ -3889,6 +3900,7 @@ async function returnFromTempTarget_(){
     if(srcTask === "B2B现场记录") renderB2bFieldOpUI();
     if(srcTask === "理货") renderInboundCountUI();
     if(srcTask === "批量出库") renderBulkOutUI();
+    if(srcPage === "scan_op") soRefreshOrderList_();
     updateReturnButton_();
     setStatus("全部已返回" + srcLabel + " ✅（" + joinedCount + "/" + returning.length + "人）", false);
   }
@@ -3932,6 +3944,10 @@ function updateReturnButton_(){
     var btn = document.getElementById(TEMP_TARGET_BTN_IDS[pg]);
     if(btn) btn.style.display = (curPage === pg && show) ? "block" : "none";
   });
+
+  // scan_op 返回按钮
+  var soRetBtn = document.getElementById("btnSoReturnFromTemp");
+  if(soRetBtn) soRetBtn.style.display = (curPage === "scan_op" && show) ? "block" : "none";
 
   // 兼容旧按钮 ID
   if(show && curPage === "b2b_unload"){
@@ -8086,50 +8102,22 @@ var SCAN_OP_CONFIG = {
   "b2c_inbound_tally": {
     biz: "B2C", task: "B2C入库理货", source_type: "b2c_inbound_tally",
     label: "B2C 入库理货", orderLabel: "入库单号",
-    resultFields: [
-      { key:"tallied_qty", label:"理货件数 / 검수 수량", type:"number", required:true },
-      { key:"label_count", label:"贴标数量 / 라벨 수", type:"number" },
-      { key:"remark", label:"备注 / 비고", type:"text" }
-    ]
+    resultMode: "tally", hasTempSwitch: false
   },
   "b2c_workorder_op": {
     biz: "B2C", task: "B2C工单操作", source_type: "b2c_workorder_op",
     label: "B2C 批量出库（按单操作）", orderLabel: "出库单号",
-    resultFields: [
-      { key:"box_count", label:"箱数 / 박스", type:"number" },
-      { key:"pallet_count", label:"托盘数 / 팔레트", type:"number" },
-      { key:"packed_qty", label:"打包件数 / 포장 수량", type:"number" },
-      { key:"sku_kind_count", label:"SKU种类 / SKU 종류", type:"number" },
-      { key:"label_count", label:"贴标数 / 라벨 수", type:"number" },
-      { key:"packed_box_count", label:"封箱数 / 봉함 수", type:"number" },
-      { key:"rebox_count", label:"换箱数 / 재포장 수", type:"number" },
-      { key:"forklift_pallet_count", label:"叉车托数 / 지게차 팔레트", type:"number" },
-      { key:"remark", label:"备注 / 비고", type:"text" }
-    ]
+    resultMode: "workorder", hasTempSwitch: false
   },
   "b2b_inbound_tally": {
     biz: "B2B", task: "B2B入库理货", source_type: "b2b_inbound_tally",
     label: "B2B 入库理货", orderLabel: "入库计划单号",
-    resultFields: [
-      { key:"tallied_qty", label:"理货件数 / 검수 수량", type:"number", required:true },
-      { key:"label_count", label:"贴标数量 / 라벨 수", type:"number" },
-      { key:"remark", label:"备注 / 비고", type:"text" }
-    ]
+    resultMode: "tally", hasTempSwitch: false
   },
   "b2b_workorder_op": {
     biz: "B2B", task: "B2B工单操作", source_type: "internal_b2b_workorder",
     label: "B2B 工单操作", orderLabel: "工单号",
-    resultFields: [
-      { key:"box_count", label:"箱数 / 박스", type:"number" },
-      { key:"pallet_count", label:"托盘数 / 팔레트", type:"number" },
-      { key:"packed_qty", label:"打包件数 / 포장 수량", type:"number" },
-      { key:"sku_kind_count", label:"SKU种类 / SKU 종류", type:"number" },
-      { key:"label_count", label:"贴标数 / 라벨 수", type:"number" },
-      { key:"packed_box_count", label:"封箱数 / 봉함 수", type:"number" },
-      { key:"rebox_count", label:"换箱数 / 재포장 수", type:"number" },
-      { key:"forklift_pallet_count", label:"叉车托数 / 지게차 팔레트", type:"number" },
-      { key:"remark", label:"备注 / 비고", type:"text" }
-    ]
+    resultMode: "workorder", hasTempSwitch: true
   }
 };
 
@@ -8176,7 +8164,12 @@ function _soShowWorkPanel(){
   if(inp && cfg) inp.placeholder = "手动输入" + cfg.orderLabel + " / 수동 입력";
   var lt = document.getElementById("soOrderListTitle");
   if(lt && cfg) lt.textContent = cfg.orderLabel + "列表";
+  // 临时装卸货按钮行：仅 hasTempSwitch 的任务显示
+  var tsRow = document.getElementById("soTempSwitchRow");
+  if(tsRow) tsRow.style.display = (cfg && cfg.hasTempSwitch) ? "grid" : "none";
   _soUpdateStatusArea();
+  _soUpdateTempSwitchVisibility();
+  updateReturnButton_();
 }
 
 function _soUpdateStatusArea(){
@@ -8211,6 +8204,7 @@ function _soUpdateStatusArea(){
       labEl.innerHTML = '<span class="muted">无 / 없음</span>';
     }
   }
+  _soUpdateTempSwitchVisibility();
 }
 
 function _soWfLabel(ws){
@@ -8442,35 +8436,161 @@ function soOpenResultForm(){
   var cfg = _soConfig();
   if(!cfg) return;
 
-  var modal = document.getElementById("soResultModal");
-  var title = document.getElementById("soResultTitle");
-  var body = document.getElementById("soResultBody");
-  if(!modal || !body) return;
-
-  title.textContent = "录入结果 — " + _soCurrentOrder;
-
   // 从缓存中取现有结果
   var existing = null;
   for(var i=0;i<_soOrders.length;i++){
     if(_soOrders[i].source_order_no === _soCurrentOrder){ existing = _soOrders[i].result; break; }
   }
 
-  var html = "";
-  cfg.resultFields.forEach(function(f){
-    var val = existing ? (existing[f.key] || "") : "";
-    if(f.type === "number") val = (val && Number(val) > 0) ? val : "";
-    html += '<div style="margin-bottom:8px;">';
-    html += '<label style="font-size:13px;font-weight:600;">' + esc(f.label) + (f.required ? ' <span style="color:red;">*</span>' : '') + '</label>';
-    if(f.type === "text"){
-      html += '<textarea id="soR_' + f.key + '" rows="2" style="width:100%;margin-top:2px;">' + esc(String(val)) + '</textarea>';
-    } else {
-      html += '<input id="soR_' + f.key + '" type="number" value="' + esc(String(val)) + '" style="width:100%;margin-top:2px;" />';
-    }
-    html += '</div>';
-  });
-  body.innerHTML = html;
+  // completed 只读
+  if(existing && (existing.status === "completed" || existing.workflow_status === "completed")){
+    alert("该单已完成，不可编辑"); return;
+  }
+
+  var modal = document.getElementById("soResultModal");
+  var title = document.getElementById("soResultTitle");
+  var body = document.getElementById("soResultBody");
+  if(!modal || !body) return;
+  title.textContent = "录入结果 — " + _soCurrentOrder;
+
+  if(cfg.resultMode === "workorder"){
+    _soRenderWorkorderResultForm(body, existing || {});
+  } else {
+    _soRenderTallyResultForm(body, existing || {});
+  }
   modal.style.display = "flex";
 }
+
+// ── 入库理货结果表单（简洁 3 字段）──
+function _soRenderTallyResultForm(body, r){
+  var html = "";
+  html += _rfField("理货件数 / 검수 수량 *","soR-tallied-qty","number",r.tallied_qty||0,0,1);
+  html += _rfField("贴标数量 / 라벨 수","soR-label","number",r.label_count||0,0,1);
+  html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">备注 / 비고</label>' +
+    '<textarea id="soR-remark" rows="2" style="width:100%;margin-top:2px;">'+esc(r.remark||"")+'</textarea></div>';
+  body.innerHTML = html;
+}
+
+// ── 工单操作结果表单（联动，参考旧 openResultForm）──
+function _soRenderWorkorderResultForm(body, r){
+  var om = r.operation_mode || "pack_outbound";
+  var isPack = om !== "move_and_palletize";
+
+  var html = '';
+  // 操作类型
+  html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">操作类型 / 작업 유형</label>' +
+    '<select id="soR-mode" onchange="soRfToggleMode()" style="width:100%;margin-top:2px;">' +
+    '<option value="pack_outbound"' + (isPack?' selected':'') + '>打包出库 / 포장출고</option>' +
+    '<option value="move_and_palletize"' + (!isPack?' selected':'') + '>纯搬箱打托 / 박스이동·팔레트</option>' +
+    '</select></div>';
+
+  // ===== 固定核心字段（始终显示）=====
+  html += _rfField("箱数 / 박스","soR-box","number",r.box_count||0,0,0.5);
+  html += _rfField("托盘数 / 팔레트","soR-pallet","number",r.pallet_count||0,0,0.5);
+  html += _rfField("贴标数 / 라벨 수","soR-label","number",r.label_count||0,0,1);
+
+  // ===== 打包出库区 =====
+  html += '<div id="soR-pack-area" style="'+(isPack?'':'display:none;')+'">';
+  html += _rfField("品项数(SKU) / SKU 종류","soR-sku","number",r.sku_kind_count||0,0,1);
+  html += _rfField("件数 / 수량","soR-packed-qty","number",r.packed_qty||0,0,1);
+  html += _rfField("拍照数量 / 사진 수","soR-photo","number",r.photo_count||0,0,1);
+  html += _rfSwitch("soR-pallet-detail","是否制作了打托明细 / 팔레트 명세 작성",r.has_pallet_detail);
+  html += '</div>';
+
+  // ===== 纯搬箱打托区 =====
+  html += '<div id="soR-move-area" style="'+(isPack?'display:none;':'')+'">';
+  html += _rfSwitch("soR-did-rebox","是否换箱 / 재포장 여부",r.did_rebox,"soRfToggleDidRebox()");
+  html += '<div id="soR-did-rebox-fields" style="'+(r.did_rebox?'':'display:none;')+'padding-left:12px;border-left:3px solid #ff9800;">';
+  html += _rfField("换箱数 / 재포장 수","soR-rebox-count","number",r.rebox_count||0,0,1);
+  html += '</div>';
+  html += '</div>';
+
+  // ===== 是否打包（公共，但 pack_outbound 模式下默认=是，纯搬箱可选）=====
+  var showDidPack = !isPack;
+  var didPackVal = isPack ? true : !!r.did_pack;
+  html += '<div id="soR-did-pack-toggle" style="'+(showDidPack?'':'display:none;')+'">';
+  html += _rfSwitch("soR-did-pack","是否打包 / 포장 여부",didPackVal,"soRfToggleDidPack()");
+  html += '</div>';
+  // 打包子字段（打包出库模式始终显示，搬箱模式仅 did_pack 时显示）
+  html += '<div id="soR-did-pack-fields" style="'+(didPackVal?'':'display:none;')+'padding-left:12px;border-left:3px solid #2196f3;">';
+  html += _rfField("打包箱数 / 포장 박스 수","soR-packed-box","number",r.packed_box_count||0,0,0.5);
+  html += _rfSwitch("soR-carton","是否用了纸箱 / 종이박스 사용",r.used_carton,"soRfToggleCarton()");
+  html += '<div id="soR-carton-fields" style="'+(r.used_carton?'':'display:none;')+'padding-left:12px;border-left:3px solid #9c27b0;">';
+  html += _rfField("大纸箱数量 / 대형 박스","soR-big-carton","number",r.big_carton_count||0,0,1);
+  html += _rfField("小纸箱数量 / 소형 박스","soR-small-carton","number",r.small_carton_count||0,0,1);
+  html += '</div>';
+  html += _rfField("修补箱子数 / 수리 박스 수","soR-repair-box","number",r.repair_box_count||0,0,1);
+  html += '</div>';
+
+  // ===== 叉车 =====
+  html += _rfSwitch("soR-fork","需要叉车找货 / 지게차 필요",r.needs_forklift_pick,"soRfToggleFork()");
+  html += '<div id="soR-fork-fields" style="'+(r.needs_forklift_pick?'':'display:none;')+'padding-left:12px;border-left:3px solid #e65100;">';
+  html += _rfField("货位数量 / 적재위치 수","soR-fork-loc","number",r.rack_pick_location_count||0,0,1);
+  html += _rfField("叉车托数 / 지게차 팔레트","soR-fork-pallet","number",r.forklift_pallet_count||0,0,0.5);
+  html += '</div>';
+
+  // ===== 备注 =====
+  html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:700;">备注 / 비고</label>' +
+    '<textarea id="soR-remark" rows="2" style="width:100%;margin-top:2px;">'+esc(r.remark||"")+'</textarea></div>';
+
+  body.innerHTML = html;
+}
+
+// ── scan_op 表单 toggle 函数（soR- 前缀版本）──
+function soRfToggleMode(){
+  var m = (document.getElementById("soR-mode") || {}).value;
+  var packArea = document.getElementById("soR-pack-area");
+  var moveArea = document.getElementById("soR-move-area");
+  var didPackToggle = document.getElementById("soR-did-pack-toggle");
+  if(packArea) packArea.style.display = m === "move_and_palletize" ? "none" : "";
+  if(moveArea) moveArea.style.display = m === "pack_outbound" ? "none" : "";
+  // 打包出库模式下 did_pack toggle 隐藏（默认=是），打包子字段始终显示
+  if(didPackToggle) didPackToggle.style.display = m === "pack_outbound" ? "none" : "";
+  var dpFields = document.getElementById("soR-did-pack-fields");
+  if(m === "pack_outbound"){
+    if(dpFields) dpFields.style.display = "";
+  } else {
+    // 纯搬箱模式下由 did_pack checkbox 控制
+    soRfToggleDidPack();
+  }
+}
+function soRfToggleFork(){
+  var cb = document.getElementById("soR-fork");
+  var fields = document.getElementById("soR-fork-fields");
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked) _soRfClear(["soR-fork-pallet","soR-fork-loc"]);
+  }
+}
+function soRfToggleCarton(){
+  var cb = document.getElementById("soR-carton");
+  var fields = document.getElementById("soR-carton-fields");
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked) _soRfClear(["soR-big-carton","soR-small-carton"]);
+  }
+}
+function soRfToggleDidPack(){
+  var cb = document.getElementById("soR-did-pack");
+  var fields = document.getElementById("soR-did-pack-fields");
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked) _soRfClear(["soR-packed-box","soR-repair-box","soR-big-carton","soR-small-carton"]);
+  }
+}
+function soRfToggleDidRebox(){
+  var cb = document.getElementById("soR-did-rebox");
+  var fields = document.getElementById("soR-did-rebox-fields");
+  if(cb && fields){
+    fields.style.display = cb.checked ? "" : "none";
+    if(!cb.checked) _soRfClear(["soR-rebox-count"]);
+  }
+}
+function _soRfClear(ids){
+  for(var i=0;i<ids.length;i++){ var el=document.getElementById(ids[i]); if(el) el.value="0"; }
+}
+function _soRfVal(id){ return Number((document.getElementById(id) || {}).value) || 0; }
+function _soRfChk(id){ return (document.getElementById(id) || {}).checked ? 1 : 0; }
 
 function soCloseResultForm(){
   var modal = document.getElementById("soResultModal");
@@ -8490,20 +8610,26 @@ async function soSaveResult(){
     operator_name: ""
   };
 
-  var valid = true;
-  cfg.resultFields.forEach(function(f){
-    var el = document.getElementById("soR_" + f.key);
-    var v = el ? el.value.trim() : "";
-    if(f.required && !v){ valid = false; alert(f.label + " 为必填"); }
-    params[f.key] = v;
-  });
-  if(!valid) return;
+  if(cfg.resultMode === "workorder"){
+    var p = _soCollectWorkorderPayload();
+    if(!p) return;
+    for(var k in p) params[k] = p[k];
+  } else {
+    // tally
+    var tq = _soRfVal("soR-tallied-qty");
+    if(!tq){ alert("理货件数为必填"); return; }
+    params.tallied_qty = tq;
+    params.label_count = _soRfVal("soR-label");
+    params.remark = (document.getElementById("soR-remark") || {}).value || "";
+  }
 
   if(!acquireBusy_()) return;
   try{
     var res = await jsonp(LOCK_URL, params);
     if(!res || !res.ok){
-      alert("保存失败：" + (res && res.error ? res.error : "未知错误")); return;
+      if(res && res.error === "order_completed") alert("该单已完成，不允许修改");
+      else alert("保存失败：" + (res && res.error ? res.error : "未知错误"));
+      return;
     }
     setStatus("结果已保存 — " + _soCurrentOrder, true);
     soCloseResultForm();
@@ -8513,6 +8639,76 @@ async function soSaveResult(){
   }finally{
     releaseBusy_();
   }
+}
+
+// ── 工单操作结果收集（条件清零）──
+function _soCollectWorkorderPayload(){
+  var om = (document.getElementById("soR-mode") || {}).value || "pack_outbound";
+  var isPack = om === "pack_outbound";
+  var needs_forklift_pick = _soRfChk("soR-fork");
+  var used_carton = isPack ? _soRfChk("soR-carton") : 0;
+  var has_pallet_detail = isPack ? _soRfChk("soR-pallet-detail") : 0;
+  var did_pack = isPack ? 1 : _soRfChk("soR-did-pack");
+  var did_rebox = isPack ? 0 : _soRfChk("soR-did-rebox");
+  return {
+    operation_mode: om,
+    box_count: _soRfVal("soR-box"),
+    pallet_count: _soRfVal("soR-pallet"),
+    label_count: _soRfVal("soR-label"),
+    sku_kind_count: isPack ? _soRfVal("soR-sku") : 0,
+    packed_qty: isPack ? _soRfVal("soR-packed-qty") : 0,
+    packed_box_count: did_pack ? _soRfVal("soR-packed-box") : 0,
+    used_carton: used_carton,
+    big_carton_count: used_carton ? _soRfVal("soR-big-carton") : 0,
+    small_carton_count: used_carton ? _soRfVal("soR-small-carton") : 0,
+    repair_box_count: did_pack ? _soRfVal("soR-repair-box") : 0,
+    photo_count: isPack ? _soRfVal("soR-photo") : 0,
+    has_pallet_detail: has_pallet_detail,
+    did_pack: did_pack,
+    did_rebox: did_rebox,
+    rebox_count: (did_rebox && !isPack) ? _soRfVal("soR-rebox-count") : 0,
+    needs_forklift_pick: needs_forklift_pick,
+    forklift_pallet_count: needs_forklift_pick ? _soRfVal("soR-fork-pallet") : 0,
+    rack_pick_location_count: needs_forklift_pick ? _soRfVal("soR-fork-loc") : 0,
+    remark: (document.getElementById("soR-remark") || {}).value || ""
+  };
+}
+
+// ── 临时装卸货（仅 B2B工单操作）──
+async function soTempSwitchToUnload(){
+  if(!_soSessionId){ alert("请先创建趟次"); return; }
+  if(!acquireBusy_()) return;
+  try{
+    await _smCloseLaborBeforeTempSwitch_();
+    await tempSwitchToTarget_("unload");
+  }finally{ releaseBusy_(); }
+}
+async function soTempSwitchToLoadout(){
+  if(!_soSessionId){ alert("请先创建趟次"); return; }
+  if(!acquireBusy_()) return;
+  try{
+    await _smCloseLaborBeforeTempSwitch_();
+    await tempSwitchToTarget_("loadout");
+  }finally{ releaseBusy_(); }
+}
+
+// ── 临时装卸货按钮可见性（当前单 completed 时隐藏）──
+function _soUpdateTempSwitchVisibility(){
+  var cfg = _soConfig();
+  if(!cfg || !cfg.hasTempSwitch) return;
+  var row = document.getElementById("soTempSwitchRow");
+  if(!row) return;
+  // 当前单 completed 时隐藏整行（但返回按钮由 updateReturnButton_ 单独控制）
+  var cur = _soGetCurrentOrderData();
+  var isCompleted = cur && (cur.workflow_status === "completed");
+  row.style.display = isCompleted ? "none" : "grid";
+}
+function _soGetCurrentOrderData(){
+  if(!_soCurrentOrder) return null;
+  for(var i=0;i<_soOrders.length;i++){
+    if(_soOrders[i].source_order_no === _soCurrentOrder) return _soOrders[i];
+  }
+  return null;
 }
 
 // ── 确认完成 ──

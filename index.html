@@ -930,6 +930,13 @@
         <button class="primary" onclick="soLeaveWorker()" style="background:#757575;border-color:#757575;">人员退出 / 퇴장</button>
       </div>
 
+      <!-- 临时装卸货（仅 B2B工单操作时显示） -->
+      <div id="soTempSwitchRow" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;">
+        <button class="primary" onclick="soTempSwitchToUnload()" style="background:#e67e22;border-color:#e67e22;font-size:12px;padding:8px;">临时卸货 / 임시하차</button>
+        <button class="primary" onclick="soTempSwitchToLoadout()" style="background:#8e44ad;border-color:#8e44ad;font-size:12px;padding:8px;">临时装车 / 임시상차</button>
+        <button class="primary" id="btnSoReturnFromTemp" style="display:none;background:#27ae60;border-color:#27ae60;font-size:12px;padding:8px;" onclick="returnFromTempTarget()">返回原工单 / 복귀</button>
+      </div>
+
       <!-- 手动输入单号 -->
       <div class="row" style="margin-bottom:8px;">
         <input id="soManualOrderInput" type="text" style="flex:1;" onkeydown="if(event.key==='Enter')soManualAddOrder()" />

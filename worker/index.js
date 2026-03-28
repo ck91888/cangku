@@ -1037,6 +1037,20 @@ export default {
 
           await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v27_scan_op_unified', ?)`).bind(Date.now()).run();
         }
+
+        // v28: repair_box_count — 修补箱子数（独立于 rebox_count）
+        const m28 = await env.DB.prepare(`SELECT 1 FROM _migrations WHERE key='v28_repair_box_count'`).first();
+        if (!m28) {
+          const tbl28 = ["b2b_operation_results"];
+          for (const t of tbl28) {
+            const cols28 = await env.DB.prepare(`PRAGMA table_info(${t})`).all();
+            const has28 = (cols28.results || []).some(c => c.name === "repair_box_count");
+            if (!has28) {
+              await env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN repair_box_count REAL NOT NULL DEFAULT 0`).run();
+            }
+          }
+          await env.DB.prepare(`INSERT OR IGNORE INTO _migrations(key, ran_at) VALUES('v28_repair_box_count', ?)`).bind(Date.now()).run();
+        }
       } catch(e) {
         // 迁移失败不阻断请求，下次冷启动会重试（幂等）
       }
@@ -4456,7 +4470,8 @@ export default {
       const big_carton_count = used_carton ? Math.max(0, Number(p.big_carton_count || 0)) : 0;
       const small_carton_count = used_carton ? Math.max(0, Number(p.small_carton_count || 0)) : 0;
       const packed_box_count = (operation_mode === "move_and_palletize" && !did_pack) ? 0 : packed_box_count_raw;
-      const rebox_count = did_rebox ? Math.max(0, Number(p.rebox_count || 0)) : 0;
+      const rebox_count = (operation_mode === "move_and_palletize" && did_rebox) ? Math.max(0, Number(p.rebox_count || 0)) : 0;
+      const repair_box_count = did_pack ? Math.max(0, Number(p.repair_box_count || 0)) : 0;
       const forklift_pallet_count = needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
       const rack_pick_location_count = needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
       const new_status = String(p.status || "draft").trim();
@@ -4513,7 +4528,7 @@ export default {
           `UPDATE b2b_operation_results SET operation_mode=?, sku_kind_count=?, box_count=?, pallet_count=?,
            packed_qty=?, packed_box_count=?, used_carton=?, big_carton_count=?, small_carton_count=?,
            label_count=?, photo_count=?, has_pallet_detail=?, did_pack=?, did_rebox=?, rebox_count=?,
-           needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?,
+           needs_forklift_pick=?, forklift_pallet_count=?, rack_pick_location_count=?, repair_box_count=?,
            remark=?, status=?, confirmed_by=?, confirm_badge=?, customer_name=?, updated_at=?, completed_at=?,
            result_entered_by_badge=COALESCE(NULLIF(?,''), result_entered_by_badge),
            result_entered_by_name=COALESCE(NULLIF(?,''), result_entered_by_name),
@@ -4527,7 +4542,7 @@ export default {
         ).bind(operation_mode, sku_kind_count, box_count, pallet_count,
           packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
           label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
-          needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
+          needs_forklift_pick, forklift_pallet_count, rack_pick_location_count, repair_box_count,
           remark, new_status, final_confirmed_by, final_confirm_badge, customer_name, now, completed_at,
           result_entered_by_badge, result_entered_by_name, result_entered_at, confirmed_at,
           new_status, reviewed_by_badge, reviewed_by_badge,
@@ -4544,18 +4559,18 @@ export default {
            customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
            packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
            label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
-           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
+           needs_forklift_pick, forklift_pallet_count, rack_pick_location_count, repair_box_count,
            remark, photo_urls_json, status, created_by, confirmed_by, confirm_badge, first_session_id,
            created_at, updated_at, completed_at,
            result_entered_by_badge, result_entered_by_name, result_entered_at,
            confirmed_at, reviewed_by_badge, reviewed_by_name, reviewed_at,
            workflow_status, temporary_completed_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         ).bind(day_kst, bind.source_type, source_order_no, bind.internal_workorder_id || null,
           customer_name, operation_mode, sku_kind_count, box_count, pallet_count,
           packed_qty, packed_box_count, used_carton, big_carton_count, small_carton_count,
           label_count, photo_count, has_pallet_detail, did_pack, did_rebox, rebox_count,
-          needs_forklift_pick, forklift_pallet_count, rack_pick_location_count,
+          needs_forklift_pick, forklift_pallet_count, rack_pick_location_count, repair_box_count,
           remark, new_status, String(p.created_by || "").trim(), final_confirmed_by, final_confirm_badge, session_id,
           now, now, completed_at,
           result_entered_by_badge, result_entered_by_name, result_entered_at,
@@ -5054,18 +5069,38 @@ export default {
       ).bind(session_id, source_order_no).first();
       if (!bind) return jsonpOrJson({ ok:false, error:"order_not_bound" }, callback);
 
-      // 收集所有可能的结果字段（通用宽表）
+      // 收集字段 — 支持两种模式：理货(tally) 和 工单操作(workorder)
+      const operation_mode = String(p.operation_mode || "").trim();
+      const isPack = operation_mode === "pack_outbound";
+      const isMoveAndPalletize = operation_mode === "move_and_palletize";
+      const isWorkorderMode = isPack || isMoveAndPalletize;
+
+      // 理货字段
       const tallied_qty = Math.max(0, Number(p.tallied_qty || 0));
+
+      // 主开关字段
+      const used_carton = isWorkorderMode ? toBool01(p.used_carton) : 0;
+      const has_pallet_detail = isPack ? toBool01(p.has_pallet_detail) : 0;
+      const did_pack = isMoveAndPalletize ? toBool01(p.did_pack) : (isPack ? 1 : 0);
+      const did_rebox = isMoveAndPalletize ? toBool01(p.did_rebox) : 0;
+      const needs_forklift_pick = isWorkorderMode ? toBool01(p.needs_forklift_pick) : 0;
+
+      // 数值字段 + 联动归零
       const label_count = Math.max(0, Number(p.label_count || 0));
       const box_count = Math.max(0, Number(p.box_count || 0));
       const pallet_count = Math.max(0, Number(p.pallet_count || 0));
-      const packed_qty = Math.max(0, Number(p.packed_qty || 0));
-      const sku_kind_count = Math.max(0, Number(p.sku_kind_count || 0));
-      const packed_box_count = Math.max(0, Number(p.packed_box_count || 0));
-      const rebox_count = Math.max(0, Number(p.rebox_count || 0));
-      const forklift_pallet_count = Math.max(0, Number(p.forklift_pallet_count || 0));
+      const packed_qty = isPack ? Math.max(0, Number(p.packed_qty || 0)) : 0;
+      const sku_kind_count = isPack ? Math.max(0, Number(p.sku_kind_count || 0)) : 0;
+      const packed_box_count_raw = Math.max(0, Number(p.packed_box_count || 0));
+      const packed_box_count = (isMoveAndPalletize && !did_pack) ? 0 : packed_box_count_raw;
+      const big_carton_count = used_carton ? Math.max(0, Number(p.big_carton_count || 0)) : 0;
+      const small_carton_count = used_carton ? Math.max(0, Number(p.small_carton_count || 0)) : 0;
+      const rebox_count = (isMoveAndPalletize && did_rebox) ? Math.max(0, Number(p.rebox_count || 0)) : 0;
+      const repair_box_count = did_pack ? Math.max(0, Number(p.repair_box_count || 0)) : 0;
+      const forklift_pallet_count = needs_forklift_pick ? Math.max(0, Number(p.forklift_pallet_count || 0)) : 0;
+      const rack_pick_location_count = needs_forklift_pick ? Math.max(0, Number(p.rack_pick_location_count || 0)) : 0;
+      const photo_count = isPack ? Math.max(0, Number(p.photo_count || 0)) : 0;
       const remark = String(p.remark || "").trim();
-      const operation_mode = String(p.operation_mode || "").trim();
       const result_entered_by_badge = String(p.operator_badge || "").trim();
       const result_entered_by_name = String(p.operator_name || "").trim();
 
@@ -5081,7 +5116,10 @@ export default {
         await env.DB.prepare(
           `UPDATE b2b_operation_results SET
            tallied_qty=?, label_count=?, box_count=?, pallet_count=?, packed_qty=?, sku_kind_count=?,
-           packed_box_count=?, rebox_count=?, forklift_pallet_count=?, remark=?,
+           packed_box_count=?, rebox_count=?, forklift_pallet_count=?, rack_pick_location_count=?,
+           repair_box_count=?, used_carton=?, big_carton_count=?, small_carton_count=?,
+           has_pallet_detail=?, did_pack=?, did_rebox=?, needs_forklift_pick=?, photo_count=?,
+           remark=?,
            operation_mode=CASE WHEN ?!='' THEN ? ELSE operation_mode END,
            result_entered_by_badge=COALESCE(NULLIF(?,''), result_entered_by_badge),
            result_entered_by_name=COALESCE(NULLIF(?,''), result_entered_by_name),
@@ -5089,7 +5127,10 @@ export default {
            updated_at=?
            WHERE id=?`
         ).bind(tallied_qty, label_count, box_count, pallet_count, packed_qty, sku_kind_count,
-          packed_box_count, rebox_count, forklift_pallet_count, remark,
+          packed_box_count, rebox_count, forklift_pallet_count, rack_pick_location_count,
+          repair_box_count, used_carton, big_carton_count, small_carton_count,
+          has_pallet_detail, did_pack, did_rebox, needs_forklift_pick, photo_count,
+          remark,
           operation_mode, operation_mode,
           result_entered_by_badge, result_entered_by_name,
           result_entered_by_badge ? now : null,
@@ -5099,14 +5140,19 @@ export default {
         const ins = await env.DB.prepare(
           `INSERT INTO b2b_operation_results(day_kst, source_type, source_order_no, internal_workorder_id,
            customer_name, operation_mode, tallied_qty, label_count, box_count, pallet_count, packed_qty, sku_kind_count,
-           packed_box_count, rebox_count, forklift_pallet_count, remark,
-           status, workflow_status, first_session_id, created_by,
+           packed_box_count, rebox_count, forklift_pallet_count, rack_pick_location_count,
+           repair_box_count, used_carton, big_carton_count, small_carton_count,
+           has_pallet_detail, did_pack, did_rebox, needs_forklift_pick, photo_count,
+           remark, status, workflow_status, first_session_id, created_by,
            result_entered_by_badge, result_entered_by_name, result_entered_at,
            created_at, updated_at, photo_urls_json, biz, task)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft','pending_result',?,?,?,?,?,?,?,'[]',?,?)`
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft','pending_result',?,?,?,?,?,?,?,'[]',?,?)`
         ).bind(bind.day_kst, bind.source_type, source_order_no, bind.internal_workorder_id||null,
           "", operation_mode, tallied_qty, label_count, box_count, pallet_count, packed_qty, sku_kind_count,
-          packed_box_count, rebox_count, forklift_pallet_count, remark,
+          packed_box_count, rebox_count, forklift_pallet_count, rack_pick_location_count,
+          repair_box_count, used_carton, big_carton_count, small_carton_count,
+          has_pallet_detail, did_pack, did_rebox, needs_forklift_pick, photo_count,
+          remark,
           session_id, result_entered_by_badge,
           result_entered_by_badge, result_entered_by_name, result_entered_by_badge ? now : null,
           now, now, bind.biz||"", bind.task||"").run();
@@ -5175,8 +5221,10 @@ export default {
         // 2. result 状态
         const result = await env.DB.prepare(
           `SELECT id, workflow_status, status, tallied_qty, label_count, box_count, pallet_count, packed_qty, sku_kind_count,
-           packed_box_count, rebox_count, forklift_pallet_count, remark, operation_mode, customer_name,
-           confirm_badge, confirmed_by
+           packed_box_count, rebox_count, forklift_pallet_count, rack_pick_location_count,
+           repair_box_count, used_carton, big_carton_count, small_carton_count,
+           has_pallet_detail, did_pack, did_rebox, needs_forklift_pick, photo_count,
+           remark, operation_mode, customer_name, confirm_badge, confirmed_by
            FROM b2b_operation_results WHERE day_kst=? AND source_type=? AND source_order_no=?`
         ).bind(b.day_kst, b.source_type, b.source_order_no).first();
 
@@ -5636,7 +5684,7 @@ export default {
                   result_entered_by_badge, result_entered_by_name, result_entered_at,
                   confirmed_at, reviewed_by_badge, reviewed_by_name, reviewed_at,
                   temporary_completed_at, completed_at, created_at, updated_at,
-                  tallied_qty, biz, task
+                  tallied_qty, biz, task, repair_box_count
            FROM b2b_operation_results WHERE day_kst >= ? AND day_kst <= ? AND source_order_no IN (${ph})`
         ).bind(start_day, end_day, ...batch).all();
         for (const rr of (rrs.results || [])) {
@@ -5786,6 +5834,7 @@ export default {
           needs_forklift_pick: rs.needs_forklift_pick || 0,
           forklift_pallet_count: rs.forklift_pallet_count || 0,
           rack_pick_location_count: rs.rack_pick_location_count || 0,
+          repair_box_count: rs.repair_box_count || 0,
           remark: rs.remark || "",
           confirm_badge: rs.confirm_badge || "",
           confirmed_by: rs.confirmed_by || ""
