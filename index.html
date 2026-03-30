@@ -124,7 +124,7 @@
 
       <button class="primary" onclick="joinWork('进口','卸货')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('进口','卸货')">结束作业 / 종료</button>
-      <button class="primary" id="btnReturnFromUnload_import" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempTarget()">返回原任务 / 원래 작업 복귀</button>
+      <button class="primary" id="btnReturnFromTemp_import_unload" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempTarget()">返回原任务 / 원래 작업 복귀</button>
 
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="importUnloadCount">0</span></div>
@@ -468,96 +468,14 @@
     </div>
 
     <div class="card">
-      <button class="primary" onclick="go('b2c_tally')" style="display:none">入库理货 / 입고검수</button>
       <button class="primary" onclick="go('b2c_pick')">拣货 / 피킹</button>
       <button class="primary" onclick="go('b2c_pack')">验货贴单打包 / 검수·포장·라벨</button>
-      <button class="primary" onclick="go('b2c_bulkout')" style="display:none">批量出库 / 대량 출고</button>
       <button class="primary" onclick="go('b2c_return')">退件入库 / 반품 입고</button>
       <button class="primary" onclick="go('b2c_qc')">质检 / 검품</button>
       <button class="primary" onclick="go('b2c_inventory')">盘点 / 재고조사</button>
       <button class="primary" onclick="go('b2c_disposal')">废弃处理 / 폐기</button>
       <button class="primary" onclick="go('b2c_relabel')">换单 / 라벨</button>
       <button class="ghost" onclick="comingSoon('B2C 其他环节')">其他环节 / 준비중</button>
-    </div>
-  </div>
-
-  <!-- B2C TALLY -->
-  <div id="page-b2c_tally" class="page" style="display:none;">
-    <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill">B2C 入库理货 / 입고검수</div>
-    </div>
-
-    <div class="card">
-      <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px;color:#e65100;">
-        ⚠️ 此页面即将停用，请使用新版 <a href="#/scan_op" style="color:#0d47a1;font-weight:700;">【按单操作】</a> 入口。
-      </div>
-      <div class="muted">口径：开始/结束 + 人员加入/退出 + 入库单号扫码（去重计数）。</div>
-
-      <button class="primary" onclick="startTally(event)">开始理货 / 시작</button>
-
-      <button class="primary" onclick="joinWork('B2C','理货')">加入作业 / 참여</button>
-      <button class="primary" onclick="leaveWork('B2C','理货')">退出作业 / 퇴장</button>
-
-      <div class="listBox">
-        <div><b>当前参与名单 / 참여자</b>：<span id="tallyCount">0</span></div>
-        <div id="tallyActiveList" class="muted">无 / 없음</div>
-      </div>
-
-      <button class="primary" onclick="openScannerInboundCount()">扫码入库单号 / 입고번호</button>
-      <div class="row" style="margin-top:8px;">
-        <input id="b2cTallyManualInput" type="text" placeholder="手动输入入库单号 / 수동 입력" style="flex:1;" onkeydown="if(event.key==='Enter')manualAddInboundOrder()" />
-        <button onclick="manualAddInboundOrder()" style="width:auto;min-width:80px;">添加</button>
-      </div>
-
-      <div class="listBox">
-        <div><b>已扫入库单（去重）</b>：<span id="inboundCount">0</span></div>
-        <div id="inboundList" class="muted">无 / 없음</div>
-      </div>
-
-      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
-      <button class="primary" style="background:#8e44ad;border-color:#8e44ad;" onclick="tempSwitchToLoadout()">临时去装车 / 임시 상차</button>
-      <button class="primary" onclick="endTally()">结束理货 / 종료</button>
-    </div>
-  </div>
-
-  <!-- B2C 批量出库 -->
-  <div id="page-b2c_bulkout" class="page" style="display:none;">
-    <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill">B2C 批量出库 / 대량 출고</div>
-    </div>
-
-    <div class="card">
-      <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px;color:#e65100;">
-        ⚠️ 此页面即将停用，请使用新版 <a href="#/scan_op" style="color:#0d47a1;font-weight:700;">【按单操作】</a> 入口。
-      </div>
-      <div class="muted">口径：开始/结束 + 人员加入/退出 + 出库单号扫码（去重计数）。</div>
-
-      <button class="primary" onclick="startBulkOut(event)">开始批量出库 / 시작</button>
-
-      <button class="primary" onclick="joinWork('B2C','批量出库')">加入作业 / 참여</button>
-      <button class="primary" onclick="leaveWork('B2C','批量出库')">退出作业 / 퇴장</button>
-
-      <div class="listBox">
-        <div><b>当前参与名单 / 참여자</b>：<span id="bulkoutCount">0</span></div>
-        <div id="bulkoutActiveList" class="muted">无 / 없음</div>
-      </div>
-
-      <button class="primary" onclick="openScannerBulkOutOrder()">扫码出库单号 / 출고번호</button>
-      <div class="row" style="margin-top:8px;">
-        <input id="b2cBulkoutManualInput" type="text" placeholder="手动输入出库单号 / 수동 입력" style="flex:1;" onkeydown="if(event.key==='Enter')manualAddBulkOutOrder()" />
-        <button onclick="manualAddBulkOutOrder()" style="width:auto;min-width:80px;">添加</button>
-      </div>
-
-      <div class="listBox">
-        <div><b>已扫出库单（去重）</b>：<span id="bulkoutOrderCount">0</span></div>
-        <div id="bulkoutOrderList" class="muted">无 / 없음</div>
-      </div>
-
-      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
-      <button class="primary" style="background:#8e44ad;border-color:#8e44ad;" onclick="tempSwitchToLoadout()">临时去装车 / 임시 상차</button>
-      <button class="primary" onclick="endBulkOut()">结束批量出库 / 종료</button>
     </div>
   </div>
 
@@ -727,10 +645,6 @@
     </div>
     <div class="card">
       <button class="primary" onclick="go('b2b_unload')">卸货 / 하차</button>
-      <button class="primary" onclick="go('b2b_tally')" style="display:none">入库理货 / 입고검수</button>
-      <button class="primary" onclick="go('b2b_workorder_simple')" style="display:none;background:#0d47a1;border-color:#0d47a1;font-size:16px;padding:14px;">工单操作（简化）/ 작업지시 (간편)</button>
-      <!-- 旧模式保留代码，普通菜单隐藏；管理员可通过 go('b2b_workorder') 进入 -->
-      <button class="primary" onclick="go('b2b_workorder')" style="display:none;background:#546e7a;border-color:#546e7a;font-size:13px;padding:8px;">工单操作（高级管理）/ 작업지시 (고급)</button>
       <button class="primary" onclick="go('b2b_outbound')">出库 / 출고</button>
       <button class="primary" onclick="go('b2b_inventory')">盘点 / 재고조사</button>
       <button class="primary" onclick="go('b2b_field_op')" style="background:#8e24aa;border-color:#8e24aa;">现场记录 / 현장작업</button>
@@ -748,140 +662,11 @@
       <div class="pill">✅ 记录方式：开始=扫工牌；结束=扫工牌（同一工牌不能同时在其它任务中）</div>
       <button class="primary" onclick="joinWork('B2B','B2B卸货')">开始作业 / 시작</button>
       <button class="primary" onclick="leaveWork('B2B','B2B卸货')">结束作业 / 종료</button>
-      <button class="primary" id="btnReturnFromUnload_b2b" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempTarget()">返回原任务 / 원래 작업 복귀</button>
+      <button class="primary" id="btnReturnFromTemp_b2b_unload" style="display:none;background:#27ae60;border-color:#27ae60;" onclick="returnFromTempTarget()">返回原任务 / 원래 작업 복귀</button>
       <div class="listBox">
         <div><b>当前在岗 / 작업중</b>：<span id="b2bUnloadCount">0</span></div>
         <div id="b2bUnloadActiveList" class="muted">无 / 없음</div>
       </div>
-    </div>
-  </div>
-
-  <!-- B2B TALLY -->
-  <div id="page-b2b_tally" class="page" style="display:none;">
-    <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill">B2B 入库理货 / 입고검수</div>
-    </div>
-    <div class="card">
-      <div class="muted">口径：开始/结束 + 人员加入/退出 + 理货单号扫码或手动输入（去重计数）。</div>
-      <button class="primary" onclick="startB2bTally(event)">开始理货 / 시작</button>
-      <button class="primary" onclick="joinWork('B2B','B2B入库理货')">加入作业 / 참여</button>
-      <button class="primary" onclick="leaveWork('B2B','B2B入库理货')">退出作业 / 퇴장</button>
-      <div class="listBox">
-        <div><b>当前参与名单 / 참여자</b>：<span id="b2bTallyCount">0</span></div>
-        <div id="b2bTallyActiveList" class="muted">无 / 없음</div>
-      </div>
-      <button class="primary" onclick="openScannerB2bTallyOrder()">扫码理货单号 / 스캔</button>
-      <div class="row" style="margin-top:8px;">
-        <input id="b2bTallyManualInput" type="text" placeholder="手动输入理货单号 / 수동 입력" style="flex:1;" />
-        <button onclick="manualAddB2bTallyOrder()" style="width:auto;min-width:80px;">添加</button>
-      </div>
-      <div class="listBox">
-        <div><b>已扫理货单（去重）</b>：<span id="b2bTallyOrderCount">0</span></div>
-        <div id="b2bTallyOrderList" class="muted">无 / 없음</div>
-      </div>
-      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
-      <button class="primary" style="background:#8e44ad;border-color:#8e44ad;" onclick="tempSwitchToLoadout()">临时去装车 / 임시 상차</button>
-      <button class="primary" onclick="endB2bTally()">结束理货 / 종료</button>
-    </div>
-  </div>
-
-  <!-- B2B WORKORDER -->
-  <div id="page-b2b_workorder" class="page" style="display:none;">
-    <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill">B2B 工单操作 / 작업지시</div>
-    </div>
-    <div class="card">
-      <div class="muted">口径：开始/结束 + 人员加入/退出 + 工单号扫码或手动输入（去重计数）。</div>
-      <button class="primary" onclick="startB2bWorkorder(event)">开始操作 / 시작</button>
-      <button class="primary" onclick="joinWork('B2B','B2B工单操作')">加入作业 / 참여</button>
-      <button class="primary" onclick="leaveWork('B2B','B2B工单操作')">退出作业 / 퇴장</button>
-      <button class="primary" style="background:#e67e22;border-color:#e67e22;" onclick="tempSwitchToUnload()">临时去卸货 / 임시 하차</button>
-      <button class="primary" style="background:#8e44ad;border-color:#8e44ad;" onclick="tempSwitchToLoadout()">临时去装车 / 임시 상차</button>
-      <div class="listBox">
-        <div><b>当前参与名单 / 참여자</b>：<span id="b2bWorkorderCount">0</span></div>
-        <div id="b2bWorkorderActiveList" class="muted">无 / 없음</div>
-      </div>
-      <button class="primary" onclick="openScannerB2bWorkorder()">扫码工单号 / 스캔</button>
-      <div class="row" style="margin-top:8px;">
-        <input id="b2bWorkorderManualInput" type="text" placeholder="手动输入工单号 / 수동 입력" style="flex:1;" />
-        <button onclick="manualAddB2bWorkorder()" style="width:auto;min-width:80px;">添加</button>
-      </div>
-      <div id="b2bOwnerArea" style="display:none;background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
-        <div style="font-size:12px;color:#555;">
-          创建人：<span id="b2bSessionCreator">-</span>
-          当前负责人：<b id="b2bSessionOwner">-</b>
-        </div>
-        <button id="btnTransferOwner" class="primary" style="display:none;margin-top:6px;background:#1565c0;border-color:#1565c0;font-size:13px;padding:6px 16px;" onclick="transferSessionOwner()">交接负责人 / 담당자 변경</button>
-      </div>
-      <div id="b2bCrossDayBanner" style="display:none;background:#fff3e0;color:#e65100;padding:8px 12px;border-radius:6px;font-size:13px;font-weight:700;margin-bottom:8px;border:1px solid #ffcc80;">⚠️ 当前为跨天旧 session，结果单按绑定日处理</div>
-      <div class="listBox">
-        <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;"><b>已绑定工单 / 바인딩 작업지시</b><span style="font-size:16px;font-weight:700;color:#1565c0;">(<span id="b2bWorkorderOrderCount">0</span>)</span></div>
-        <div id="b2bWorkorderOrderList" class="muted">无 / 없음</div>
-      </div>
-      <button class="primary" onclick="endB2bWorkorder()">结束操作 / 종료</button>
-    </div>
-  </div>
-
-  <!-- B2B WORKORDER SIMPLE MODE -->
-  <div id="page-b2b_workorder_simple" class="page" style="display:none;">
-    <div class="topbar">
-      <button class="back small" onclick="back()">返回 / 뒤로</button>
-      <div class="grow pill" style="background:#0d47a1;color:#fff;">B2B 工单操作（简化）/ 작업지시 (간편)</div>
-    </div>
-    <div class="card">
-      <!-- 顶部状态区 -->
-      <div id="smStatusArea" style="background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
-        <div style="font-size:12px;color:#555;">
-          趟次 / 세션: <b id="smSessionId">-</b>
-          &nbsp;负责人 / 담당자: <b id="smOwner">-</b>
-        </div>
-        <div style="font-size:12px;color:#555;margin-top:4px;">
-          当前工单 / 현재 작업지시: <b id="smCurrentOrder" style="color:#0d47a1;font-size:14px;">-</b>
-          &nbsp;状态 / 상태: <span id="smCurrentStatus">-</span>
-        </div>
-        <div style="font-size:12px;color:#555;margin-top:4px;">
-          参与人数 / 참여자: <b id="smWorkerCount">0</b>
-          &nbsp;累计工时 / 누적시간: <span id="smTotalMinutes">-</span>
-        </div>
-      </div>
-
-      <!-- 主按钮区 -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
-        <button class="primary" onclick="smScanWorkorder()" style="background:#0d47a1;border-color:#0d47a1;">扫工单 / 작업지시 스캔</button>
-        <button class="primary" onclick="smScanWorker()" style="background:#1565c0;border-color:#1565c0;">扫人员 / 작업자 스캔</button>
-        <button class="primary" onclick="smTempComplete()" style="background:#e65100;border-color:#e65100;">暂时完成 / 임시 완료</button>
-        <button class="primary" onclick="smOpenResultForCurrent()" style="background:#2e7d32;border-color:#2e7d32;">录结果 / 결과 입력</button>
-        <button class="primary" onclick="smConfirmWorkorder()" style="background:#6a1b9a;border-color:#6a1b9a;">结束工单 / 작업 확인</button>
-        <button class="primary" onclick="smLeaveTask()" style="background:#757575;border-color:#757575;">离开本环节 / 나가기</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;">
-        <button class="primary" onclick="tempSwitchToUnload()" style="background:#e67e22;border-color:#e67e22;font-size:12px;padding:8px;">临时卸货 / 임시하차</button>
-        <button class="primary" onclick="tempSwitchToLoadout()" style="background:#8e44ad;border-color:#8e44ad;font-size:12px;padding:8px;">临时装车 / 임시상차</button>
-        <button class="primary" id="btnSmReturnFromTemp" style="display:none;background:#27ae60;border-color:#27ae60;font-size:12px;padding:8px;" onclick="returnFromTempTarget()">返回原工单 / 복귀</button>
-      </div>
-
-      <!-- 手动输入 -->
-      <div class="row" style="margin-bottom:8px;">
-        <input id="smManualInput" type="text" placeholder="手动输入工单号 / 수동 입력" style="flex:1;" />
-        <button onclick="smManualAddWorkorder()" style="width:auto;min-width:80px;">添加 / 추가</button>
-      </div>
-
-      <!-- 当前参与人员 -->
-      <div id="smLaborArea" style="background:#f5f5f5;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
-        <div style="font-size:13px;font-weight:700;">当前参与人员 / 현재 참여자</div>
-        <div id="smLaborList" class="muted" style="font-size:12px;margin-top:4px;">无 / 없음</div>
-      </div>
-
-      <!-- 工单列表 -->
-      <div class="listBox">
-        <div style="font-size:13px;font-weight:700;">工单列表 / 작업지시 목록 <span id="smOrderTotal" style="color:#0d47a1;">(0)</span></div>
-        <div id="smOrderList" class="muted">无 / 없음</div>
-      </div>
-
-      <!-- 结束趟次 -->
-      <button class="primary" onclick="smEndSession()" style="background:#c62828;border-color:#c62828;margin-top:8px;">结束趟次 / 세션 종료</button>
     </div>
   </div>
 

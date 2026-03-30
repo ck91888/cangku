@@ -13,8 +13,8 @@ var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
 var pages = [
   "home","badge","global_menu","b2c_menu",
   "import_menu","import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
-  "b2b_menu","b2b_unload","b2b_tally","b2b_workorder","b2b_workorder_simple","b2b_outbound","b2b_inventory","b2b_field_op","b2b_scan_check",
-  "b2c_tally","b2c_pick","b2c_pack","b2c_bulkout","b2c_return","b2c_qc","b2c_inventory","b2c_disposal","b2c_relabel",
+  "b2b_menu","b2b_unload","b2b_outbound","b2b_inventory","b2b_field_op","b2b_scan_check",
+  "b2c_pick","b2c_pack","b2c_return","b2c_qc","b2c_inventory","b2c_disposal","b2c_relabel",
   "warehouse_cleanup","scan_op",
   "active_now",
   "report",
@@ -23,6 +23,12 @@ var pages = [
   "wms_import",
   "daily_features"
 ];
+
+// 旧页面 → scan_op 配置 key 映射（退役重定向）
+var SCAN_OP_REDIRECT = {
+  "b2c_tally":"b2c_inbound_tally", "b2c_bulkout":"b2c_workorder_op",
+  "b2b_tally":"b2b_inbound_tally", "b2b_workorder":"b2b_workorder_op", "b2b_workorder_simple":"b2b_workorder_op"
+};
 
 
 
@@ -125,8 +131,23 @@ function getHashPage(){
 }
 
 function renderPages(){
-  applyPageSession_();
+  // 旧页面退役重定向（在 getHashPage 之前检查原始 hash）
+  var rawHash = (location.hash || "").replace(/^#\/?/, "");
+  var redir = SCAN_OP_REDIRECT[rawHash];
+  if(redir){
+    localStorage.setItem("so_config_key", redir);
+    // 如果已有该任务的 session，设置 so_session_id
+    var rcfg = SCAN_OP_CONFIG[redir];
+    if(rcfg){
+      var rsid = getSess_(rcfg.biz, rcfg.task);
+      if(rsid) localStorage.setItem("so_session_id", rsid);
+    }
+    go("scan_op");
+    return;
+  }
+
   var cur = getHashPage();
+  applyPageSession_();
   for(var i=0;i<pages.length;i++){
     var p = pages[i];
     var el = document.getElementById("page-"+p);
@@ -137,8 +158,6 @@ function renderPages(){
 
   if(cur==="badge"){ refreshUI(); refreshDaUI(); }
 
-  if(cur==="b2c_tally"){ restoreState(); renderActiveLists(); renderInboundCountUI(); refreshUI(); }
-  if(cur==="b2c_bulkout"){ restoreState(); renderActiveLists(); renderBulkOutUI(); refreshUI(); }
   if(cur==="b2c_pick"){ syncLeaderPickUI(); restoreState(); renderActiveLists(); renderWaveUI(); refreshUI(); }
   if(cur==="b2c_pack"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2c_return"){ restoreState(); renderActiveLists(); refreshUI(); }
@@ -153,9 +172,6 @@ function renderPages(){
 
   if(cur==="b2b_menu"){ refreshUI(); }
   if(cur==="b2b_unload"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
-  if(cur==="b2b_tally"){ restoreState(); renderActiveLists(); renderB2bTallyUI(); refreshUI(); }
-  if(cur==="b2b_workorder"){ _b2bBindingsLoaded = false; _b2bSelfHealPending = false; restoreState(); renderActiveLists(); renderB2bWorkorderUI(); loadB2bBindings(); loadB2bResults(); refreshUI(); if(!currentSessionId) tryRecoverB2bSession_(); }
-  if(cur==="b2b_workorder_simple"){ _b2bBindingsLoaded = false; _b2bSelfHealPending = false; restoreState(); renderActiveLists(); refreshUI(); smInitPage_(); }
   if(cur==="b2b_outbound"){ restoreState(); renderActiveLists(); refreshUI(); updateReturnButton_(); }
   if(cur==="b2b_inventory"){ restoreState(); renderActiveLists(); refreshUI(); }
   if(cur==="b2b_field_op"){ restoreState(); renderActiveLists(); renderB2bFieldOpUI(); refreshUI(); }
@@ -187,9 +203,9 @@ function renderPages(){
   if(cur==="import_menu"){ refreshUI(); }
 
   // 进入任务页时异步同步服务器在岗列表（解决换设备/刷新后本地列表为空的问题）
-  var taskPages = ["b2c_tally","b2c_bulkout","b2c_pick","b2c_pack","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
+  var taskPages = ["b2c_pick","b2c_pack","b2c_return","b2c_qc","b2c_disposal","b2c_relabel",
     "import_unload","import_scan_pallet","import_loadout","import_pickup","import_problem",
-    "b2b_unload","b2b_tally","b2b_workorder","b2b_workorder_simple","b2b_outbound",
+    "b2b_unload","b2b_outbound",
     "b2b_inventory","b2b_field_op","b2c_inventory","warehouse_cleanup","scan_op"];
   if(taskPages.indexOf(cur) >= 0 && currentSessionId){
     syncActiveFromServer_();
@@ -243,10 +259,8 @@ function getLastCtx_(){
 // page -> biz/task (must match your index.html page ids)
 var PAGE_CTX = {
   // ===== B2C =====
-  "b2c_tally":   { biz:"B2C", task:"理货" },
   "b2c_pick":    { biz:"B2C", task:"拣货" },
   "b2c_relabel": { biz:"B2C", task:"换单" },
-  "b2c_bulkout": { biz:"B2C", task:"批量出库" },
   "b2c_pack":    { biz:"B2C", task:"打包" },
   "b2c_return":  { biz:"B2C", task:"退件入库" },
   "b2c_qc":      { biz:"B2C", task:"质检" },
@@ -262,9 +276,6 @@ var PAGE_CTX = {
 
   // ===== B2B =====
   "b2b_unload":    { biz:"B2B", task:"B2B卸货" },
-  "b2b_tally":     { biz:"B2B", task:"B2B入库理货" },
-  "b2b_workorder_simple": { biz:"B2B", task:"B2B工单操作" },
-  "b2b_workorder": { biz:"B2B", task:"B2B工单操作" },
   "b2b_outbound":  { biz:"B2B", task:"B2B出库" },
   "b2b_inventory": { biz:"B2B", task:"B2B盘点" },
   "b2b_field_op":  { biz:"B2B", task:"B2B现场记录" },
@@ -303,6 +314,10 @@ function taskDisplayLabel(biz, task){
 function pageForTask(biz, task){
   for(var p in PAGE_CTX){
     if(PAGE_CTX[p].biz === biz && PAGE_CTX[p].task === task) return p;
+  }
+  // 已退役到 scan_op 的任务
+  for(var k in SCAN_OP_CONFIG){
+    if(SCAN_OP_CONFIG[k].biz === biz && SCAN_OP_CONFIG[k].task === task) return "scan_op";
   }
   return null;
 }
@@ -1374,11 +1389,13 @@ async function endSessionGlobal_(){
       var msg = "当前还有未完成提交的工单结果单，不能结束本趟作业。\n\n请先完成以下工单的结果单：\n" + orders +
         "\n\n趟次：" + currentSessionId;
       setStatus("有未完成结果单，禁止结束", false);
-      if(getHashPage() !== "b2b_workorder" && getHashPage() !== "b2b_workorder_simple"){
+      if(getHashPage() !== "scan_op"){
         msg += "\n\n点【确定】跳转到B2B工单操作页处理。";
         if(confirm(msg)){
           setSess_("B2B", "B2B工单操作", currentSessionId);
-          go("b2b_workorder_simple");
+          localStorage.setItem("so_config_key", "b2b_workorder_op");
+          localStorage.setItem("so_session_id", currentSessionId);
+          go("scan_op");
         }
       } else {
         alert(msg);
@@ -2181,7 +2198,9 @@ async function startGeneric_(e, biz, task, page, resetFn, postRenderFn){
           "\n\n趟次：" + currentSessionId + "\n\n点【确定】跳转到B2B工单操作页处理。";
         if(confirm(goMsg)){
           setSess_("B2B", "B2B工单操作", currentSessionId);
-          go("b2b_workorder_simple");
+          localStorage.setItem("so_config_key", "b2b_workorder_op");
+          localStorage.setItem("so_session_id", currentSessionId);
+          go("scan_op");
         }
       } else {
         setStatus("旧趟次未能释放，无法开始新任务", false);
@@ -3122,7 +3141,9 @@ async function startB2bFieldOp(e){
             "\n\n趟次：" + currentSessionId + "\n\n点【确定】跳转到B2B工单操作页处理。";
           if(confirm(goMsg2)){
             setSess_("B2B", "B2B工单操作", currentSessionId);
-            go("b2b_workorder_simple");
+            localStorage.setItem("so_config_key", "b2b_workorder_op");
+            localStorage.setItem("so_session_id", currentSessionId);
+            go("scan_op");
           }
         } else {
           setStatus("旧趟次未能释放，无法开始新任务", false);
@@ -3415,23 +3436,13 @@ function getUnloadActiveSet_(task){
 var TEMP_SWITCH_KEY = "tempSwitchCtx";
 function loadTempSwitchCtx_(){
   var saved = localStorage.getItem(TEMP_SWITCH_KEY);
-  // 兼容旧 key
-  if(!saved) saved = localStorage.getItem("tempSwitchFromWorkorder");
   if(!saved) return null;
   try{
     var ctx = JSON.parse(saved);
     // 过期检查：超过12小时自动清除
     if(ctx.timestamp && Date.now() - ctx.timestamp > 12 * 3600 * 1000){
       localStorage.removeItem(TEMP_SWITCH_KEY);
-      localStorage.removeItem("tempSwitchFromWorkorder");
       return null;
-    }
-    // 兼容旧格式（最老版本）
-    if(!ctx.sourceBiz && ctx.workorderSession){
-      ctx.sourceBiz = "B2B"; ctx.sourceTask = "B2B工单操作"; ctx.sourcePage = "b2b_workorder_simple";
-      ctx.sourceSession = ctx.workorderSession;
-      ctx.scannedItems = ctx.workorders || [];
-      ctx.unloadBiz = "B2B"; ctx.unloadTask = "B2B卸货"; ctx.unloadPage = "b2b_unload";
     }
     if(!ctx.badges && ctx.badge) ctx.badges = [ctx.badge];
     // 兼容旧字段 unloadBiz/unloadTask/unloadPage → targetBiz/targetTask/targetPage
@@ -3450,11 +3461,9 @@ function loadTempSwitchCtx_(){
 }
 function saveTempSwitchCtx_(ctx){
   localStorage.setItem(TEMP_SWITCH_KEY, JSON.stringify(ctx));
-  localStorage.removeItem("tempSwitchFromWorkorder");
 }
 function clearTempSwitchCtx_(){
   localStorage.removeItem(TEMP_SWITCH_KEY);
-  localStorage.removeItem("tempSwitchFromWorkorder");
 }
 
 async function tempSwitchToUnload(){
@@ -3944,13 +3953,6 @@ function updateReturnButton_(){
   var show = !!ctx;
   var curPage = getHashPage();
 
-  // 同时处理旧 ID 和新 ID
-  var oldBtns = [
-    document.getElementById("btnReturnFromUnload_b2b"),
-    document.getElementById("btnReturnFromUnload_import")
-  ];
-  oldBtns.forEach(function(b){ if(b) b.style.display = "none"; });
-
   TEMP_TARGET_PAGES.forEach(function(pg){
     var btn = document.getElementById(TEMP_TARGET_BTN_IDS[pg]);
     if(btn) btn.style.display = (curPage === pg && show) ? "block" : "none";
@@ -3959,16 +3961,6 @@ function updateReturnButton_(){
   // scan_op 返回按钮
   var soRetBtn = document.getElementById("btnSoReturnFromTemp");
   if(soRetBtn) soRetBtn.style.display = (curPage === "scan_op" && show) ? "block" : "none";
-
-  // 兼容旧按钮 ID
-  if(show && curPage === "b2b_unload"){
-    var old1 = document.getElementById("btnReturnFromUnload_b2b");
-    if(old1) old1.style.display = "block";
-  }
-  if(show && curPage === "import_unload"){
-    var old2 = document.getElementById("btnReturnFromUnload_import");
-    if(old2) old2.style.display = "block";
-  }
 
   if(!show) detectRemoteTempSwitch_();
 }
@@ -4011,9 +4003,6 @@ function detectRemoteTempSwitch_(){
       var btn = document.getElementById(btnId);
       if(btn) btn.style.display = "block";
     }
-    // 兼容旧按钮 ID
-    if(curPage === "b2b_unload"){ var ob = document.getElementById("btnReturnFromUnload_b2b"); if(ob) ob.style.display = "block"; }
-    if(curPage === "import_unload"){ var ob2 = document.getElementById("btnReturnFromUnload_import"); if(ob2) ob2.style.display = "block"; }
   }).catch(function(){});
 }
 
