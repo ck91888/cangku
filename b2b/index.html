@@ -112,6 +112,17 @@
     .doc-row{border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;}
     .doc-row:last-child{border-bottom:none;}
     .doc-row .meta{color:#666;font-size:12px;margin-top:2px;}
+    .biz-tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;margin-right:2px;}
+    .biz-b2c{background:#e3f2fd;color:#1565c0;}
+    .biz-b2b{background:#fce4ec;color:#ad1457;}
+    .biz-unknown{background:#f5f5f5;color:#999;}
+    .stage-tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;margin-right:4px;background:#f5f5f5;color:#555;border:1px solid #e0e0e0;}
+    .stage-workorder_op{background:#fff3e0;color:#e65100;border-color:#ffcc80;}
+    .stage-inbound_tally{background:#e8f5e9;color:#2e7d32;border-color:#a5d6a7;}
+    .stage-field_op{background:#f3e5f5;color:#6a1b9a;border-color:#ce93d8;}
+    .stage-bulk_out{background:#e0f7fa;color:#00695c;border-color:#80cbc4;}
+    .stage-pick{background:#ede7f6;color:#4527a0;border-color:#b39ddb;}
+    .stage-unknown{background:#ffebee;color:#c62828;border-color:#ef9a9a;}
     .doc-kind-tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;margin-right:4px;}
     .doc-kind-full_doc{background:#e8f5e9;color:#2e7d32;}
     .doc-kind-wave_only{background:#f5f5f5;color:#888;}
@@ -512,6 +523,19 @@
           <div class="form-group"><label>开始日期</label><input id="wo-start" type="date" /></div>
           <div class="form-group"><label>结束日期</label><input id="wo-end" type="date" /></div>
           <div class="form-group">
+            <label>业务环节</label>
+            <select id="wo-task-filter" onchange="_woPage=1;loadWoDetail();">
+              <option value="">全部</option>
+              <option value="B2B工单操作">B2B工单操作</option>
+              <option value="B2B入库理货">B2B入库理货</option>
+              <option value="B2B现场记录">B2B现场记录</option>
+              <option value="B2C入库理货">B2C入库理货</option>
+              <option value="B2C批量出库">B2C批量出库</option>
+              <option value="B2C拣货">B2C拣货</option>
+              <option value="旧口径/未分类">旧口径/未分类</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label>状态</label>
             <select id="wo-status">
               <option value="">全部</option>
@@ -538,15 +562,15 @@
           <div class="form-group"><label>开始日期</label><input id="dl-start" type="date" /></div>
           <div class="form-group"><label>结束日期</label><input id="dl-end" type="date" /></div>
           <div class="form-group">
-            <label>类型</label>
+            <label>业务环节</label>
             <select id="dl-kind">
               <option value="">全部</option>
-              <option value="b2b_workorder">B2B工单操作</option>
-              <option value="b2b_field_op">B2B现场记录</option>
-              <option value="b2c_pick">B2C拣货</option>
-              <option value="b2c_tally">B2C理货</option>
-              <option value="b2c_batch_out">B2C批量出库</option>
-              <option value="b2b_inbound_tally">B2B入库理货</option>
+              <option value="b2b_workorder">B2B · 工单操作</option>
+              <option value="b2b_field_op">B2B · 现场记录</option>
+              <option value="b2b_inbound_tally">B2B · 入库理货</option>
+              <option value="b2c_tally">B2C · 入库理货</option>
+              <option value="b2c_batch_out">B2C · 批量出库</option>
+              <option value="b2c_pick">B2C · 拣货</option>
             </select>
           </div>
           <div style="display:flex;align-items:flex-end;gap:4px;">

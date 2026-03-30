@@ -5818,6 +5818,43 @@ export default {
       return jsonpOrJson({ ok:true, waves }, callback);
     }
 
+    // ===== 业务环节归一化函数 =====
+    // 优先级：result.biz+task > binding.biz+task > wave_kind > unknown
+    // 不做默认猜测，无法判断时一律返回 unknown/未分类
+    function normalizeTaskMeta(opts) {
+      const KNOWN = {
+        "B2C|拣货":        { biz_code:"b2c", biz_label:"B2C", stage_code:"pick",         stage_label:"拣货",     task_display_label:"B2C拣货" },
+        "B2C|理货":        { biz_code:"b2c", biz_label:"B2C", stage_code:"inbound_tally", stage_label:"入库理货", task_display_label:"B2C入库理货" },
+        "B2C|批量出库":    { biz_code:"b2c", biz_label:"B2C", stage_code:"bulk_out",      stage_label:"批量出库", task_display_label:"B2C批量出库" },
+        "B2B|B2B入库理货": { biz_code:"b2b", biz_label:"B2B", stage_code:"inbound_tally", stage_label:"入库理货", task_display_label:"B2B入库理货" },
+        "B2B|B2B工单操作": { biz_code:"b2b", biz_label:"B2B", stage_code:"workorder_op",  stage_label:"工单操作", task_display_label:"B2B工单操作" },
+        "B2B|B2B现场记录": { biz_code:"b2b", biz_label:"B2B", stage_code:"field_op",      stage_label:"现场记录", task_display_label:"B2B现场记录" },
+      };
+      const WAVE_TO_KEY = {
+        b2c_pick:"B2C|拣货", b2c_tally:"B2C|理货", b2c_batch_out:"B2C|批量出库",
+        b2b_inbound_tally:"B2B|B2B入库理货", b2b_workorder:"B2B|B2B工单操作", b2b_field_op:"B2B|B2B现场记录"
+      };
+      const UNKNOWN = { biz_code:"unknown", biz_label:"未知", stage_code:"unknown", stage_label:"未分类", task_display_label:"旧口径/未分类" };
+
+      // 层级1：显式 biz+task
+      const biz  = (opts.biz  || "").trim();
+      const task = (opts.task || "").trim();
+      if (biz && task) {
+        const hit = KNOWN[biz + "|" + task];
+        if (hit) return hit;
+        // 有值但不在已知映射 → 保留原文，不猜
+        return { biz_code: biz.toLowerCase(), biz_label: biz, stage_code:"other", stage_label: task, task_display_label: biz + task };
+      }
+
+      // 层级2：wave_kind
+      if (opts.wave_kind && WAVE_TO_KEY[opts.wave_kind]) {
+        return KNOWN[WAVE_TO_KEY[opts.wave_kind]];
+      }
+
+      // 无法判断
+      return UNKNOWN;
+    }
+
     // ===== 协同中心：按工单明细（B2B工单操作专用） =====
     if (action === "collab_workorder_detail") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
@@ -5827,6 +5864,7 @@ export default {
 
       const filterStatus = String(p.status || "").trim();   // draft | temporary_completed | completed | no_result | ""
       const filterQ      = String(p.q || "").trim().toLowerCase();
+      const filterTask   = String(p.task_filter || "").trim();   // task_display_label 精确匹配，如 "B2B工单操作"
       const page      = Math.max(1, parseInt(p.page) || 1);
       const page_size = Math.min(200, Math.max(1, parseInt(p.page_size) || 50));
 
@@ -5928,6 +5966,14 @@ export default {
           if (filterStatus === "no_result" && ds !== "无结果单") continue;
         }
 
+        // 归一化业务环节（优先 result > binding > unknown）
+        const rawBiz  = (result && result.biz) || k.biz || "";
+        const rawTask = (result && result.task) || k.task || "";
+        const meta = normalizeTaskMeta({ biz: rawBiz, task: rawTask });
+
+        // task_filter 过滤
+        if (filterTask && meta.task_display_label !== filterTask) continue;
+
         assembled.push({
           day_kst: k.day_kst,
           source_type: k.source_type,
@@ -5936,7 +5982,7 @@ export default {
           session_ids_str: k.session_ids || "",
           session_count: k.session_count || 0,
           last_activity_at: k.last_activity_at || 0,
-          result, wo, display_status: ds
+          result, wo, display_status: ds, meta
         });
       }
 
@@ -6043,12 +6089,18 @@ export default {
 
         const customerName = (rs.customer_name) || (wo.customer_name) || "";
 
+        const m = r.meta;
         return {
           workorder_id: r.source_order_no,
           source_type: r.source_type,
           internal_workorder_id: r.internal_workorder_id,
-          biz: (rs.biz) || (r.biz) || "B2B",
-          task: (rs.task) || (r.task) || "B2B工单操作",
+          biz: m.biz_label,
+          task: m.task_display_label,
+          biz_code: m.biz_code,
+          biz_label: m.biz_label,
+          stage_code: m.stage_code,
+          stage_label: m.stage_label,
+          task_display_label: m.task_display_label,
           operation_day: r.day_kst,
           display_status: r.display_status,
           workflow_status: (rs.workflow_status) || "",
@@ -6490,11 +6542,21 @@ export default {
         }
       }
 
+      // ===== 为每行补充结构化业务环节字段 =====
+      for (const r of rows) {
+        const m = normalizeTaskMeta({ biz: r.biz, task: r.task, wave_kind: r.wave_kind });
+        r.biz_code = m.biz_code;
+        r.biz_label = m.biz_label;
+        r.stage_code = m.stage_code;
+        r.stage_label = m.stage_label;
+        r.task_display_label = m.task_display_label;
+      }
+
       // ===== 返回或导出 =====
       if (isExport) {
         // CSV 导出（UTF-8 BOM）
         const CSV_HEADERS = [
-          "作业日期","业务线","任务类型","类型标签","单据分类","单号",
+          "作业日期","业务线","环节","业务环节标签","单据分类","单号",
           "关联状态","客户名","状态",
           "操作类型/模式","关联工单/计划",
           "首次作业时间","最后作业时间",
@@ -6509,10 +6571,6 @@ export default {
           "备注","确认工牌","确认人"
         ];
         const fmtTime = ms => ms ? new Date(ms).toISOString().replace("T"," ").slice(0,19) : "";
-        const WAVE_KIND_LABEL = {
-          b2c_pick:"B2C拣货", b2c_tally:"B2C理货", b2c_batch_out:"B2C批量出库",
-          b2b_inbound_tally:"B2B入库理货", b2b_workorder:"B2B工单操作", b2b_field_op:"B2B现场记录"
-        };
 
         const csvRows = [CSV_HEADERS];
         for (const r of rows) {
@@ -6530,9 +6588,9 @@ export default {
           }
           csvRows.push([
             r.work_day_kst || "",
-            r.biz || "",
-            r.task || "",
-            WAVE_KIND_LABEL[r.wave_kind] || r.wave_kind || "",
+            r.biz_label || "",
+            r.stage_label || "",
+            r.task_display_label || "",
             r.doc_class || "",
             r.wave_id || "",
             r.link_status || "",

@@ -828,9 +828,18 @@ var _docPageSize = 50;
 var _docTotal = 0;
 
 var WAVE_KIND_LABEL = {
-  b2c_pick:"B2C拣货", b2c_tally:"B2C理货", b2c_batch_out:"B2C批量出库",
+  b2c_pick:"B2C拣货", b2c_tally:"B2C入库理货", b2c_batch_out:"B2C批量出库",
   b2b_inbound_tally:"B2B入库理货", b2b_workorder:"B2B工单操作", b2b_field_op:"B2B现场记录"
 };
+
+// 业务环节 tag 渲染（消费后端 biz_label / stage_label / task_display_label）
+function bizTag(d){
+  var biz = d.biz_label || "未知";
+  var stage = d.stage_label || "未分类";
+  var bizCls = "biz-tag biz-" + (d.biz_code || "unknown");
+  var stageCls = "stage-tag stage-" + (d.stage_code || "unknown");
+  return '<span class="'+bizCls+'">'+esc(biz)+'</span> <span class="'+stageCls+'">'+esc(stage)+'</span>';
+}
 
 var LINK_STATUS_LABEL = {
   unlinked:"仅作业流水", no_binding:"无绑定", no_record:"无记录",
@@ -923,6 +932,7 @@ function loadWoDetail(){
   document.getElementById("wo-pager").style.display = "none";
 
   var statusVal = (document.getElementById("wo-status").value||"").trim();
+  var taskVal = (document.getElementById("wo-task-filter")||{}).value || "";
   var kw = (document.getElementById("wo-keyword").value||"").trim();
   var params = {
     action: "collab_workorder_detail",
@@ -930,6 +940,7 @@ function loadWoDetail(){
     page: _woPage, page_size: _woPageSize
   };
   if(statusVal) params.status = statusVal;
+  if(taskVal) params.task_filter = taskVal;
   if(kw) params.q = kw;
 
   fetchApi(params).then(function(res){
@@ -968,7 +979,8 @@ function renderWoDetail(docs){
     var dsLabel = d.display_status || "-";
 
     // 主信息行
-    var line1 = '<code style="font-size:14px;font-weight:700;">'+esc(d.workorder_id)+'</code>';
+    var line1 = bizTag(d) + ' ';
+    line1 += '<code style="font-size:14px;font-weight:700;">'+esc(d.workorder_id)+'</code>';
     line1 += ' <span class="'+dsCls+'" style="font-size:12px;">'+esc(dsLabel)+'</span>';
     if(d.customer_name) line1 += ' · '+esc(d.customer_name);
 
@@ -1194,12 +1206,10 @@ function renderDocList(docs){
   var html = '<div style="font-size:12px;color:#888;margin-bottom:4px;">本页 '+docs.length+' 条 / 共 '+_docTotal+' 条</div>';
 
   html += docs.map(function(d, dIdx){
-    var kindLabel = WAVE_KIND_LABEL[d.wave_kind] || d.task || "";
-    var kindCls = "doc-kind-tag doc-kind-" + (d.doc_class||"wave_only");
     var linkLabel = LINK_STATUS_LABEL[d.link_status] || d.link_status || "";
     var linkCls = "link-tag " + linkStatusCls(d.link_status);
 
-    var line1 = '<span class="'+kindCls+'">'+esc(kindLabel)+'</span> ';
+    var line1 = bizTag(d) + ' ';
     line1 += '<code>'+esc(d.wave_id)+'</code>';
     if(d.customer_name) line1 += ' · '+esc(d.customer_name);
     line1 += ' <span class="'+linkCls+'">'+esc(linkLabel)+'</span>';
@@ -1328,7 +1338,8 @@ function showExternalWoDoc(idx){
   var srcLabel = d.source_type === "external_wms_workorder" ? "外部 WMS 工单" : "绑定型记录";
   var LINK_LABEL = LINK_STATUS_LABEL || {};
   var html = '<div style="max-width:440px;">';
-  html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">';
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;">';
+  html += bizTag(d) + ' ';
   html += '<span style="background:#e0e0e0;color:#555;padding:2px 8px;border-radius:4px;font-size:12px;">'+esc(srcLabel)+'</span>';
   html += '<b style="font-size:15px;">'+esc(d.wave_id)+'</b>';
   html += '</div>';
@@ -1387,7 +1398,7 @@ function showExternalWoDoc(idx){
 // ===== 作业记录：原始波次流水（保留） =====
 var _waveListData = [];
 var TASK_LABEL_SHORT = {
-  "B2C拣货":"拣货","B2C理货":"理货","B2C批量出库":"批量出库",
+  "B2C拣货":"拣货","B2C入库理货":"入库理货","B2C理货":"入库理货","B2C批量出库":"批量出库",
   "B2B入库理货":"B2B理货","B2B工单操作":"工单操作","B2B现场记录":"现场记录"
 };
 
