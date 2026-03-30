@@ -163,6 +163,7 @@ function navCaptureState(){
       "pl-end": document.getElementById("pl-end").value,
       "pl-filter-status": document.getElementById("pl-filter-status").value,
       "pl-filter-acc": document.getElementById("pl-filter-acc").value,
+      "pl-filter-customer": document.getElementById("pl-filter-customer").value,
       scope: _currentPlanScope
     };
   } else if(v === "wo_list"){
@@ -171,6 +172,7 @@ function navCaptureState(){
       "wl-end": document.getElementById("wl-end").value,
       "wl-filter-status": document.getElementById("wl-filter-status").value,
       "wl-filter-acc": document.getElementById("wl-filter-acc").value,
+      "wl-filter-customer": document.getElementById("wl-filter-customer").value,
       scope: _currentWoScope
     };
   } else if(v === "fo_list"){
@@ -236,6 +238,7 @@ function navRestoreState(entry){
     document.getElementById("pl-end").value = st["pl-end"] || "";
     document.getElementById("pl-filter-status").value = st["pl-filter-status"] || "";
     document.getElementById("pl-filter-acc").value = st["pl-filter-acc"] || "";
+    document.getElementById("pl-filter-customer").value = st["pl-filter-customer"] || "";
     _currentPlanScope = st.scope || "unfinished";
     reloadCurrentPlanList();
   } else if(v === "wo_list"){
@@ -243,6 +246,7 @@ function navRestoreState(entry){
     document.getElementById("wl-end").value = st["wl-end"] || "";
     document.getElementById("wl-filter-status").value = st["wl-filter-status"] || "";
     document.getElementById("wl-filter-acc").value = st["wl-filter-acc"] || "";
+    document.getElementById("wl-filter-customer").value = st["wl-filter-customer"] || "";
     _currentWoScope = st.scope || "today";
     // 恢复标题
     var titleEl = document.getElementById("wl-title");
@@ -630,7 +634,11 @@ function loadPlanListByRange(mode){
   else if(mode === "overdue") titleEl.textContent = "逾期未完成计划";
   else titleEl.textContent = "入库计划列表";
 
-  fetchApi({ action:"b2b_plan_list", start_day:s, end_day:e }).then(function(res){
+  var custKw = (document.getElementById("pl-filter-customer")||{}).value || "";
+  custKw = custKw.trim();
+  var planParams = { action:"b2b_plan_list", start_day:s, end_day:e };
+  if(custKw) planParams.customer_keyword = custKw;
+  fetchApi(planParams).then(function(res){
     if(!res || !res.ok){ resultEl.innerHTML = '<div class="bad">查询失败</div>'; return; }
     var all = res.plans || [];
     if(mode === "unfinished"){
@@ -1919,7 +1927,11 @@ function loadWoList(){
   document.getElementById("wl-title").textContent = "出库作业单列表";
   var el = document.getElementById("wl-result");
   el.innerHTML = '<div class="q-empty">加载中...</div>';
-  fetchApi({ action:"b2b_wo_list", start_day:s, end_day:e }).then(function(res){
+  var woCustKw = (document.getElementById("wl-filter-customer")||{}).value || "";
+  woCustKw = woCustKw.trim();
+  var woParams = { action:"b2b_wo_list", start_day:s, end_day:e };
+  if(woCustKw) woParams.customer_keyword = woCustKw;
+  fetchApi(woParams).then(function(res){
     if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败</div>'; return; }
     renderWoList(el, applyWoFilters(res.workorders||[]), []);
   });
@@ -1931,9 +1943,12 @@ function loadWoListByScope(scope){
   var yesterday = kstYesterday();
   var el = document.getElementById("wl-result");
   el.innerHTML = '<div class="q-empty">加载中...</div>';
+  var _ck = (document.getElementById("wl-filter-customer")||{}).value || "";
+  _ck = _ck.trim();
+  function _woP(s,e){ var o={action:"b2b_wo_list",start_day:s,end_day:e}; if(_ck) o.customer_keyword=_ck; return fetchApi(o); }
 
   if(scope === "overdue"){
-    fetchApi({ action:"b2b_wo_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday }).then(function(res){
+    _woP(B2B_EARLIEST_DAY, yesterday).then(function(res){
       var all = (res && res.ok) ? (res.workorders||[]) : [];
       var overdue = all.filter(function(w){ return WO_INCOMPLETE_STATUS[w.status]; });
       renderWoList(el, [], applyWoFilters(overdue));
@@ -1941,8 +1956,8 @@ function loadWoListByScope(scope){
   } else if(scope === "next4"){
     var endDay = kstDayOffset(3);
     Promise.all([
-      fetchApi({ action:"b2b_wo_list", start_day:today, end_day:endDay }),
-      fetchApi({ action:"b2b_wo_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday })
+      _woP(today, endDay),
+      _woP(B2B_EARLIEST_DAY, yesterday)
     ]).then(function(results){
       var wos = (results[0] && results[0].ok) ? (results[0].workorders||[]) : [];
       var all = (results[1] && results[1].ok) ? (results[1].workorders||[]) : [];
@@ -1951,8 +1966,8 @@ function loadWoListByScope(scope){
     });
   } else {
     Promise.all([
-      fetchApi({ action:"b2b_wo_list", start_day:today, end_day:today }),
-      fetchApi({ action:"b2b_wo_list", start_day:B2B_EARLIEST_DAY, end_day:yesterday })
+      _woP(today, today),
+      _woP(B2B_EARLIEST_DAY, yesterday)
     ]).then(function(results){
       var wos = (results[0] && results[0].ok) ? (results[0].workorders||[]) : [];
       var all = (results[1] && results[1].ok) ? (results[1].workorders||[]) : [];

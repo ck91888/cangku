@@ -337,6 +337,9 @@
             <option value="yes">已记账</option>
           </select>
         </div>
+        <div class="form-group"><label>客户名</label>
+          <input id="pl-filter-customer" placeholder="输入客户名模糊搜索" style="width:140px;" onkeyup="if(event.key==='Enter')reloadCurrentPlanList();" />
+        </div>
         <div style="display:flex;align-items:flex-end;">
           <button class="primary" style="width:auto;min-width:80px;" onclick="loadPlanListByRange()">查询</button>
         </div>
@@ -373,6 +376,9 @@
             <option value="no">未记账</option>
             <option value="yes">已记账</option>
           </select>
+        </div>
+        <div class="form-group"><label>客户名</label>
+          <input id="wl-filter-customer" placeholder="输入客户名模糊搜索" style="width:140px;" onkeyup="if(event.key==='Enter')reloadCurrentWoList();" />
         </div>
         <div style="display:flex;align-items:flex-end;">
           <button class="primary" style="width:auto;min-width:80px;" onclick="loadWoList()">查询</button>

@@ -3545,9 +3545,14 @@ export default {
       const end_day = String(p.end_day || "").trim();
       if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
 
+      let where = "plan_day >= ? AND plan_day <= ?";
+      const binds = [start_day, end_day];
+      const custKw = String(p.customer_keyword || "").trim();
+      if (custKw) { where += " AND customer_name LIKE ?"; binds.push("%" + custKw + "%"); }
+
       const rs = await env.DB.prepare(
-        `SELECT * FROM b2b_inbound_plans WHERE plan_day >= ? AND plan_day <= ? ORDER BY plan_day ASC, created_at ASC`
-      ).bind(start_day, end_day).all();
+        `SELECT * FROM b2b_inbound_plans WHERE ${where} ORDER BY plan_day ASC, created_at ASC`
+      ).bind(...binds).all();
       return jsonpOrJson({ ok:true, plans: rs.results || [] }, callback);
     }
 
@@ -3776,6 +3781,8 @@ export default {
       const binds = [start_day, end_day];
       const statusFilter = String(p.status || "").trim();
       if (statusFilter) { where += " AND status=?"; binds.push(statusFilter); }
+      const custKw = String(p.customer_keyword || "").trim();
+      if (custKw) { where += " AND customer_name LIKE ?"; binds.push("%" + custKw + "%"); }
 
       const rs = await env.DB.prepare(
         `SELECT * FROM b2b_workorders ${where} ORDER BY plan_day ASC, created_at ASC`
