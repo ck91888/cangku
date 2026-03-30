@@ -3526,9 +3526,20 @@ async function tempSwitchToTarget_(kind){
   var srcSid = getSess_(srcBiz, srcTask);
   if(!srcSid){ alert("当前没有进行中的作业Session，无法切换。"); return; }
 
-  // 获取当前在岗人员
-  var reg = taskReg_(srcTask);
-  var members = reg ? Array.from(reg.get()) : [];
+  // 获取当前在岗人员（scan_op 模式优先从订单 active_workers 汇总）
+  var members = [];
+  if(srcPage === "scan_op" && _soOrders && _soOrders.length > 0){
+    var activeSet = new Set();
+    for(var oi=0;oi<_soOrders.length;oi++){
+      var aw = _soOrders[oi].active_workers || [];
+      for(var ai=0;ai<aw.length;ai++) if(aw[ai].badge) activeSet.add(aw[ai].badge);
+    }
+    members = Array.from(activeSet);
+  }
+  if(members.length === 0){
+    var reg = taskReg_(srcTask);
+    members = reg ? Array.from(reg.get()) : [];
+  }
   if(members.length === 0){ alert("当前任务中没有在岗人员，请先加入作业再切换。"); return; }
 
   // 选人
@@ -8136,6 +8147,10 @@ function soInitPage_(){
   if(savedKey && savedSid && SCAN_OP_CONFIG[savedKey]){
     _soConfigKey = savedKey;
     _soSessionId = savedSid;
+    // 恢复全局上下文（applyPageSession_ 对 scan_op 无静态映射，必须在此补设）
+    var cfg = SCAN_OP_CONFIG[savedKey];
+    currentSessionId = savedSid;
+    CUR_CTX = { biz: cfg.biz, task: cfg.task, page:"scan_op" };
     _soShowWorkPanel();
     soRefreshOrderList_();
   } else {
@@ -8835,6 +8850,26 @@ async function soRefreshOrderList_(){
   }catch(e){ return; }
   _soRenderOrderList();
   _soUpdateStatusArea();
+  _soSyncTaskRegistry();
+}
+
+// ── 把 _soOrders 里所有 active_workers 同步到 TASK_REGISTRY ──
+// 保证 tempSwitchToTarget_ 读 taskReg_ 时能拿到正确人员
+function _soSyncTaskRegistry(){
+  var cfg = _soConfig();
+  if(!cfg) return;
+  var reg = taskReg_(cfg.task);
+  if(!reg) return;
+  var allActive = new Set();
+  for(var i=0;i<_soOrders.length;i++){
+    var workers = _soOrders[i].active_workers || [];
+    for(var j=0;j<workers.length;j++){
+      if(workers[j].badge) allActive.add(workers[j].badge);
+    }
+  }
+  reg.set(allActive);
+  persistState();
+  renderActiveLists();
 }
 
 function _soRenderOrderList(){
