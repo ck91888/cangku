@@ -323,7 +323,7 @@ function goTab(tab){
     btns[i].className = (tabOrder[i] === tab) ? "tab-active" : "";
   }
   if(tab === "home"){ goHome(); return; }
-  if(tab === "plan"){ _planListScope = "unfinished"; goView("plan_list"); return; }
+  if(tab === "plan"){ _planListScope = "custom"; goView("plan_list"); return; }
   if(tab === "wo"){ _woListScope = "next4"; goView("wo_list"); return; }
   if(tab === "fo"){ goView("fo_list"); return; }
   if(tab === "sc"){ goView("sc_list"); return; }
@@ -367,7 +367,7 @@ function kstDayOffset(days){
 }
 
 // ===== 首页 =====
-var _planListScope = "unfinished";
+var _planListScope = "custom";
 var _woListScope = "today";
 var _currentPlanScope = "unfinished";
 var _currentWoScope = "today";
@@ -589,7 +589,7 @@ function applyWoFilters(list){
 function initPlanList(){
   var today = kstToday();
   var scope = _planListScope;
-  _planListScope = "unfinished";
+  _planListScope = "custom";
   _currentPlanScope = scope;
 
   if(scope === "unfinished"){
