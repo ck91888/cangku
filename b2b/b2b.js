@@ -324,7 +324,7 @@ function goTab(tab){
   }
   if(tab === "home"){ goHome(); return; }
   if(tab === "plan"){ _planListScope = "custom"; goView("plan_list"); return; }
-  if(tab === "wo"){ _woListScope = "next4"; goView("wo_list"); return; }
+  if(tab === "wo"){ _woListScope = "custom"; goView("wo_list"); return; }
   if(tab === "fo"){ goView("fo_list"); return; }
   if(tab === "sc"){ goView("sc_list"); return; }
   if(tab === "wave"){ goView("doc_list"); return; }
@@ -1895,7 +1895,12 @@ function initWoList(){
   _currentWoScope = scope;
   var titleEl = document.getElementById("wl-title");
 
-  if(scope === "next4"){
+  if(scope === "custom"){
+    titleEl.textContent = "出库作业单列表";
+    document.getElementById("wl-start").value = today;
+    document.getElementById("wl-end").value = kstDayOffset(3);
+    loadWoList();
+  } else if(scope === "next4"){
     titleEl.textContent = "未来四天出库作业单";
     document.getElementById("wl-start").value = today;
     document.getElementById("wl-end").value = kstDayOffset(3);
