@@ -312,9 +312,74 @@ function goBack(){
   }
 }
 
+// ===== Tab 级状态缓存 =====
+var _tabState = { plan: null, wo: null };
+
+function captureTabState(tab){
+  if(tab === "plan" && _currentViewName === "plan_list"){
+    _tabState.plan = {
+      "pl-start": document.getElementById("pl-start").value,
+      "pl-end": document.getElementById("pl-end").value,
+      "pl-filter-status": document.getElementById("pl-filter-status").value,
+      "pl-filter-acc": document.getElementById("pl-filter-acc").value,
+      "pl-filter-customer": document.getElementById("pl-filter-customer").value,
+      scope: _currentPlanScope
+    };
+  } else if(tab === "wo" && _currentViewName === "wo_list"){
+    _tabState.wo = {
+      "wl-start": document.getElementById("wl-start").value,
+      "wl-end": document.getElementById("wl-end").value,
+      "wl-filter-status": document.getElementById("wl-filter-status").value,
+      "wl-filter-acc": document.getElementById("wl-filter-acc").value,
+      "wl-filter-customer": document.getElementById("wl-filter-customer").value,
+      scope: _currentWoScope
+    };
+  }
+}
+
+function restoreTabState(tab){
+  if(tab === "plan" && _tabState.plan){
+    var st = _tabState.plan;
+    goView("plan_list", { skipInit: true });
+    document.getElementById("pl-start").value = st["pl-start"] || "";
+    document.getElementById("pl-end").value = st["pl-end"] || "";
+    document.getElementById("pl-filter-status").value = st["pl-filter-status"] || "";
+    document.getElementById("pl-filter-acc").value = st["pl-filter-acc"] || "";
+    document.getElementById("pl-filter-customer").value = st["pl-filter-customer"] || "";
+    _currentPlanScope = st.scope || "custom";
+    var titleEl = document.getElementById("pl-title");
+    if(_currentPlanScope === "unfinished") titleEl.textContent = "未完成入库计划";
+    else if(_currentPlanScope === "next3") titleEl.textContent = "未来三天入库计划";
+    else if(_currentPlanScope === "overdue") titleEl.textContent = "逾期未完成计划";
+    else titleEl.textContent = "入库计划列表";
+    reloadCurrentPlanList();
+    return true;
+  }
+  if(tab === "wo" && _tabState.wo){
+    var st2 = _tabState.wo;
+    goView("wo_list", { skipInit: true });
+    document.getElementById("wl-start").value = st2["wl-start"] || "";
+    document.getElementById("wl-end").value = st2["wl-end"] || "";
+    document.getElementById("wl-filter-status").value = st2["wl-filter-status"] || "";
+    document.getElementById("wl-filter-acc").value = st2["wl-filter-acc"] || "";
+    document.getElementById("wl-filter-customer").value = st2["wl-filter-customer"] || "";
+    _currentWoScope = st2.scope || "custom";
+    var titleEl2 = document.getElementById("wl-title");
+    if(_currentWoScope === "next4") titleEl2.textContent = "未来四天出库作业单";
+    else if(_currentWoScope === "overdue") titleEl2.textContent = "逾期未完成出库作业单";
+    else if(_currentWoScope === "today") titleEl2.textContent = "今日出库作业单";
+    else titleEl2.textContent = "出库作业单列表";
+    reloadCurrentWoList();
+    return true;
+  }
+  return false;
+}
+
 // ===== Tab 导航 =====
 var _currentTab = "home";
 function goTab(tab){
+  // 离开前保存当前 tab 状态
+  captureTabState(_currentTab);
   _navStack = [];
   _currentTab = tab;
   var btns = document.querySelectorAll("#mainTabBar button");
@@ -323,8 +388,15 @@ function goTab(tab){
     btns[i].className = (tabOrder[i] === tab) ? "tab-active" : "";
   }
   if(tab === "home"){ goHome(); return; }
-  if(tab === "plan"){ _planListScope = "custom"; goView("plan_list"); return; }
-  if(tab === "wo"){ _woListScope = "custom"; goView("wo_list"); return; }
+  // plan / wo 优先恢复缓存
+  if(tab === "plan"){
+    if(restoreTabState("plan")) return;
+    _planListScope = "custom"; goView("plan_list"); return;
+  }
+  if(tab === "wo"){
+    if(restoreTabState("wo")) return;
+    _woListScope = "custom"; goView("wo_list"); return;
+  }
   if(tab === "fo"){ goView("fo_list"); return; }
   if(tab === "sc"){ goView("sc_list"); return; }
   if(tab === "wave"){ goView("doc_list"); return; }
@@ -540,13 +612,24 @@ function renderHomeCardSimple(prefix, items, labelMap, order){
 }
 
 function goCardDetail(type, scope){
+  // 首页卡片进入：清掉对应 tab 缓存，让 initXxxList 走特殊模式
   if(type === "plan"){
+    _tabState.plan = null;
     _planListScope = scope;
-    goView("plan_list");
+    _currentTab = "plan";
   } else {
+    _tabState.wo = null;
     _woListScope = scope;
-    goView("wo_list");
+    _currentTab = "wo";
   }
+  // 更新 tab 高亮
+  var btns = document.querySelectorAll("#mainTabBar button");
+  var tabOrder = ["home","plan","wo","fo","sc","wave"];
+  for(var i = 0; i < btns.length && i < tabOrder.length; i++){
+    btns[i].className = (tabOrder[i] === _currentTab) ? "tab-active" : "";
+  }
+  if(type === "plan") goView("plan_list");
+  else goView("wo_list");
 }
 
 function changePlanStatus(plan_id, status){
