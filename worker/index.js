@@ -3543,15 +3543,18 @@ export default {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const start_day = String(p.start_day || "").trim();
       const end_day = String(p.end_day || "").trim();
-      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
 
-      let where = "plan_day >= ? AND plan_day <= ?";
-      const binds = [start_day, end_day];
+      const conds = [];
+      const binds = [];
+      if (start_day) { conds.push("plan_day >= ?"); binds.push(start_day); }
+      if (end_day)   { conds.push("plan_day <= ?"); binds.push(end_day); }
       const custKw = String(p.customer_keyword || "").trim();
-      if (custKw) { where += " AND customer_name LIKE ?"; binds.push("%" + custKw + "%"); }
+      if (custKw) { conds.push("customer_name LIKE ?"); binds.push("%" + custKw + "%"); }
 
+      const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+      const order = (start_day || end_day) ? "plan_day ASC, created_at ASC" : "plan_day DESC, created_at DESC";
       const rs = await env.DB.prepare(
-        `SELECT * FROM b2b_inbound_plans WHERE ${where} ORDER BY plan_day ASC, created_at ASC`
+        `SELECT * FROM b2b_inbound_plans ${where} ORDER BY ${order}`
       ).bind(...binds).all();
       return jsonpOrJson({ ok:true, plans: rs.results || [] }, callback);
     }
@@ -3775,17 +3778,20 @@ export default {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const start_day = String(p.start_day || "").trim();
       const end_day = String(p.end_day || "").trim();
-      if (!start_day || !end_day) return jsonpOrJson({ ok:false, error:"missing start_day or end_day" }, callback);
 
-      let where = "WHERE plan_day >= ? AND plan_day <= ?";
-      const binds = [start_day, end_day];
+      const conds = [];
+      const binds = [];
+      if (start_day) { conds.push("plan_day >= ?"); binds.push(start_day); }
+      if (end_day)   { conds.push("plan_day <= ?"); binds.push(end_day); }
       const statusFilter = String(p.status || "").trim();
-      if (statusFilter) { where += " AND status=?"; binds.push(statusFilter); }
+      if (statusFilter) { conds.push("status=?"); binds.push(statusFilter); }
       const custKw = String(p.customer_keyword || "").trim();
-      if (custKw) { where += " AND customer_name LIKE ?"; binds.push("%" + custKw + "%"); }
+      if (custKw) { conds.push("customer_name LIKE ?"); binds.push("%" + custKw + "%"); }
 
+      const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+      const order = (start_day || end_day) ? "plan_day ASC, created_at ASC" : "plan_day DESC, created_at DESC";
       const rs = await env.DB.prepare(
-        `SELECT * FROM b2b_workorders ${where} ORDER BY plan_day ASC, created_at ASC`
+        `SELECT * FROM b2b_workorders ${where} ORDER BY ${order}`
       ).bind(...binds).all();
       return jsonpOrJson({ ok:true, workorders: rs.results || [] }, callback);
     }

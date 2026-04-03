@@ -610,8 +610,8 @@ function initPlanList(){
     document.getElementById("pl-end").value = kstYesterday();
     loadPlanListByRange("overdue");
   } else {
-    document.getElementById("pl-start").value = today;
-    document.getElementById("pl-end").value = today;
+    document.getElementById("pl-start").value = "";
+    document.getElementById("pl-end").value = "";
     loadPlanListByRange(null);
   }
 }
@@ -619,7 +619,6 @@ function initPlanList(){
 function loadPlanListByRange(mode){
   var s = document.getElementById("pl-start").value;
   var e = document.getElementById("pl-end").value;
-  if(!s || !e){ alert("请选择日期"); return; }
   if(mode === "unfinished" || mode === "overdue" || mode === "next3"){
     _currentPlanScope = mode;
   } else {
@@ -636,7 +635,9 @@ function loadPlanListByRange(mode){
 
   var custKw = (document.getElementById("pl-filter-customer")||{}).value || "";
   custKw = custKw.trim();
-  var planParams = { action:"b2b_plan_list", start_day:s, end_day:e };
+  var planParams = { action:"b2b_plan_list" };
+  if(s) planParams.start_day = s;
+  if(e) planParams.end_day = e;
   if(custKw) planParams.customer_keyword = custKw;
   fetchApi(planParams).then(function(res){
     if(!res || !res.ok){ resultEl.innerHTML = '<div class="bad">查询失败</div>'; return; }
@@ -1897,8 +1898,8 @@ function initWoList(){
 
   if(scope === "custom"){
     titleEl.textContent = "出库作业单列表";
-    document.getElementById("wl-start").value = today;
-    document.getElementById("wl-end").value = kstDayOffset(3);
+    document.getElementById("wl-start").value = "";
+    document.getElementById("wl-end").value = "";
     loadWoList();
   } else if(scope === "next4"){
     titleEl.textContent = "未来四天出库作业单";
@@ -1927,14 +1928,15 @@ function initWoList(){
 function loadWoList(){
   var s = document.getElementById("wl-start").value;
   var e = document.getElementById("wl-end").value;
-  if(!s || !e){ alert("请选择日期"); return; }
   _currentWoScope = "custom";
   document.getElementById("wl-title").textContent = "出库作业单列表";
   var el = document.getElementById("wl-result");
   el.innerHTML = '<div class="q-empty">加载中...</div>';
   var woCustKw = (document.getElementById("wl-filter-customer")||{}).value || "";
   woCustKw = woCustKw.trim();
-  var woParams = { action:"b2b_wo_list", start_day:s, end_day:e };
+  var woParams = { action:"b2b_wo_list" };
+  if(s) woParams.start_day = s;
+  if(e) woParams.end_day = e;
   if(woCustKw) woParams.customer_keyword = woCustKw;
   fetchApi(woParams).then(function(res){
     if(!res || !res.ok){ el.innerHTML = '<div class="bad">查询失败</div>'; return; }
