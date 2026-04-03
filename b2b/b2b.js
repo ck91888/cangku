@@ -1009,13 +1009,13 @@ function renderWoDetail(docs){
     // 旧口径提示
     var isLegacy = d.worker_count === 0 && d.total_minutes === 0;
     if(isLegacy){
-      line2parts.push('<span style="color:#e67e22;font-weight:700;">旧口径数据</span>');
+      line2parts.push('<span style="color:#e67e22;font-weight:700;">未登记作业人</span>');
     }
 
     // 人员明细
     var workerHtml = '';
     if(isLegacy){
-      workerHtml = '<div style="margin-top:4px;font-size:11px;color:#e67e22;">该工单在旧模式下操作，无逐人工时明细</div>';
+      workerHtml = '<div style="margin-top:4px;font-size:11px;color:#e67e22;">该工单已绑定，但未登记实际作业人，暂无人工时明细</div>';
     } else if(d.workers && d.workers.length){
       workerHtml = '<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">';
       d.workers.forEach(function(w){
