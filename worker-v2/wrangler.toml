@@ -1,0 +1,12 @@
+name = "ck-warehouse-v2"
+main = "index.js"
+compatibility_date = "2026-03-03"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ck_warehouse"
+database_id = "a07b8671-bde2-4f72-894c-2d17a13081b7"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "ck-warehouse-attachments"
