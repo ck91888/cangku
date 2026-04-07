@@ -54,16 +54,43 @@ function kstToday() {
 // ===== Login =====
 function doLogin() {
   var k = document.getElementById("loginKey").value.trim();
-  if (!k) { document.getElementById("loginErr").textContent = L("login_error"); return; }
+  var errEl = document.getElementById("loginErr");
+  if (!k) { errEl.textContent = "请输入访问码 / 액세스 코드를 입력하세요"; return; }
+  errEl.textContent = "验证中... / 확인중...";
+  errEl.style.color = "#666";
   setKey(k);
   // 用需要 auth 的接口验证 key 有效性（v2_issue_list 需要 ADMINKEY/VIEWKEY）
-  api({ action: "v2_issue_list", status: "pending" }).then(function(res) {
-    if (res && res.ok) {
+  fetch(V2_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "v2_issue_list", status: "pending", k: k })
+  }).then(function(res) {
+    if (!res.ok && res.status === 404) {
+      // Worker 不存在或未部署
+      errEl.style.color = "#e74c3c";
+      errEl.textContent = "后端服务未部署 (HTTP " + res.status + ")\n서버가 배포되지 않았습니다";
+      localStorage.removeItem(V2_KEY_STORAGE);
+      return null;
+    }
+    return res.json();
+  }).then(function(data) {
+    if (!data) return; // already handled above
+    if (data && data.ok) {
+      errEl.textContent = "";
       showMain();
+    } else if (data && data.error === "unauthorized") {
+      errEl.style.color = "#e74c3c";
+      errEl.textContent = "访问码错误 / 액세스 코드 오류";
+      localStorage.removeItem(V2_KEY_STORAGE);
     } else {
-      document.getElementById("loginErr").textContent = L("login_error");
+      errEl.style.color = "#e74c3c";
+      errEl.textContent = "服务异常: " + (data ? data.error : "unknown") + "\n서버 오류";
       localStorage.removeItem(V2_KEY_STORAGE);
     }
+  }).catch(function(e) {
+    errEl.style.color = "#e74c3c";
+    errEl.textContent = "网络异常 / 네트워크 오류: " + e.message;
+    localStorage.removeItem(V2_KEY_STORAGE);
   });
 }
 
@@ -105,8 +132,28 @@ function promptUserName() {
 
 function checkAutoLogin() {
   if (getKey()) {
-    // 有 key 就直接进入（key 已在首次登录时验证过）
-    showMain();
+    // 有 key，先快速验证还是否有效
+    fetch(V2_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "v2_issue_list", status: "pending", k: getKey() })
+    }).then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data && data.ok) {
+          showMain();
+        } else {
+          // key 已失效，回到登录页
+          localStorage.removeItem(V2_KEY_STORAGE);
+          var errEl = document.getElementById("loginErr");
+          if (errEl) {
+            errEl.style.color = "#e74c3c";
+            errEl.textContent = "访问码已失效，请重新输入 / 액세스 코드가 만료되었습니다";
+          }
+        }
+      }).catch(function() {
+        // 网络异常，仍然尝试进入（离线容忍）
+        showMain();
+      });
   }
 }
 
