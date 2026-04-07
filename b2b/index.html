@@ -340,8 +340,9 @@
         <div class="form-group"><label>客户名</label>
           <input id="pl-filter-customer" placeholder="输入客户名模糊搜索" style="width:140px;" onkeyup="if(event.key==='Enter')reloadCurrentPlanList();" />
         </div>
-        <div style="display:flex;align-items:flex-end;">
+        <div style="display:flex;align-items:flex-end;gap:6px;">
           <button class="primary" style="width:auto;min-width:80px;" onclick="reloadCurrentPlanList()">查询</button>
+          <button class="outline" style="width:auto;min-width:80px;" onclick="exportPlanCsv()">导出CSV</button>
         </div>
       </div>
       <div id="pl-result" style="margin-top:10px;"></div>
@@ -380,8 +381,9 @@
         <div class="form-group"><label>客户名</label>
           <input id="wl-filter-customer" placeholder="输入客户名模糊搜索" style="width:140px;" onkeyup="if(event.key==='Enter')loadWoList();" />
         </div>
-        <div style="display:flex;align-items:flex-end;">
+        <div style="display:flex;align-items:flex-end;gap:6px;">
           <button class="primary" style="width:auto;min-width:80px;" onclick="loadWoList()">查询</button>
+          <button class="outline" style="width:auto;min-width:80px;" onclick="exportWoCsv()">导出CSV</button>
         </div>
       </div>
       <div id="wl-result" style="margin-top:10px;"></div>

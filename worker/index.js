@@ -3559,6 +3559,87 @@ export default {
       return jsonpOrJson({ ok:true, plans: rs.results || [] }, callback);
     }
 
+    // ===== B2B 入库计划 CSV 导出 =====
+    if (action === "b2b_plan_export") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) {
+        return new Response("unauthorized", { status: 401, headers: CORS_HEADERS });
+      }
+      const start_day = String(p.start_day || "").trim();
+      const end_day = String(p.end_day || "").trim();
+      const statusFilter = String(p.status || "").trim();
+      const accFilter = String(p.accounted || "").trim();
+      const custKw = String(p.customer_keyword || "").trim();
+
+      const conds = [];
+      const binds = [];
+      if (start_day) { conds.push("plan_day >= ?"); binds.push(start_day); }
+      if (end_day)   { conds.push("plan_day <= ?"); binds.push(end_day); }
+      if (statusFilter) { conds.push("status = ?"); binds.push(statusFilter); }
+      if (accFilter === "yes") { conds.push("is_accounted = 1"); }
+      else if (accFilter === "no") { conds.push("(is_accounted = 0 OR is_accounted IS NULL)"); }
+      if (custKw) { conds.push("customer_name LIKE ?"); binds.push("%" + custKw + "%"); }
+
+      const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+      const order = (start_day || end_day) ? "plan_day ASC, created_at ASC" : "plan_day DESC, created_at DESC";
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_inbound_plans ${where} ORDER BY ${order}`
+      ).bind(...binds).all();
+      const rows = rs.results || [];
+
+      const PLAN_ST_ZH = { pending:"未到货", arrived:"已到货", processing:"操作中", completed:"已完成", abnormal:"异常", cancelled:"已作废" };
+      const BIZ_ZH = { b2c:"B2C", b2b:"B2B", inventory_op:"库存操作", return_op:"退件操作",
+        b2c_inbound:"B2C入库", b2b_inbound:"B2B入库", direct_transfer:"直接转发", other:"其他" };
+      const fmtTs = v => {
+        if (!v) return "";
+        const n = Number(v);
+        if (!n || n < 100000) return "";
+        return new Date(n).toISOString().replace("T"," ").slice(0,19);
+      };
+      const csvEsc = s => {
+        s = String(s == null ? "" : s);
+        return (s.includes(",") || s.includes('"') || s.includes("\n"))
+          ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+
+      const headers = ["计划编号","计划日期","客户名","业务类型","操作状态","记账状态",
+        "货物摘要","预计到货时间","用途","备注","创建人","创建时间",
+        "状态更新人","状态更新时间","记账人","记账时间"];
+
+      const csvLines = [headers.join(",")];
+      for (const r of rows) {
+        csvLines.push([
+          r.plan_id || "",
+          r.plan_day || "",
+          r.customer_name || "",
+          BIZ_ZH[r.biz_type] || r.biz_type || "",
+          PLAN_ST_ZH[r.status] || r.status || "",
+          r.is_accounted == 1 ? "已记账" : "未记账",
+          r.goods_summary || "",
+          r.expected_arrival_time || "",
+          r.purpose_text || "",
+          r.remark || "",
+          r.created_by || "",
+          fmtTs(r.created_at),
+          r.status_updated_by || "",
+          fmtTs(r.status_updated_at),
+          r.accounted_by || "",
+          fmtTs(r.accounted_at)
+        ].map(csvEsc).join(","));
+      }
+
+      const BOM = "\uFEFF";
+      const fname = (start_day || end_day)
+        ? "inbound_plan_" + (start_day || "start") + "_" + (end_day || "end") + ".csv"
+        : "inbound_plan_all.csv";
+      return new Response(BOM + csvLines.join("\r\n"), {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": 'attachment; filename="' + fname + '"',
+          ...CORS_HEADERS
+        }
+      });
+    }
+
     if (action === "b2b_plan_update_status") {
       if (!isAdmin_(p, env) && !isView_(p, env)) return jsonpOrJson({ ok:false, error:"unauthorized" }, callback);
       const plan_id = String(p.plan_id || "").trim();
@@ -3794,6 +3875,105 @@ export default {
         `SELECT * FROM b2b_workorders ${where} ORDER BY ${order}`
       ).bind(...binds).all();
       return jsonpOrJson({ ok:true, workorders: rs.results || [] }, callback);
+    }
+
+    // ===== B2B 出库作业单 CSV 导出 =====
+    if (action === "b2b_wo_export") {
+      if (!isAdmin_(p, env) && !isView_(p, env)) {
+        return new Response("unauthorized", { status: 401, headers: CORS_HEADERS });
+      }
+      const start_day = String(p.start_day || "").trim();
+      const end_day = String(p.end_day || "").trim();
+      const statusFilter = String(p.status || "").trim();
+      const accFilter = String(p.accounted || "").trim();
+      const custKw = String(p.customer_keyword || "").trim();
+
+      const conds = [];
+      const binds = [];
+      if (start_day) { conds.push("plan_day >= ?"); binds.push(start_day); }
+      if (end_day)   { conds.push("plan_day <= ?"); binds.push(end_day); }
+      if (statusFilter) {
+        if (statusFilter === "issued") {
+          conds.push("(status = 'issued' OR status = 'working')");
+        } else {
+          conds.push("status = ?"); binds.push(statusFilter);
+        }
+      }
+      if (accFilter === "yes") { conds.push("is_accounted = 1"); }
+      else if (accFilter === "no") { conds.push("(is_accounted = 0 OR is_accounted IS NULL)"); }
+      if (custKw) { conds.push("customer_name LIKE ?"); binds.push("%" + custKw + "%"); }
+
+      const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+      const order = (start_day || end_day) ? "plan_day ASC, created_at ASC" : "plan_day DESC, created_at DESC";
+      const rs = await env.DB.prepare(
+        `SELECT * FROM b2b_workorders ${where} ORDER BY ${order}`
+      ).bind(...binds).all();
+      const rows = rs.results || [];
+
+      const WO_ST_ZH = { draft:"草稿", issued:"操作中", working:"操作中", completed:"已完成", cancelled:"已取消" };
+      const fmtTs = v => {
+        if (!v) return "";
+        const n = Number(v);
+        if (!n || n < 100000) return "";
+        return new Date(n).toISOString().replace("T"," ").slice(0,19);
+      };
+      const csvEsc = s => {
+        s = String(s == null ? "" : s);
+        return (s.includes(",") || s.includes('"') || s.includes("\n"))
+          ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+
+      const headers = [
+        "作业单号","计划日期","客户名","操作模式","出库模式","明细模式",
+        "状态","记账状态","出库目的地","발주번호","WMS工单号",
+        "出库箱数","出库托数","总数量","总重量kg","总体积m³",
+        "作业说明","创建人","创建时间","编辑人","编辑时间",
+        "记账人","记账时间","是否已发货","发货确认人","发货确认时间"
+      ];
+
+      const csvLines = [headers.join(",")];
+      for (const r of rows) {
+        csvLines.push([
+          r.workorder_id || "",
+          r.plan_day || "",
+          r.customer_name || "",
+          r.operation_mode || "",
+          r.outbound_mode || "",
+          r.detail_mode || "",
+          WO_ST_ZH[r.status] || r.status || "",
+          r.is_accounted == 1 ? "已记账" : "未记账",
+          r.outbound_destination || "",
+          r.order_ref_no || "",
+          r.external_workorder_no || "",
+          r.outbound_box_count || 0,
+          r.outbound_pallet_count || 0,
+          r.total_qty || 0,
+          r.total_weight_kg || 0,
+          r.total_cbm || 0,
+          r.instruction_text || "",
+          r.created_by || "",
+          fmtTs(r.created_at),
+          r.last_edited_by || "",
+          fmtTs(r.last_edited_at),
+          r.accounted_by || "",
+          fmtTs(r.accounted_at),
+          r.shipment_confirmed_by ? "是" : "否",
+          r.shipment_confirmed_by || "",
+          fmtTs(r.shipment_confirmed_at)
+        ].map(csvEsc).join(","));
+      }
+
+      const BOM = "\uFEFF";
+      const fname = (start_day || end_day)
+        ? "workorder_" + (start_day || "start") + "_" + (end_day || "end") + ".csv"
+        : "workorder_all.csv";
+      return new Response(BOM + csvLines.join("\r\n"), {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": 'attachment; filename="' + fname + '"',
+          ...CORS_HEADERS
+        }
+      });
     }
 
     if (action === "b2b_wo_detail") {

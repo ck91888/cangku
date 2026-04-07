@@ -1423,6 +1423,56 @@ function exportDocCsv(){
   document.body.removeChild(a);
 }
 
+function exportPlanCsv(){
+  var s = document.getElementById("pl-start").value;
+  var e = document.getElementById("pl-end").value;
+  var fs = document.getElementById("pl-filter-status").value;
+  var fa = document.getElementById("pl-filter-acc").value;
+  var kw = (document.getElementById("pl-filter-customer").value||"").trim();
+
+  var params = new URLSearchParams();
+  params.set("action","b2b_plan_export");
+  params.set("k", getKey());
+  if(s) params.set("start_day", s);
+  if(e) params.set("end_day", e);
+  if(fs) params.set("status", fs);
+  if(fa) params.set("accounted", fa);
+  if(kw) params.set("customer_keyword", kw);
+
+  var url = API_URL + "?" + params.toString();
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "inbound_plan_" + (s||"all") + "_" + (e||"all") + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function exportWoCsv(){
+  var s = document.getElementById("wl-start").value;
+  var e = document.getElementById("wl-end").value;
+  var fs = document.getElementById("wl-filter-status").value;
+  var fa = document.getElementById("wl-filter-acc").value;
+  var kw = (document.getElementById("wl-filter-customer").value||"").trim();
+
+  var params = new URLSearchParams();
+  params.set("action","b2b_wo_export");
+  params.set("k", getKey());
+  if(s) params.set("start_day", s);
+  if(e) params.set("end_day", e);
+  if(fs) params.set("status", fs);
+  if(fa) params.set("accounted", fa);
+  if(kw) params.set("customer_keyword", kw);
+
+  var url = API_URL + "?" + params.toString();
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "workorder_" + (s||"all") + "_" + (e||"all") + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 // ===== 外部工单记录浮层 =====
 function showExternalWoDoc(idx){
   var d = _docRendered[idx];
