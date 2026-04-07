@@ -54,12 +54,10 @@ function kstToday() {
 // ===== Login =====
 function doLogin() {
   var k = document.getElementById("loginKey").value.trim();
-  var u = document.getElementById("loginUser").value.trim();
   if (!k) { document.getElementById("loginErr").textContent = L("login_error"); return; }
-  if (!u) { document.getElementById("loginErr").textContent = L("login_error"); return; }
   setKey(k);
-  setUser(u);
-  api({ action: "v2_health_check" }).then(function(res) {
+  // 用需要 auth 的接口验证 key 有效性（v2_issue_list 需要 ADMINKEY/VIEWKEY）
+  api({ action: "v2_issue_list", status: "pending" }).then(function(res) {
     if (res && res.ok) {
       showMain();
     } else {
@@ -71,7 +69,6 @@ function doLogin() {
 
 function doLogout() {
   localStorage.removeItem(V2_KEY_STORAGE);
-  localStorage.removeItem(V2_USER_KEY);
   document.getElementById("page-main").classList.remove("active");
   document.getElementById("page-login").classList.add("active");
 }
@@ -79,13 +76,36 @@ function doLogout() {
 function showMain() {
   document.getElementById("page-login").classList.remove("active");
   document.getElementById("page-main").classList.add("active");
-  document.getElementById("userBadge").textContent = getUser();
+  var userName = getUser();
+  document.getElementById("userBadge").textContent = userName || "(未设置)";
   applyLang();
   goTab("home");
+  // 首次进入且未设置显示名时，提示设置
+  if (!userName) {
+    setTimeout(promptUserName, 500);
+  }
+}
+
+function promptUserName() {
+  var current = getUser();
+  var name = prompt(
+    getLang() === "ko"
+      ? "표시 이름을 입력하세요 (작업 기록에 사용됩니다):"
+      : "请输入你的显示名（用于操作记录）:",
+    current || ""
+  );
+  if (name !== null) {
+    name = name.trim();
+    if (name) {
+      setUser(name);
+      document.getElementById("userBadge").textContent = name;
+    }
+  }
 }
 
 function checkAutoLogin() {
-  if (getKey() && getUser()) {
+  if (getKey()) {
+    // 有 key 就直接进入（key 已在首次登录时验证过）
     showMain();
   }
 }
@@ -111,7 +131,6 @@ function applyLang() {
   document.getElementById("loginTitle").textContent = L("login_title");
   document.getElementById("loginBtn").textContent = L("login_btn");
   document.getElementById("loginKey").placeholder = L("login_placeholder");
-  document.getElementById("loginUser").placeholder = L("login_user_placeholder");
   document.getElementById("btnNewIssue").textContent = L("new_issue");
   document.getElementById("btnNewOutbound").textContent = L("new_outbound");
   document.getElementById("btnNewInbound").textContent = L("new_inbound");

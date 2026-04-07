@@ -12,9 +12,7 @@
 <div id="page-login" class="page active">
   <div class="login-box">
     <h2 id="loginTitle">协同中心 V2</h2>
-    <input id="loginKey" type="password" placeholder="口令">
-    <div style="height:8px"></div>
-    <input id="loginUser" type="text" placeholder="你的名字">
+    <input id="loginKey" type="password" placeholder="访问码">
     <div style="height:12px"></div>
     <button class="btn btn-primary btn-full" onclick="doLogin()" id="loginBtn">进入</button>
     <div id="loginErr" class="muted mt-10" style="color:#e74c3c;text-align:center;"></div>
@@ -32,7 +30,7 @@
     </div>
     <div class="c-header-right">
       <button class="lang-btn" id="langBtn" onclick="toggleLang()">한국어</button>
-      <span class="user-badge" id="userBadge">--</span>
+      <span class="user-badge" id="userBadge" onclick="promptUserName()" style="cursor:pointer;" title="点击修改显示名">--</span>
       <button class="btn btn-outline btn-sm" id="logoutBtn" onclick="doLogout()">退出</button>
     </div>
   </div>

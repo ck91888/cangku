@@ -13,11 +13,10 @@ var LANG = {
   zh: {
     app_title: "协同中心",
     app_subtitle: "入库计划 · 出库作业 · 问题点沟通 · 核对异常",
-    login_title: "请输入口令",
-    login_placeholder: "口令",
-    login_user_placeholder: "你的名字",
+    login_title: "请输入访问码",
+    login_placeholder: "访问码",
     login_btn: "进入",
-    login_error: "口令错误或网络异常",
+    login_error: "访问码错误或网络异常",
     logout: "退出",
     lang_switch: "한국어",
     // Tabs
@@ -106,9 +105,8 @@ var LANG = {
   ko: {
     app_title: "협업센터",
     app_subtitle: "입고계획 · 출고작업 · 이슈소통 · 확인/이상",
-    login_title: "비밀번호를 입력하세요",
-    login_placeholder: "비밀번호",
-    login_user_placeholder: "이름",
+    login_title: "액세스 코드를 입력하세요",
+    login_placeholder: "액세스 코드",
     login_btn: "입장",
     login_error: "비밀번호 오류 또는 네트워크 오류",
     logout: "로그아웃",
