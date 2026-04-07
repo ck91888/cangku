@@ -4,10 +4,14 @@
  */
 
 var V2_API = "https://ck-warehouse-v2.ck91888.workers.dev";
-var V2_KEY_STORAGE = "ck_v2_ops_k";
-var V2_LANG_KEY = "ck_v2_lang";
-var V2_WORKER_KEY = "ck_v2_worker_id";
-var V2_WORKER_NAME_KEY = "ck_v2_worker_name";
+
+// ===== OPS 专用访问码（第一轮轻量访问控制，非安全密钥）=====
+// 部署时替换为实际值，并在 Cloudflare Workers 设置对应 OPSKEY secret
+var OPS_KEY = "__SET_OPS_KEY__";
+
+// ===== localStorage keys =====
+var V2_OPS_BADGE_KEY = "ck_v2_ops_badge";       // 工牌原始值 e.g. "EMP-001|张三"
+var V2_OPS_AUTH_DAY_KEY = "ck_v2_ops_auth_day";  // 当天确认日期 e.g. "2026-04-07"
 var V2_ACTIVE_JOB_KEY = "ck_v2_active_job";
 var V2_INTERRUPT_KEY = "ck_v2_interrupt_parent";
 
@@ -131,12 +135,14 @@ var I18N = {
   join_task: { zh: "加入任务", ko: "작업 참여" },
   existing_task_found: { zh: "已有任务进行中，是否加入？", ko: "진행 중인 작업이 있습니다. 참여하시겠습니까?" },
 
-  // -- Login --
-  login_title: { zh: "请输入口令", ko: "비밀번호를 입력하세요" },
-  login_placeholder: { zh: "口令", ko: "비밀번호" },
-  login_btn: { zh: "进入", ko: "입장" },
-  login_error: { zh: "口令错误", ko: "비밀번호 오류" },
-  worker_name_placeholder: { zh: "输入你的名字", ko: "이름을 입력하세요" },
+  // -- Badge / Entry --
+  badge_scan_title: { zh: "请扫描工牌开始", ko: "명찰을 스캔하여 시작하세요" },
+  badge_scan_btn: { zh: "开始扫码", ko: "스캔 시작" },
+  badge_manual_btn: { zh: "手动输入", ko: "수동 입력" },
+  badge_change: { zh: "更换工牌", ko: "명찰 변경" },
+  badge_invalid: { zh: "无效工牌格式", ko: "잘못된 명찰 형식" },
+  badge_format_hint: { zh: "格式: EMP-001|张三 / DA-20260407-01|名字 / DAF-01|名字", ko: "형식: EMP-001|이름 / DA-20260407-01|이름 / DAF-01|이름" },
+  badge_ok: { zh: "工牌已识别", ko: "명찰 인식됨" },
   worker_setup: { zh: "设置操作员", ko: "작업자 설정" },
 };
 

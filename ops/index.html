@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <title>现场执行系统 V2 / 현장 실행 시스템</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 </head>
 <body>
 
@@ -14,20 +15,27 @@
     <div class="title" id="headerTitle">现场执行 / 현장 실행</div>
     <div class="sub">CK 仓库 · 인천</div>
   </div>
-  <div class="worker-badge" id="headerWorker" onclick="showWorkerSetup()">--</div>
+  <div class="worker-badge" id="headerWorker" onclick="showBadgeChange()">--</div>
 </div>
 
-<!-- Login -->
-<div id="page-login" class="page active">
+<!-- Badge Scan Entry (replaces old login page) -->
+<div id="page-badge" class="page active">
   <div class="login-screen">
     <div class="login-box">
       <h2>현장 실행 시스템<br>现场执行系统 V2</h2>
-      <input id="loginKey" type="password" placeholder="口令 / 비밀번호">
+      <p style="color:#666;font-size:14px;margin-bottom:16px;">
+        请扫描工牌开始<br>명찰을 스캔하여 시작하세요
+      </p>
+      <div id="badgeReader" style="width:100%;max-width:300px;margin:0 auto 12px;"></div>
+      <div id="badgeStatus" class="muted" style="min-height:20px;margin-bottom:8px;"></div>
+      <button class="btn btn-primary" onclick="startBadgeScan()" id="badgeScanBtn">开始扫码 / 스캔 시작</button>
       <div style="height:8px"></div>
-      <input id="loginWorkerName" type="text" placeholder="你的名字 / 이름">
-      <div style="height:12px"></div>
-      <button class="btn btn-primary" onclick="doLogin()">进入 / 입장</button>
-      <div id="loginErr" class="muted mt-10" style="color:#e74c3c;"></div>
+      <button class="btn btn-outline" onclick="showBadgeManualInput()">手动输入 / 수동 입력</button>
+      <div id="badgeManualBox" style="display:none;margin-top:12px;">
+        <input id="badgeManualInput" type="text" placeholder="EMP-001|张三 / DA-...|이름 / DAF-...|이름" style="font-size:14px;">
+        <div style="height:8px"></div>
+        <button class="btn btn-primary" onclick="submitManualBadge()">确认 / 확인</button>
+      </div>
     </div>
   </div>
 </div>
@@ -289,14 +297,17 @@
   </div>
 </div>
 
-<!-- Worker Setup Modal -->
-<div id="workerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999;align-items:center;justify-content:center;">
+<!-- Badge Change Modal (right-top entry) -->
+<div id="badgeModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999;align-items:center;justify-content:center;">
   <div class="card" style="max-width:360px;margin:20px;">
-    <div class="card-title">设置操作员 / 작업자 설정</div>
-    <label>名字 / 이름</label>
-    <input id="workerNameInput" type="text" placeholder="输入名字/이름 입력">
-    <button class="btn btn-primary mt-10" onclick="saveWorkerName()">确认 / 확인</button>
-    <button class="btn btn-outline mt-10" onclick="hideWorkerSetup()">取消 / 취소</button>
+    <div class="card-title">更换工牌 / 명찰 변경</div>
+    <div id="badgeModalReader" style="width:100%;max-width:280px;margin:0 auto 10px;"></div>
+    <div id="badgeModalStatus" class="muted" style="min-height:20px;margin-bottom:8px;"></div>
+    <button class="btn btn-primary" onclick="startBadgeModalScan()">扫码 / 스캔</button>
+    <div style="height:6px"></div>
+    <input id="badgeModalInput" type="text" placeholder="手动输入工牌 / 명찰 수동 입력">
+    <button class="btn btn-primary mt-10" onclick="submitBadgeModal()">确认 / 확인</button>
+    <button class="btn btn-outline mt-10" onclick="hideBadgeModal()">取消 / 취소</button>
   </div>
 </div>
 

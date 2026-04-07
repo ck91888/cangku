@@ -51,6 +51,18 @@ function isAdmin(body, env) {
   return !!(secret && k && k === secret);
 }
 
+// OPS key — 现场执行系统专用，只允许用于 ops 相关接口
+function isOpsKey(body, env) {
+  const k = String(body.k || "").trim();
+  const opsKey = String(env.OPSKEY || "").trim();
+  return !!(opsKey && k && k === opsKey);
+}
+
+// isOpsAuth = ADMINKEY | VIEWKEY | OPSKEY（ops 接口用）
+function isOpsAuth(body, env) {
+  return isAuth(body, env) || isOpsKey(body, env);
+}
+
 // ===== Auto-migration =====
 const MIGRATIONS = [
   // v2_inbound_plans
@@ -301,7 +313,7 @@ route("v2_issue_list", async (body, env) => {
 });
 
 route("v2_issue_detail", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const id = String(body.id || "").trim();
   if (!id) return err("missing id");
   const row = await env.DB.prepare("SELECT * FROM v2_issue_tickets WHERE id=?").bind(id).first();
@@ -346,7 +358,7 @@ route("v2_issue_cancel", async (body, env) => {
 // ISSUE TICKETS — Ops side (field execution)
 // =====================================================
 route("v2_issue_ops_list", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const status = String(body.status || "").trim();
   let sql = "SELECT * FROM v2_issue_tickets WHERE 1=1";
   const binds = [];
@@ -358,7 +370,7 @@ route("v2_issue_ops_list", async (body, env) => {
 });
 
 route("v2_issue_handle_start", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const issue_id = String(body.issue_id || "").trim();
   const handler_id = String(body.handler_id || "").trim();
   const handler_name = String(body.handler_name || "").trim();
@@ -401,7 +413,7 @@ route("v2_issue_handle_start", async (body, env) => {
 });
 
 route("v2_issue_handle_finish", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const run_id = String(body.run_id || "").trim();
   const feedback_text = String(body.feedback_text || "").trim();
   if (!run_id) return err("missing run_id");
@@ -483,7 +495,7 @@ route("v2_outbound_order_create", async (body, env) => {
 });
 
 route("v2_outbound_order_list", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const start = String(body.start_date || "").trim();
   const end = String(body.end_date || "").trim();
   const status = String(body.status || "").trim();
@@ -499,7 +511,7 @@ route("v2_outbound_order_list", async (body, env) => {
 });
 
 route("v2_outbound_order_detail", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const id = String(body.id || "").trim();
   if (!id) return err("missing id");
   const row = await env.DB.prepare("SELECT * FROM v2_outbound_orders WHERE id=?").bind(id).first();
@@ -538,7 +550,7 @@ route("v2_outbound_order_update_status", async (body, env) => {
 // OUTBOUND LOAD — Ops side
 // =====================================================
 route("v2_outbound_load_start", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const order_id = String(body.order_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   const worker_name = String(body.worker_name || "").trim();
@@ -591,7 +603,7 @@ route("v2_outbound_load_start", async (body, env) => {
 });
 
 route("v2_outbound_load_finish", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   if (!job_id) return err("missing job_id");
@@ -685,7 +697,7 @@ route("v2_inbound_plan_create", async (body, env) => {
 });
 
 route("v2_inbound_plan_list", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const start = String(body.start_date || "").trim();
   const end = String(body.end_date || "").trim();
   const status = String(body.status || "").trim();
@@ -701,7 +713,7 @@ route("v2_inbound_plan_list", async (body, env) => {
 });
 
 route("v2_inbound_plan_detail", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const id = String(body.id || "").trim();
   if (!id) return err("missing id");
   const row = await env.DB.prepare("SELECT * FROM v2_inbound_plans WHERE id=?").bind(id).first();
@@ -735,7 +747,7 @@ route("v2_inbound_plan_update_status", async (body, env) => {
 // UNLOAD / INBOUND JOBS — Ops side
 // =====================================================
 route("v2_unload_job_start", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const plan_id = String(body.plan_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   const worker_name = String(body.worker_name || "").trim();
@@ -785,7 +797,7 @@ route("v2_unload_job_start", async (body, env) => {
 });
 
 route("v2_unload_job_finish", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   const complete_job = body.complete_job === true;
@@ -831,7 +843,7 @@ route("v2_unload_job_finish", async (body, env) => {
 });
 
 route("v2_inbound_job_start", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const plan_id = String(body.plan_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   const worker_name = String(body.worker_name || "").trim();
@@ -875,7 +887,7 @@ route("v2_inbound_job_start", async (body, env) => {
 });
 
 route("v2_inbound_job_finish", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   const complete_job = body.complete_job === true;
@@ -926,7 +938,7 @@ route("v2_inbound_job_finish", async (body, env) => {
 // GENERIC OPS JOB — for flexible use
 // =====================================================
 route("v2_ops_job_start", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const flow_stage = String(body.flow_stage || "").trim();
   const biz_class = String(body.biz_class || "").trim();
   const job_type = String(body.job_type || "").trim();
@@ -994,7 +1006,7 @@ route("v2_ops_job_start", async (body, env) => {
 });
 
 route("v2_ops_job_leave", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   if (!job_id || !worker_id) return err("missing job_id or worker_id");
@@ -1026,7 +1038,7 @@ route("v2_ops_job_leave", async (body, env) => {
 });
 
 route("v2_ops_job_finish", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   if (!job_id) return err("missing job_id");
@@ -1076,7 +1088,7 @@ route("v2_ops_job_finish", async (body, env) => {
 });
 
 route("v2_ops_job_detail", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   if (!job_id) return err("missing job_id");
   const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
@@ -1100,7 +1112,7 @@ route("v2_ops_job_detail", async (body, env) => {
 
 // Get worker's current active job
 route("v2_ops_my_active_job", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const worker_id = String(body.worker_id || "").trim();
   if (!worker_id) return err("missing worker_id");
 
@@ -1115,7 +1127,7 @@ route("v2_ops_my_active_job", async (body, env) => {
 
 // Resume parent job after interrupt
 route("v2_ops_job_resume", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const parent_job_id = String(body.parent_job_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
   const worker_name = String(body.worker_name || "").trim();
@@ -1179,7 +1191,7 @@ route("v2_attachment_upload", async (body, env, request) => {
 });
 
 route("v2_attachment_list", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const doc_type = String(body.related_doc_type || "").trim();
   const doc_id = String(body.related_doc_id || "").trim();
   if (!doc_type || !doc_id) return err("missing related_doc_type or related_doc_id");
@@ -1206,7 +1218,7 @@ route("v2_attachment_get", async (body, env) => {
 // FIELD FEEDBACKS — basic CRUD
 // =====================================================
 route("v2_feedback_create", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const id = "FB-" + uid();
   const t = now();
   await env.DB.prepare(`
@@ -1220,7 +1232,7 @@ route("v2_feedback_create", async (body, env) => {
 });
 
 route("v2_feedback_list", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const rs = await env.DB.prepare(
     "SELECT * FROM v2_field_feedbacks ORDER BY created_at DESC LIMIT 200"
   ).all();
@@ -1231,7 +1243,7 @@ route("v2_feedback_list", async (body, env) => {
 // SCAN BATCHES — basic CRUD
 // =====================================================
 route("v2_scan_batch_create", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const id = "SB-" + uid();
   const t = now();
   await env.DB.prepare(`
@@ -1245,7 +1257,7 @@ route("v2_scan_batch_create", async (body, env) => {
 });
 
 route("v2_scan_batch_list", async (body, env) => {
-  if (!isAuth(body, env)) return err("unauthorized", 401);
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const rs = await env.DB.prepare(
     "SELECT * FROM v2_scan_batches ORDER BY created_at DESC LIMIT 200"
   ).all();
@@ -1331,7 +1343,7 @@ async function handleMultipartUpload(request, env) {
     await ensureMigrated(env.DB);
     const formData = await request.formData();
     const k = formData.get("k") || "";
-    if (!isAuth({ k }, env)) return err("unauthorized", 401);
+    if (!isOpsAuth({ k }, env)) return err("unauthorized", 401);
 
     const file = formData.get("file");
     if (!file) return err("missing file");

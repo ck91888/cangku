@@ -1,10 +1,11 @@
 /**
  * CK Warehouse V2 — Ops App (Field Execution System)
  * Mobile-first, bilingual (zh/ko), shared tasks, interrupts
+ * Badge-based entry (reuses main system badge logic)
  */
 
 // ===== State =====
-var _currentPage = "login";
+var _currentPage = "badge";
 var _pageParams = {};
 var _navStack = [];
 var _activeJobId = null;   // current job id I'm participating in
@@ -14,36 +15,77 @@ var _issueFilter = "pending";
 var _currentIssueId = null;
 var _currentRunId = null;
 var _photoUploadCtx = {};  // { related_doc_type, attachment_category, related_doc_id }
+var _badgeScanner = null;  // Html5Qrcode instance for badge scan
+var _badgeModalScanner = null; // Html5Qrcode instance for badge change modal
 
-// ===== API =====
-function getKey() { try { return localStorage.getItem(V2_KEY_STORAGE) || ""; } catch(e) { return ""; } }
-function setKey(k) { try { localStorage.setItem(V2_KEY_STORAGE, k); } catch(e) {} }
-function getWorkerId() { return localStorage.getItem(V2_WORKER_KEY) || ""; }
-function getWorkerName() { return localStorage.getItem(V2_WORKER_NAME_KEY) || ""; }
-
-async function api(params) {
-  params.k = getKey();
-  try {
-    var res = await fetch(V2_API, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params)
-    });
-    return await res.json();
-  } catch(e) {
-    return { ok: false, error: "network: " + e };
-  }
+// ===== Badge logic (ported from main system app.js) =====
+function parseBadge(code) {
+  var raw = (code || "").trim();
+  var parts = raw.split("|");
+  var id = (parts[0] || "").trim();
+  var name = (parts[1] || "").trim();
+  return { raw: raw, id: id, name: name };
+}
+function isDaId(id) { return /^DA-\d{6,8}-.+$/.test(id); }
+function isEmpId(id) { return /^EMP-.+$/.test(id); }
+function isPermanentDaId(id) { return /^DAF-.+$/.test(id); }
+function isOperatorBadge(raw) {
+  var p = parseBadge(raw);
+  return isDaId(p.id) || isEmpId(p.id) || isPermanentDaId(p.id);
+}
+function badgeDisplay(raw) {
+  var p = parseBadge(raw);
+  return p.name ? (p.id + "｜" + p.name) : p.id;
 }
 
-async function uploadFile(formData) {
-  formData.append("k", getKey());
+// ===== Badge storage =====
+function getBadge() {
+  try { return localStorage.getItem(V2_OPS_BADGE_KEY) || ""; } catch(e) { return ""; }
+}
+function setBadge(raw) {
+  try { localStorage.setItem(V2_OPS_BADGE_KEY, raw); } catch(e) {}
+}
+function getAuthDay() {
+  try { return localStorage.getItem(V2_OPS_AUTH_DAY_KEY) || ""; } catch(e) { return ""; }
+}
+function setAuthDay(day) {
+  try { localStorage.setItem(V2_OPS_AUTH_DAY_KEY, day); } catch(e) {}
+}
+
+// KST today (UTC+9)
+function kstToday() {
+  var d = new Date(Date.now() + 9 * 3600000);
+  return d.toISOString().slice(0, 10);
+}
+
+// ===== Identity getters (used throughout the app) =====
+// getWorkerId returns badge ID (e.g. "EMP-001"), getWorkerName returns badge name (e.g. "张三")
+function getWorkerId() {
+  var p = parseBadge(getBadge());
+  return p.id || "";
+}
+function getWorkerName() {
+  var p = parseBadge(getBadge());
+  return p.name || p.id || "";
+}
+
+// ===== API =====
+function api(params) {
+  params.k = OPS_KEY;
+  return fetch(V2_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params)
+  }).then(function(res) { return res.json(); })
+    .catch(function(e) { return { ok: false, error: "network: " + e }; });
+}
+
+function uploadFile(formData) {
+  formData.append("k", OPS_KEY);
   formData.append("action", "v2_attachment_upload");
-  try {
-    var res = await fetch(V2_API, { method: "POST", body: formData });
-    return await res.json();
-  } catch(e) {
-    return { ok: false, error: "upload failed: " + e };
-  }
+  return fetch(V2_API, { method: "POST", body: formData })
+    .then(function(res) { return res.json(); })
+    .catch(function(e) { return { ok: false, error: "upload failed: " + e }; });
 }
 
 function fileUrl(fileKey) {
@@ -52,7 +94,7 @@ function fileUrl(fileKey) {
 
 // ===== Navigation =====
 function goPage(name, params) {
-  if (_currentPage !== "login") {
+  if (_currentPage !== "badge") {
     _navStack.push({ page: _currentPage, params: _pageParams });
     if (_navStack.length > 20) _navStack.shift();
   }
@@ -92,58 +134,218 @@ function showPage(name) {
   if (name === "generic_job") initGenericJob();
 }
 
-// ===== Login =====
-function doLogin() {
-  var k = document.getElementById("loginKey").value.trim();
-  var name = document.getElementById("loginWorkerName").value.trim();
-  if (!k) { document.getElementById("loginErr").textContent = "请输入口令 / 비밀번호를 입력하세요"; return; }
-  if (!name) { document.getElementById("loginErr").textContent = "请输入名字 / 이름을 입력하세요"; return; }
+// ===== Badge Entry (replaces old login) =====
+function checkBadgeAuth() {
+  var badge = getBadge();
+  var authDay = getAuthDay();
+  var today = kstToday();
+  if (badge && isOperatorBadge(badge) && authDay === today) {
+    // Already authenticated today
+    updateHeaderBadge();
+    showPage("home");
+    return true;
+  }
+  return false;
+}
 
-  setKey(k);
-  api({ action: "v2_health_check" }).then(function(res) {
-    if (res && res.ok) {
-      localStorage.setItem(V2_WORKER_NAME_KEY, name);
-      // Generate worker ID if not set
-      if (!getWorkerId()) {
-        localStorage.setItem(V2_WORKER_KEY, "W-" + Date.now().toString(36) + Math.random().toString(36).slice(2,6));
+function applyBadge(raw) {
+  raw = (raw || "").trim();
+  if (!raw || !isOperatorBadge(raw)) {
+    return false;
+  }
+  setBadge(raw);
+  setAuthDay(kstToday());
+  updateHeaderBadge();
+  return true;
+}
+
+function updateHeaderBadge() {
+  var el = document.getElementById("headerWorker");
+  if (el) el.textContent = badgeDisplay(getBadge()) || "--";
+}
+
+// --- Badge scan on entry page ---
+function startBadgeScan() {
+  var readerEl = document.getElementById("badgeReader");
+  var statusEl = document.getElementById("badgeStatus");
+  var btn = document.getElementById("badgeScanBtn");
+  if (!readerEl) return;
+
+  // If scanner already running, stop it
+  if (_badgeScanner) {
+    try { _badgeScanner.stop(); } catch(e) {}
+    _badgeScanner = null;
+    readerEl.innerHTML = "";
+    btn.textContent = "开始扫码 / 스캔 시작";
+    return;
+  }
+
+  btn.textContent = "停止扫码 / 스캔 중지";
+  statusEl.textContent = "";
+
+  _badgeScanner = new Html5Qrcode("badgeReader", {
+    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39],
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+  });
+
+  _badgeScanner.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 250, height: 120 } },
+    function(decodedText) {
+      var code = decodedText.trim();
+      try { code = decodeURIComponent(code); } catch(e) {}
+
+      if (!isOperatorBadge(code)) {
+        statusEl.textContent = "无效工牌 / 잘못된 명찰: " + code;
+        statusEl.style.color = "#e74c3c";
+        return;
       }
-      updateHeaderWorker();
-      showPage("home");
-    } else {
-      document.getElementById("loginErr").textContent = "口令错误 / 비밀번호 오류";
-      localStorage.removeItem(V2_KEY_STORAGE);
-    }
+      // Valid badge
+      try { _badgeScanner.stop(); } catch(e) {}
+      _badgeScanner = null;
+      readerEl.innerHTML = "";
+
+      if (applyBadge(code)) {
+        showPage("home");
+      }
+    },
+    function() {} // ignore scan errors
+  ).catch(function(e) {
+    statusEl.textContent = "摄像头启动失败 / 카메라 시작 실패: " + e;
+    statusEl.style.color = "#e74c3c";
+    btn.textContent = "开始扫码 / 스캔 시작";
+    _badgeScanner = null;
   });
 }
 
-function checkLogin() {
-  if (getKey() && getWorkerName()) {
-    updateHeaderWorker();
+function showBadgeManualInput() {
+  var box = document.getElementById("badgeManualBox");
+  if (box) box.style.display = box.style.display === "none" ? "" : "none";
+}
+
+function submitManualBadge() {
+  var input = document.getElementById("badgeManualInput");
+  var statusEl = document.getElementById("badgeStatus");
+  var val = (input ? input.value : "").trim();
+
+  if (!val) {
+    statusEl.textContent = "请输入工牌 / 명찰을 입력하세요";
+    statusEl.style.color = "#e74c3c";
+    return;
+  }
+  if (!isOperatorBadge(val)) {
+    statusEl.textContent = "无效工牌格式 / 잘못된 명찰 형식\n" + t("badge_format_hint");
+    statusEl.style.color = "#e74c3c";
+    return;
+  }
+  // Stop scanner if running
+  if (_badgeScanner) {
+    try { _badgeScanner.stop(); } catch(e) {}
+    _badgeScanner = null;
+    document.getElementById("badgeReader").innerHTML = "";
+  }
+
+  if (applyBadge(val)) {
     showPage("home");
   }
 }
 
-function updateHeaderWorker() {
-  var el = document.getElementById("headerWorker");
-  if (el) el.textContent = getWorkerName() || "--";
+// --- Badge change modal (right-top entry) ---
+function hasActiveJob() {
+  return !!_activeJobId;
 }
 
-function showWorkerSetup() {
-  var modal = document.getElementById("workerModal");
+function showBadgeChange() {
+  // 有活跃任务时禁止更换工牌
+  if (hasActiveJob()) {
+    alert("当前还有进行中的任务，请先返回任务并结束或离开后再更换工牌\n\n진행 중인 작업이 있습니다. 작업을 종료하거나 나간 후 명찰을 변경하세요");
+    return;
+  }
+  var modal = document.getElementById("badgeModal");
   modal.style.display = "flex";
-  document.getElementById("workerNameInput").value = getWorkerName();
+  var input = document.getElementById("badgeModalInput");
+  if (input) input.value = getBadge();
+  var statusEl = document.getElementById("badgeModalStatus");
+  if (statusEl) statusEl.textContent = "当前 / 현재: " + badgeDisplay(getBadge());
 }
 
-function hideWorkerSetup() {
-  document.getElementById("workerModal").style.display = "none";
+function hideBadgeModal() {
+  if (_badgeModalScanner) {
+    try { _badgeModalScanner.stop(); } catch(e) {}
+    _badgeModalScanner = null;
+    document.getElementById("badgeModalReader").innerHTML = "";
+  }
+  document.getElementById("badgeModal").style.display = "none";
 }
 
-function saveWorkerName() {
-  var name = document.getElementById("workerNameInput").value.trim();
-  if (!name) return;
-  localStorage.setItem(V2_WORKER_NAME_KEY, name);
-  updateHeaderWorker();
-  hideWorkerSetup();
+function startBadgeModalScan() {
+  var readerEl = document.getElementById("badgeModalReader");
+  var statusEl = document.getElementById("badgeModalStatus");
+  if (!readerEl) return;
+
+  if (_badgeModalScanner) {
+    try { _badgeModalScanner.stop(); } catch(e) {}
+    _badgeModalScanner = null;
+    readerEl.innerHTML = "";
+    return;
+  }
+
+  statusEl.textContent = "扫码中... / 스캔중...";
+  _badgeModalScanner = new Html5Qrcode("badgeModalReader", {
+    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39],
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+  });
+
+  _badgeModalScanner.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 240, height: 110 } },
+    function(decodedText) {
+      var code = decodedText.trim();
+      try { code = decodeURIComponent(code); } catch(e) {}
+
+      if (!isOperatorBadge(code)) {
+        statusEl.textContent = "无效工牌 / 잘못된 명찰: " + code;
+        statusEl.style.color = "#e74c3c";
+        return;
+      }
+      try { _badgeModalScanner.stop(); } catch(e) {}
+      _badgeModalScanner = null;
+      readerEl.innerHTML = "";
+
+      applyBadge(code);
+      statusEl.textContent = "已更换 / 변경됨: " + badgeDisplay(code);
+      statusEl.style.color = "#27ae60";
+      setTimeout(hideBadgeModal, 800);
+    },
+    function() {}
+  ).catch(function(e) {
+    statusEl.textContent = "摄像头启动失败 / 카메라 시작 실패";
+    statusEl.style.color = "#e74c3c";
+    _badgeModalScanner = null;
+  });
+}
+
+function submitBadgeModal() {
+  var input = document.getElementById("badgeModalInput");
+  var statusEl = document.getElementById("badgeModalStatus");
+  var val = (input ? input.value : "").trim();
+
+  if (!val || !isOperatorBadge(val)) {
+    statusEl.textContent = "无效工牌格式 / 잘못된 명찰 형식";
+    statusEl.style.color = "#e74c3c";
+    return;
+  }
+
+  if (_badgeModalScanner) {
+    try { _badgeModalScanner.stop(); } catch(e) {}
+    _badgeModalScanner = null;
+    document.getElementById("badgeModalReader").innerHTML = "";
+  }
+
+  applyBadge(val);
+  statusEl.textContent = "已更换 / 변경됨: " + badgeDisplay(val);
+  statusEl.style.color = "#27ae60";
+  setTimeout(hideBadgeModal, 800);
 }
 
 // ===== Home =====
@@ -500,8 +702,7 @@ async function loadIssueList() {
 
   var items = res.items || [];
   if (_issueFilter === "my") {
-    var myId = getWorkerId();
-    // Need to check handle_runs for my items - simplified: show processing + responded
+    // Show processing + responded
     items = items.filter(function(it) { return it.status === "processing" || it.status === "responded"; });
   }
 
@@ -647,7 +848,6 @@ async function handleIssueFinish() {
   if (!_currentRunId && _activeJobId) {
     // Try to find the run from job
     var jobRes = await api({ action: "v2_ops_job_detail", job_id: _activeJobId });
-    // Fallback: use latest run for this issue
   }
 
   // Find latest working run for this issue
@@ -879,5 +1079,5 @@ function fmtTime(isoStr) {
 
 // ===== Init =====
 window.addEventListener("DOMContentLoaded", function() {
-  checkLogin();
+  checkBadgeAuth();
 });
