@@ -1239,6 +1239,8 @@ route("v2_ops_job_detail", async (body, env) => {
   if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   if (!job_id) return err("missing job_id");
+  // 实时校正 active_worker_count
+  await recalcActiveCount(env, job_id, now());
   const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
   if (!job) return err("not found", 404);
   const workers = await env.DB.prepare(
@@ -1269,6 +1271,9 @@ route("v2_ops_my_active_job", async (body, env) => {
   ).bind(worker_id).first();
   if (!seg) return json({ ok: true, active: false });
 
+  // 实时校正 active_worker_count，确保首页人数与任务页一致
+  const t = now();
+  await recalcActiveCount(env, seg.job_id, t);
   const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(seg.job_id).first();
   return json({ ok: true, active: true, segment: seg, job });
 });

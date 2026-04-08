@@ -19,6 +19,7 @@ var _currentRunId = null;
 var _photoUploadCtx = {};  // { related_doc_type, attachment_category, related_doc_id }
 var _badgeScanner = null;  // Html5Qrcode instance for badge scan
 var _badgeModalScanner = null; // Html5Qrcode instance for badge change modal
+var _startInflight = false; // in-flight guard for start actions
 
 // ===== Badge logic (ported from main system app.js) =====
 function parseBadge(code) {
@@ -142,12 +143,29 @@ function checkBadgeAuth() {
   var authDay = getAuthDay();
   var today = kstToday();
   if (badge && isOperatorBadge(badge) && authDay === today) {
-    // Already authenticated today
     updateHeaderBadge();
-    showPage("home");
+    // 尝试恢复到活跃任务页，无活跃任务则进首页
+    resumeActiveOrHome();
     return true;
   }
   return false;
+}
+
+function resumeActiveOrHome() {
+  restoreActiveJob();
+  api({ action: "v2_ops_my_active_job", worker_id: getWorkerId() }).then(function(res) {
+    if (res && res.ok && res.active && res.job) {
+      saveActiveJob(res.job.id, res.segment ? res.segment.id : null);
+      var jt = res.job.job_type || "";
+      if (jt === "unload") showPage("unload");
+      else if (jt.indexOf("inbound") === 0) { _pageParams = { job_type: jt, biz_class: res.job.biz_class || "" }; showPage("inbound"); }
+      else if (jt === "load_outbound") showPage("outbound_load");
+      else if (jt === "issue_handle") { _currentIssueId = res.job.related_doc_id || null; showPage("issue_detail"); }
+      else { _genericJobCtx = { flow_stage: res.job.flow_stage || "", biz_class: res.job.biz_class || "", job_type: jt }; showPage("generic_job"); }
+    } else {
+      showPage("home");
+    }
+  }).catch(function() { showPage("home"); });
 }
 
 function applyBadge(raw) {
@@ -629,30 +647,35 @@ async function loadInboundPlans(selectId) {
 }
 
 async function startUnload() {
-  var planId = document.getElementById("unloadPlanSelect").value;
-  var res = await api({
-    action: "v2_unload_job_start",
-    plan_id: planId,
-    worker_id: getWorkerId(),
-    worker_name: getWorkerName(),
-    biz_class: ""
-  });
-  if (res && res.ok) {
-    saveActiveJob(res.job_id, res.worker_seg_id);
-    stopUnloadScan();
-    // Load plan data if planId
-    _unloadPlanData = null;
-    if (planId) {
-      var planRes = await api({ action: "v2_inbound_plan_detail", id: planId });
-      if (planRes && planRes.ok) _unloadPlanData = planRes;
+  if (_startInflight) return;
+  _startInflight = true;
+  try {
+    var planId = document.getElementById("unloadPlanSelect").value;
+    var res = await api({
+      action: "v2_unload_job_start",
+      plan_id: planId,
+      worker_id: getWorkerId(),
+      worker_name: getWorkerName(),
+      biz_class: ""
+    });
+    if (res && res.ok) {
+      saveActiveJob(res.job_id, res.worker_seg_id);
+      stopUnloadScan();
+      _unloadPlanData = null;
+      if (planId) {
+        var planRes = await api({ action: "v2_inbound_plan_detail", id: planId });
+        if (planRes && planRes.ok) _unloadPlanData = planRes;
+      }
+      if (!res.already_joined) {
+        alert(res.is_new_job ? "已创建卸货任务 / 하차 작업 생성됨" : "已加入卸货任务 / 하차 작업 참여됨");
+      }
+      var jobRes = await api({ action: "v2_ops_job_detail", job_id: res.job_id });
+      if (jobRes && jobRes.ok) showUnloadWorking(jobRes.job);
+      startJobPoll("unload");
+    } else {
+      alert("失败/실패: " + (res ? res.error : "unknown"));
     }
-    alert(res.is_new_job ? "已创建卸货任务 / 하차 작업 생성됨" : "已加入卸货任务 / 하차 작업 참여됨");
-    var jobRes = await api({ action: "v2_ops_job_detail", job_id: res.job_id });
-    if (jobRes && jobRes.ok) showUnloadWorking(jobRes.job);
-    startJobPoll("unload");
-  } else {
-    alert("失败/실패: " + (res ? res.error : "unknown"));
-  }
+  } finally { _startInflight = false; }
 }
 
 function startUnloadNoPlan() {
@@ -840,22 +863,28 @@ async function initInbound() {
 }
 
 async function startInbound() {
-  var planId = document.getElementById("inboundPlanSelect").value;
-  var res = await api({
-    action: "v2_inbound_job_start",
-    plan_id: planId,
-    worker_id: getWorkerId(),
-    worker_name: getWorkerName(),
-    biz_class: _pageParams.biz_class || "",
-    job_type: _pageParams.job_type || "inbound_direct"
-  });
-  if (res && res.ok) {
-    saveActiveJob(res.job_id, res.worker_seg_id);
-    alert(res.is_new_job ? "已创建入库任务 / 입고 작업 생성됨" : "已加入入库任务 / 입고 작업 참여됨");
-    refreshInboundWorkers();
-  } else {
-    alert("失败/실패: " + (res ? res.error : "unknown"));
-  }
+  if (_startInflight) return;
+  _startInflight = true;
+  try {
+    var planId = document.getElementById("inboundPlanSelect").value;
+    var res = await api({
+      action: "v2_inbound_job_start",
+      plan_id: planId,
+      worker_id: getWorkerId(),
+      worker_name: getWorkerName(),
+      biz_class: _pageParams.biz_class || "",
+      job_type: _pageParams.job_type || "inbound_direct"
+    });
+    if (res && res.ok) {
+      saveActiveJob(res.job_id, res.worker_seg_id);
+      if (!res.already_joined) {
+        alert(res.is_new_job ? "已创建入库任务 / 입고 작업 생성됨" : "已加入入库任务 / 입고 작업 참여됨");
+      }
+      refreshInboundWorkers();
+    } else {
+      alert("失败/실패: " + (res ? res.error : "unknown"));
+    }
+  } finally { _startInflight = false; }
 }
 
 async function finishInbound() {
@@ -903,23 +932,29 @@ async function loadOutboundOrders() {
 }
 
 async function startOutboundLoad() {
-  var orderId = document.getElementById("loadOrderSelect").value;
-  var res = await api({
-    action: "v2_outbound_load_start",
-    order_id: orderId,
-    worker_id: getWorkerId(),
-    worker_name: getWorkerName(),
-    biz_class: ""
-  });
-  if (res && res.ok) {
-    saveActiveJob(res.job_id, res.worker_seg_id);
-    alert(res.is_new_job ? "已创建装货任务 / 상차 작업 생성됨" : "已加入装货任务 / 상차 작업 참여됨");
-    document.getElementById("loadResultCard").style.display = "";
-    document.getElementById("loadInterruptBar").style.display = "";
-    refreshLoadWorkers();
-  } else {
-    alert("失败/실패: " + (res ? res.error : "unknown"));
-  }
+  if (_startInflight) return;
+  _startInflight = true;
+  try {
+    var orderId = document.getElementById("loadOrderSelect").value;
+    var res = await api({
+      action: "v2_outbound_load_start",
+      order_id: orderId,
+      worker_id: getWorkerId(),
+      worker_name: getWorkerName(),
+      biz_class: ""
+    });
+    if (res && res.ok) {
+      saveActiveJob(res.job_id, res.worker_seg_id);
+      if (!res.already_joined) {
+        alert(res.is_new_job ? "已创建装货任务 / 상차 작업 생성됨" : "已加入装货任务 / 상차 작업 참여됨");
+      }
+      document.getElementById("loadResultCard").style.display = "";
+      document.getElementById("loadInterruptBar").style.display = "";
+      refreshLoadWorkers();
+    } else {
+      alert("失败/실패: " + (res ? res.error : "unknown"));
+    }
+  } finally { _startInflight = false; }
 }
 
 function startLoadNoOrder() {
@@ -1172,23 +1207,29 @@ function goGenericBack() {
 }
 
 async function startGenericJob() {
-  var res = await api({
-    action: "v2_ops_job_start",
-    flow_stage: _genericJobCtx.flow_stage || "",
-    biz_class: _genericJobCtx.biz_class || "",
-    job_type: _genericJobCtx.job_type || "",
-    related_doc_type: "",
-    related_doc_id: "",
-    worker_id: getWorkerId(),
-    worker_name: getWorkerName()
-  });
-  if (res && res.ok) {
-    saveActiveJob(res.job_id, res.worker_seg_id);
-    alert(res.is_new_job ? "已创建任务 / 작업 생성됨" : "已加入任务 / 작업 참여됨");
-    refreshGenericWorkers();
-  } else {
-    alert("失败/실패: " + (res ? res.error : "unknown"));
-  }
+  if (_startInflight) return;
+  _startInflight = true;
+  try {
+    var res = await api({
+      action: "v2_ops_job_start",
+      flow_stage: _genericJobCtx.flow_stage || "",
+      biz_class: _genericJobCtx.biz_class || "",
+      job_type: _genericJobCtx.job_type || "",
+      related_doc_type: "",
+      related_doc_id: "",
+      worker_id: getWorkerId(),
+      worker_name: getWorkerName()
+    });
+    if (res && res.ok) {
+      saveActiveJob(res.job_id, res.worker_seg_id);
+      if (!res.already_joined) {
+        alert(res.is_new_job ? "已创建任务 / 작업 생성됨" : "已加入任务 / 작업 참여됨");
+      }
+      refreshGenericWorkers();
+    } else {
+      alert("失败/실패: " + (res ? res.error : "unknown"));
+    }
+  } finally { _startInflight = false; }
 }
 
 async function finishGenericJob() {
