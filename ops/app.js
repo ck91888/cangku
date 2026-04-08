@@ -161,7 +161,7 @@ function resumeActiveOrHome() {
       else if (jt.indexOf("inbound") === 0) { _pageParams = { job_type: jt, biz_class: res.job.biz_class || "" }; showPage("inbound"); }
       else if (jt === "load_outbound") showPage("outbound_load");
       else if (jt === "issue_handle") { _currentIssueId = res.job.related_doc_id || null; showPage("issue_detail"); }
-      else { _genericJobCtx = { flow_stage: res.job.flow_stage || "", biz_class: res.job.biz_class || "", job_type: jt }; showPage("generic_job"); }
+      else { _pageParams = { flow_stage: res.job.flow_stage || "", biz_class: res.job.biz_class || "", job_type: jt, title: JOB_TYPE_LABEL[jt] || jt }; showPage("generic_job"); }
     } else {
       showPage("home");
     }
