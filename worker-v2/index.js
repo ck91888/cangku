@@ -1,5 +1,5 @@
 /**
- * CK Warehouse V2 — Backend Worker
+ * CK Warehouse V2 — Backend Workerer
  * Independent from V1. Uses v2_ table prefix in same D1 database.
  * Modules: issue_tickets, outbound_orders, inbound_plans, ops_jobs, attachments
  */
