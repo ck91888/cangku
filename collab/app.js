@@ -925,20 +925,22 @@ async function loadInboundDetail() {
   var jobs = res.jobs || [];
   var atts = res.attachments || [];
 
+  // --- Basic info: two-column grid ---
   var html = '<div class="card">';
-  html += '<div style="font-size:16px;font-weight:700;margin-bottom:8px;">' + esc(p.display_no || p.id) + '</div>';
-  html += '<div class="detail-field"><b>' + L("status") + ':</b> <span class="st st-' + esc(p.status) + '">' + esc(stLabel(p.status)) + '</span></div>';
-  html += '<div class="detail-field"><b>' + L("plan_date") + ':</b> ' + esc(p.plan_date) + '</div>';
-  html += '<div class="detail-field"><b>' + L("customer") + ':</b> ' + esc(p.customer) + '</div>';
-  html += '<div class="detail-field"><b>' + L("biz_class") + ':</b> <span class="biz-tag biz-' + esc(p.biz_class) + '">' + esc(bizLabel(p.biz_class)) + '</span></div>';
-  html += '<div class="detail-field"><b>' + L("cargo_summary") + ':</b> ' + esc(p.cargo_summary) + '</div>';
-  html += '<div class="detail-field"><b>' + L("expected_arrival") + ':</b> ' + esc(p.expected_arrival) + '</div>';
-  if (p.purpose) html += '<div class="detail-field"><b>' + L("purpose") + ':</b> ' + esc(p.purpose) + '</div>';
-  if (p.remark) html += '<div class="detail-field"><b>' + L("remark") + ':</b> ' + esc(p.remark) + '</div>';
-  html += '<div class="detail-field"><b>' + L("submitted_by") + ':</b> ' + esc(p.created_by) + ' · ' + esc(fmtTime(p.created_at)) + '</div>';
-  html += '</div>';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:10px;">' + esc(p.display_no || p.id) + '</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:13px;">';
+  html += '<div><b>' + L("status") + ':</b> <span class="st st-' + esc(p.status) + '">' + esc(stLabel(p.status)) + '</span></div>';
+  html += '<div><b>' + L("biz_class") + ':</b> <span class="biz-tag biz-' + esc(p.biz_class) + '">' + esc(bizLabel(p.biz_class)) + '</span></div>';
+  html += '<div><b>' + L("plan_date") + ':</b> ' + esc(p.plan_date) + '</div>';
+  html += '<div><b>' + L("customer") + ':</b> ' + esc(p.customer) + '</div>';
+  html += '<div><b>' + L("cargo_summary") + ':</b> ' + esc(p.cargo_summary) + '</div>';
+  html += '<div><b>' + L("expected_arrival") + ':</b> ' + esc(p.expected_arrival) + '</div>';
+  if (p.purpose) html += '<div style="grid-column:1/-1;"><b>' + L("purpose") + ':</b> ' + esc(p.purpose) + '</div>';
+  if (p.remark) html += '<div style="grid-column:1/-1;"><b>' + L("remark") + ':</b> ' + esc(p.remark) + '</div>';
+  html += '<div style="grid-column:1/-1;"><b>' + L("submitted_by") + ':</b> ' + esc(p.created_by) + ' · ' + esc(fmtTime(p.created_at)) + '</div>';
+  html += '</div></div>';
 
-  // Plan lines
+  // --- Plan lines ---
   if (lines.length > 0) {
     html += '<div class="card"><div class="card-title">' + L("plan_lines") + '</div>';
     html += '<table class="line-table"><thead><tr><th>' + L("biz_class") + '</th><th>' + L("planned_qty") + '</th><th>' + L("actual_qty") + '</th><th>' + L("diff") + '</th></tr></thead><tbody>';
@@ -951,29 +953,34 @@ async function loadInboundDetail() {
     html += '</tbody></table></div>';
   }
 
-  // Jobs
+  // --- Jobs: structured execution records (only if jobs exist) ---
   if (jobs.length > 0) {
     html += '<div class="card"><div class="card-title">现场执行记录</div>';
-    jobs.forEach(function(j) {
-      var result = {};
-      try { result = JSON.parse(j.shared_result_json || "{}"); } catch(e) {}
-      html += '<div style="border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;">';
-      html += '<span class="st st-' + esc(j.status) + '">' + esc(stLabel(j.status)) + '</span> ';
-      html += esc(j.job_type) + ' · ' + esc(j.created_by) + ' · ' + esc(fmtTime(j.created_at));
-      html += ' · ' + (j.active_worker_count || 0) + L("minutes");
-      if (result.result_lines) {
-        try {
-          var rl = typeof result.result_lines === "string" ? JSON.parse(result.result_lines) : result.result_lines;
-          rl.forEach(function(r) { html += ' · ' + unitTypeLabel(r.unit_type) + ':' + r.actual_qty; });
-        } catch(e) {}
+    jobs.forEach(function(j, idx) {
+      if (idx > 0) html += '<div style="border-top:1px solid #eee;margin:8px 0;"></div>';
+      var jobTypeMap = {unload:'卸货',load:'装货',sort:'分拣',check:'核对',other:'其他'};
+      var jobLabel = jobTypeMap[j.job_type] || j.job_type || '--';
+      html += '<div style="font-size:13px;line-height:1.8;">';
+      html += '<div><span class="st st-' + esc(j.status) + '">' + esc(stLabel(j.status)) + '</span> <b>' + esc(jobLabel) + '</b></div>';
+      html += '<div>参与人员：' + esc(j.worker_names_text || j.created_by || '--') + '</div>';
+      html += '<div>完成时间：' + esc(j.completed_at ? fmtTime(j.completed_at) : '--') + '</div>';
+      html += '<div>用时：' + (j.total_minutes_worked || 0) + L("minutes") + '</div>';
+      // Result lines
+      var rl = j.result_lines || [];
+      if (rl.length > 0) {
+        var parts = [];
+        rl.forEach(function(r) { parts.push(unitTypeLabel(r.unit_type) + ' ' + (r.actual_qty || 0)); });
+        html += '<div>实际结果：' + esc(parts.join(' / ')) + '</div>';
+      } else {
+        html += '<div>实际结果：--</div>';
       }
-      if (result.diff_note) html += ' · ' + L("diff_note") + ':' + esc(result.diff_note);
+      html += '<div>差异备注：' + esc(j.diff_note || '无') + '</div>';
       html += '</div>';
     });
     html += '</div>';
   }
 
-  // Attachments
+  // --- Attachments ---
   if (atts.length > 0) {
     html += '<div class="card"><div class="card-title">' + L("attachments") + ' (' + atts.length + ')</div>';
     html += '<div class="att-grid">';
@@ -985,7 +992,7 @@ async function loadInboundDetail() {
     html += '</div></div>';
   }
 
-  // Actions
+  // --- Actions: print + status buttons in one row ---
   html += '<div class="card">';
   html += '<button class="btn btn-outline btn-sm" onclick="printIbQr()">' + L("print") + '</button> ';
   if (p.status !== "completed" && p.status !== "cancelled") {

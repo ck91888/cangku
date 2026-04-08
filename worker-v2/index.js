@@ -834,11 +834,43 @@ route("v2_inbound_plan_detail", async (body, env) => {
   const atts = await env.DB.prepare(
     "SELECT * FROM v2_attachments WHERE related_doc_type='inbound_plan' AND related_doc_id=? ORDER BY created_at DESC"
   ).bind(id).all();
+
+  // Enrich each job with workers + results summary
+  const enrichedJobs = [];
+  for (const job of (jobs.results || [])) {
+    const workers = await env.DB.prepare(
+      "SELECT worker_name, minutes_worked, left_at FROM v2_ops_job_workers WHERE job_id=? ORDER BY joined_at"
+    ).bind(job.id).all();
+    const workerRows = workers.results || [];
+    const names = [...new Set(workerRows.map(w => w.worker_name).filter(Boolean))];
+    const totalMin = workerRows.reduce((s, w) => s + (Number(w.minutes_worked) || 0), 0);
+    const maxLeft = workerRows.reduce((m, w) => (w.left_at && w.left_at > m ? w.left_at : m), "");
+
+    const latestResult = await env.DB.prepare(
+      "SELECT result_lines_json, diff_note, created_at FROM v2_ops_job_results WHERE job_id=? ORDER BY created_at DESC LIMIT 1"
+    ).bind(job.id).first();
+
+    let resultLines = [];
+    if (latestResult && latestResult.result_lines_json) {
+      try { resultLines = JSON.parse(latestResult.result_lines_json); } catch(e) {}
+    }
+
+    enrichedJobs.push({
+      ...job,
+      worker_names: names,
+      worker_names_text: names.join(", "),
+      total_minutes_worked: Math.round(totalMin),
+      completed_at: maxLeft || job.updated_at || "",
+      result_lines: resultLines,
+      diff_note: (latestResult && latestResult.diff_note) || ""
+    });
+  }
+
   return json({
     ok: true,
     plan: row,
     lines: planLines.results || [],
-    jobs: jobs.results || [],
+    jobs: enrichedJobs,
     attachments: atts.results || []
   });
 });
