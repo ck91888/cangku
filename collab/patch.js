@@ -82,42 +82,81 @@
     if(titleEl) titleEl.textContent=pretty;
   };
 
-  // ===== Override printIbQr: generate QR SVG in main page, inject into print window =====
+  // ===== Override printIbQr: A4 单据布局，右上角小二维码 =====
   window.printIbQr=function(){
-    var title=window._currentInboundPretty||_currentInboundId||'';
+    var displayNo=window._currentInboundPretty||_currentInboundId||'';
     var planId=_currentInboundId||'';
     var plan=window._currentInboundPlanCache||{};
 
-    // Generate QR SVG in main page (qrcode-generator is already loaded)
+    // Generate small QR SVG in main page
     var qrHtml='';
-    try{ qrHtml=buildInboundQrHtml(planId, 6); }catch(e){ qrHtml='<div style="color:red;">QR error: '+e.message+'</div>'; }
+    try{ qrHtml=buildInboundQrHtml(planId, 3); }catch(e){ qrHtml='<div style="color:red;font-size:10px;">QR error</div>'; }
 
-    var body=document.getElementById('inboundDetailBody');
-    var tables=body?body.querySelectorAll('table.line-table'):[];
+    // Collect lines table from detail page
+    var detailBody=document.getElementById('inboundDetailBody');
+    var tables=detailBody?detailBody.querySelectorAll('table.line-table'):[];
     var linesHtml=tables.length?tables[0].outerHTML:'';
 
-    var metaHtml='<div><b>'+esc(title)+'</b></div>'+
-      '<div>计划日期: '+esc(plan.plan_date||'')+'</div>'+
-      '<div>客户: '+esc(plan.customer||'')+'</div>'+
-      '<div>货物摘要: '+esc(plan.cargo_summary||'')+'</div>'+
-      (plan.remark?'<div>备注: '+esc(plan.remark)+'</div>':'');
+    // Biz label helper
+    var bizMap={direct_ship:'直发/직배송',bulk:'大货/대량',return_op:'退件/반품',inventory_op:'库内/창고'};
+    var bizText=bizMap[plan.biz_class]||plan.biz_class||'';
 
     var win=window.open('','_blank');
-    var html='<html><head><title>'+esc(title)+'</title>'+
-      '<style>body{font-family:Arial,Helvetica,sans-serif;padding:24px;color:#111;}'+
-      'h1{font-size:28px;margin:0 0 8px;text-align:center;}'+
-      '.meta{margin:12px 0 18px;font-size:14px;line-height:1.8;}'+
-      '.qr{text-align:center;margin:16px 0;}'+
-      'table{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px;}'+
-      'th,td{border:1px solid #bbb;padding:8px;text-align:left;}'+
-      '.small{font-size:12px;color:#666;text-align:center;margin-top:8px;}</style>'+
-      '</head><body>'+
-      '<h1>'+esc(title)+'</h1>'+
-      '<div class="qr">'+qrHtml+'</div>'+
-      '<div class="small">扫码内容: '+esc(planId)+'</div>'+
-      '<div class="meta">'+metaHtml+'</div>'+
+    var html='<!doctype html><html><head><meta charset="utf-8"/><title>'+esc(displayNo)+'</title>'+
+      '<style>'+
+      'body{font-family:"Microsoft YaHei","Helvetica Neue",Arial,sans-serif;margin:20px 30px;color:#000;}'+
+      '.print-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #000;padding-bottom:10px;margin-bottom:14px;}'+
+      '.print-title{font-size:22px;font-weight:900;}'+
+      '.print-sub{font-size:13px;color:#333;margin-top:4px;}'+
+      '.qr-box{text-align:center;flex-shrink:0;margin-left:20px;}'+
+      '.qr-box svg{width:100px;height:100px;}'+
+      '.qr-label{font-size:10px;color:#666;margin-top:2px;line-height:1.3;}'+
+      '.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;font-size:13px;margin-bottom:14px;}'+
+      '.info-grid .label{font-weight:700;}'+
+      'table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px;}'+
+      'th,td{border:1px solid #333;padding:5px 6px;text-align:left;}'+
+      'th{background:#eee;font-weight:700;}'+
+      '.sig-row{display:flex;gap:40px;margin-top:30px;font-size:13px;}'+
+      '.sig-item{flex:1;}'+
+      '.sig-line{border-bottom:1px solid #333;height:30px;margin-top:4px;}'+
+      '.footer{margin-top:16px;font-size:11px;color:#888;text-align:center;border-top:1px dashed #ccc;padding-top:6px;}'+
+      '@media print{@page{size:A4;margin:15mm 20mm;} body{margin:0;}}'+
+      '</style></head><body>'+
+
+      // Header: 左标题 + 右二维码
+      '<div class="print-header">'+
+        '<div>'+
+          '<div class="print-title">入库计划单</div>'+
+          '<div class="print-sub">CK 仓储</div>'+
+        '</div>'+
+        '<div class="qr-box">'+qrHtml+'<div class="qr-label">'+esc(displayNo)+'<br/>'+esc(planId)+'</div></div>'+
+      '</div>'+
+
+      // Info grid: 两列正文
+      '<div class="info-grid">'+
+        '<div><span class="label">入库单号：</span>'+esc(displayNo)+'</div>'+
+        '<div><span class="label">货物摘要：</span>'+esc(plan.cargo_summary||'')+'</div>'+
+        '<div><span class="label">计划日期：</span>'+esc(plan.plan_date||'')+'</div>'+
+        '<div><span class="label">预计到达：</span>'+esc(plan.expected_arrival||'--')+'</div>'+
+        '<div><span class="label">客户：</span>'+esc(plan.customer||'')+'</div>'+
+        '<div><span class="label">提出人：</span>'+esc(plan.created_by||'')+'</div>'+
+        '<div><span class="label">业务分类：</span>'+esc(bizText)+'</div>'+
+        (plan.remark?'<div><span class="label">备注：</span>'+esc(plan.remark)+'</div>':'')+
+        (plan.purpose?'<div style="grid-column:1/-1;"><span class="label">入库目的：</span>'+esc(plan.purpose)+'</div>':'')+
+      '</div>'+
+
+      // Lines table
       linesHtml+
-      '<div class="small">Printed from CK Warehouse V2</div>'+
+
+      // Signature row
+      '<div class="sig-row">'+
+        '<div class="sig-item"><span class="label">制单人：</span>'+esc(plan.created_by||'')+'<div class="sig-line"></div></div>'+
+        '<div class="sig-item"><span class="label">仓库确认：</span><div class="sig-line"></div></div>'+
+        '<div class="sig-item"><span class="label">客户签收：</span><div class="sig-line"></div></div>'+
+        '<div class="sig-item"><span class="label">日期：</span><div class="sig-line"></div></div>'+
+      '</div>'+
+
+      '<div class="footer">Printed from CK Warehouse V2</div>'+
       '<script>window.onload=function(){window.print();}<\/script>'+
       '</body></html>';
     win.document.write(html);
