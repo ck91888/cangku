@@ -951,12 +951,6 @@ async function loadInboundDetail() {
     html += '</tbody></table></div>';
   }
 
-  // QR code for field scanning
-  html += '<div class="card"><div class="card-title">' + L("qr_code") + '</div>';
-  html += '<div id="ibDetailQr" style="text-align:center;"></div>';
-  html += '<div style="text-align:center;margin-top:8px;"><button class="btn btn-outline btn-sm" onclick="printIbQr()">' + L("print") + '</button></div>';
-  html += '</div>';
-
   // Jobs
   if (jobs.length > 0) {
     html += '<div class="card"><div class="card-title">现场执行记录</div>';
@@ -991,9 +985,10 @@ async function loadInboundDetail() {
     html += '</div></div>';
   }
 
-  // Status actions
+  // Actions
+  html += '<div class="card">';
+  html += '<button class="btn btn-outline btn-sm" onclick="printIbQr()">' + L("print") + '</button> ';
   if (p.status !== "completed" && p.status !== "cancelled") {
-    html += '<div class="card">';
     if (p.status === "pending") {
       html += '<button class="btn btn-primary" onclick="updateIbStatus(\'arrived\')">' + L("status_arrived") + '</button> ';
     }
@@ -1001,20 +996,10 @@ async function loadInboundDetail() {
       html += '<button class="btn btn-success" onclick="updateIbStatus(\'completed\')">' + L("status_completed") + '</button> ';
     }
     html += '<button class="btn btn-danger" onclick="updateIbStatus(\'cancelled\')">' + L("status_cancelled") + '</button>';
-    html += '</div>';
   }
+  html += '</div>';
 
   body.innerHTML = html;
-
-  // Render QR (qrcode-generator API)
-  try {
-    var qrEl = document.getElementById("ibDetailQr");
-    if (qrEl) qrEl.innerHTML = buildInboundQrHtml(p.id, 4);
-  } catch(e) {
-    console.error('QR render failed:', e);
-    var qrFail = document.getElementById("ibDetailQr");
-    if (qrFail) qrFail.innerHTML = '<div style="color:red;font-size:13px;">QR 渲染失败</div>';
-  }
 }
 
 // QR helper using qrcode-generator (loaded as ../b2b/qrcode.min.js)
