@@ -82,15 +82,15 @@
     if(titleEl) titleEl.textContent=pretty;
   };
 
-  // ===== Override printIbQr: generate QR inside print window =====
-  var _qrLibUrl = (function(){
-    try { return new URL('../b2b/qrcode.min.js', location.href).href; } catch(e) { return ''; }
-  })();
-
+  // ===== Override printIbQr: generate QR SVG in main page, inject into print window =====
   window.printIbQr=function(){
     var title=window._currentInboundPretty||_currentInboundId||'';
     var planId=_currentInboundId||'';
     var plan=window._currentInboundPlanCache||{};
+
+    // Generate QR SVG in main page (qrcode-generator is already loaded)
+    var qrHtml='';
+    try{ qrHtml=buildInboundQrHtml(planId, 6); }catch(e){ qrHtml='<div style="color:red;">QR error: '+e.message+'</div>'; }
 
     var body=document.getElementById('inboundDetailBody');
     var tables=body?body.querySelectorAll('table.line-table'):[];
@@ -113,22 +113,12 @@
       '.small{font-size:12px;color:#666;text-align:center;margin-top:8px;}</style>'+
       '</head><body>'+
       '<h1>'+esc(title)+'</h1>'+
-      '<div class="qr"><div id="printQr"></div></div>'+
+      '<div class="qr">'+qrHtml+'</div>'+
       '<div class="small">扫码内容: '+esc(planId)+'</div>'+
       '<div class="meta">'+metaHtml+'</div>'+
       linesHtml+
       '<div class="small">Printed from CK Warehouse V2</div>'+
-      '<script src="'+esc(_qrLibUrl)+'"><\/script>'+
-      '<script>'+
-      'function tryQr(n){'+
-        'if(typeof QRCode!=="undefined"){'+
-          'try{new QRCode(document.getElementById("printQr"),{text:"'+planId.replace(/"/g,'\\"')+'",width:220,height:220});'+
-          'setTimeout(function(){window.print();},300);}catch(e){document.getElementById("printQr").textContent="QR error: "+e.message;window.print();}'+
-        '}else if(n<20){setTimeout(function(){tryQr(n+1);},150);}'+
-        'else{document.getElementById("printQr").textContent="QR lib load failed";window.print();}'+
-      '}'+
-      'if(document.readyState==="complete")tryQr(0);else window.onload=function(){tryQr(0);};'+
-      '<\/script>'+
+      '<script>window.onload=function(){window.print();}<\/script>'+
       '</body></html>';
     win.document.write(html);
     win.document.close();

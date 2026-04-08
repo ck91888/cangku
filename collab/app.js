@@ -1006,18 +1006,23 @@ async function loadInboundDetail() {
 
   body.innerHTML = html;
 
-  // Render QR
+  // Render QR (qrcode-generator API)
   try {
-    new QRCode(document.getElementById("ibDetailQr"), {
-      text: p.id,
-      width: 160,
-      height: 160
-    });
+    var qrEl = document.getElementById("ibDetailQr");
+    if (qrEl) qrEl.innerHTML = buildInboundQrHtml(p.id, 4);
   } catch(e) {
     console.error('QR render failed:', e);
     var qrFail = document.getElementById("ibDetailQr");
     if (qrFail) qrFail.innerHTML = '<div style="color:red;font-size:13px;">QR 渲染失败</div>';
   }
+}
+
+// QR helper using qrcode-generator (loaded as ../b2b/qrcode.min.js)
+function buildInboundQrHtml(text, cellSize) {
+  var qr = qrcode(0, 'M');
+  qr.addData(String(text || ''));
+  qr.make();
+  return qr.createSvgTag({ cellSize: cellSize || 4, margin: 0, scalable: true });
 }
 
 function printIbQr() {
