@@ -63,6 +63,41 @@ function isOpsAuth(body, env) {
   return isAuth(body, env) || isOpsKey(body, env);
 }
 
+// ===== Worker dedup helpers =====
+// 查找某 worker 在某 job 中是否有未关闭的参与段
+async function findOpenSeg(env, jobId, workerId) {
+  return env.DB.prepare(
+    "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
+  ).bind(jobId, workerId).first();
+}
+
+// 关闭某 worker 在某 job 中的所有 open segments（自愈）
+async function closeAllOpenSegs(env, jobId, workerId, t, reason) {
+  const segs = await env.DB.prepare(
+    "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at=''"
+  ).bind(jobId, workerId).all();
+  const rows = segs.results || [];
+  for (const seg of rows) {
+    const minutes = Math.round((new Date(t).getTime() - new Date(seg.joined_at).getTime()) / 60000 * 10) / 10;
+    await env.DB.prepare(
+      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason=? WHERE id=?"
+    ).bind(t, Math.max(0, minutes), reason, seg.id).run();
+  }
+  return rows.length;
+}
+
+// 从表中重算某 job 的 active_worker_count
+async function recalcActiveCount(env, jobId, t) {
+  const cnt = await env.DB.prepare(
+    "SELECT COUNT(DISTINCT worker_id) as c FROM v2_ops_job_workers WHERE job_id=? AND left_at=''"
+  ).bind(jobId).first();
+  const real = cnt ? cnt.c : 0;
+  await env.DB.prepare(
+    "UPDATE v2_ops_jobs SET active_worker_count=?, updated_at=? WHERE id=?"
+  ).bind(real, t, jobId).run();
+  return real;
+}
+
 // ===== Auto-migration =====
 const MIGRATIONS = [
   // v2_inbound_plans
@@ -593,13 +628,14 @@ route("v2_outbound_load_start", async (body, env) => {
 
   let job_id, is_new_job = false;
   if (job) {
-    // Join existing job
     job_id = job.id;
+    // 防重：同一 worker 已有 open segment 则直接返回
+    const dup = await findOpenSeg(env, job_id, worker_id);
+    if (dup) return json({ ok: true, job_id, worker_seg_id: dup.id, is_new_job: false, already_joined: true });
     await env.DB.prepare(
       "UPDATE v2_ops_jobs SET active_worker_count=active_worker_count+1, updated_at=?, status='working' WHERE id=?"
     ).bind(t, job_id).run();
   } else {
-    // Create new job
     job_id = "JOB-" + uid();
     is_new_job = true;
     await env.DB.prepare(`
@@ -608,7 +644,6 @@ route("v2_outbound_load_start", async (body, env) => {
       VALUES(?, 'outbound', ?, 'load_outbound', 'outbound_order', ?, 'working', ?, ?, ?, 1)
     `).bind(job_id, String(body.biz_class || ""), order_id, worker_id, t, t).run();
 
-    // Update outbound order status
     if (order_id) {
       await env.DB.prepare(
         "UPDATE v2_outbound_orders SET status='working', updated_at=? WHERE id=? AND status IN ('draft','issued')"
@@ -616,7 +651,6 @@ route("v2_outbound_load_start", async (body, env) => {
     }
   }
 
-  // Create worker segment
   const seg_id = "WS-" + uid();
   await env.DB.prepare(`
     INSERT INTO v2_ops_job_workers(id, job_id, worker_id, worker_name, joined_at)
@@ -638,22 +672,9 @@ route("v2_outbound_load_finish", async (body, env) => {
   const remark = String(body.remark || "");
   const complete_job = body.complete_job === true;
 
-  // Close worker segment
-  const openSeg = await env.DB.prepare(
-    "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
-  ).bind(job_id, worker_id).first();
-  if (openSeg) {
-    const joined = new Date(openSeg.joined_at).getTime();
-    const minutes = Math.round((Date.now() - joined) / 60000 * 10) / 10;
-    await env.DB.prepare(
-      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason='finished' WHERE id=?"
-    ).bind(t, minutes, openSeg.id).run();
-  }
-
-  // Decrement active worker count
-  await env.DB.prepare(
-    "UPDATE v2_ops_jobs SET active_worker_count=MAX(0, active_worker_count-1), updated_at=? WHERE id=?"
-  ).bind(t, job_id).run();
+  // 自愈：关闭该 worker 全部 open segments + 重算 count
+  await closeAllOpenSegs(env, job_id, worker_id, t, 'finished');
+  const realCount = await recalcActiveCount(env, job_id, t);
 
   // Save shared result
   if (box_count > 0 || pallet_count > 0 || remark) {
@@ -670,21 +691,19 @@ route("v2_outbound_load_finish", async (body, env) => {
     VALUES(?,?,?,?,?,?,?)
   `).bind(result_id, job_id, box_count, pallet_count, remark, worker_id, t).run();
 
-  // Complete job if requested and conditions met
+  // Complete job if requested — 基于 realCount 判断
   if (complete_job) {
-    const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
-    if (job && job.active_worker_count <= 0) {
+    if (realCount <= 0) {
       await env.DB.prepare(
         "UPDATE v2_ops_jobs SET status='completed', updated_at=? WHERE id=?"
       ).bind(t, job_id).run();
-      // Update outbound order
-      if (job.related_doc_id) {
+      const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
+      if (job && job.related_doc_id) {
         await env.DB.prepare(
           "UPDATE v2_outbound_orders SET status='completed', updated_at=? WHERE id=?"
         ).bind(t, job.related_doc_id).run();
       }
-    } else if (job && job.active_worker_count > 0) {
-      // Others still working, move to awaiting_close
+    } else {
       await env.DB.prepare(
         "UPDATE v2_ops_jobs SET status='awaiting_close', updated_at=? WHERE id=?"
       ).bind(t, job_id).run();
@@ -850,6 +869,9 @@ route("v2_unload_job_start", async (body, env) => {
   let job_id, is_new_job = false;
   if (job) {
     job_id = job.id;
+    // 防重：同一 worker 已有 open segment 则直接返回
+    const dup = await findOpenSeg(env, job_id, worker_id);
+    if (dup) return json({ ok: true, job_id, worker_seg_id: dup.id, is_new_job: false, already_joined: true });
     await env.DB.prepare(
       "UPDATE v2_ops_jobs SET active_worker_count=active_worker_count+1, updated_at=?, status='working' WHERE id=?"
     ).bind(t, job_id).run();
@@ -861,7 +883,6 @@ route("v2_unload_job_start", async (body, env) => {
         status, created_by, created_at, updated_at, active_worker_count)
       VALUES(?, 'unload', ?, 'unload', 'inbound_plan', ?, 'working', ?, ?, ?, 1)
     `).bind(job_id, biz_class, plan_id, worker_id, t, t).run();
-    // Update inbound plan
     if (plan_id) {
       await env.DB.prepare(
         "UPDATE v2_inbound_plans SET status='processing', updated_at=? WHERE id=? AND status IN ('pending','arrived')"
@@ -891,21 +912,9 @@ route("v2_unload_job_finish", async (body, env) => {
   const diff_note = String(body.diff_note || "").trim();
   const remark = String(body.remark || "");
 
-  // 1. Close this worker's participation segment
-  const openSeg = await env.DB.prepare(
-    "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
-  ).bind(job_id, worker_id).first();
-  if (openSeg) {
-    const minutes = Math.round((Date.now() - new Date(openSeg.joined_at).getTime()) / 60000 * 10) / 10;
-    await env.DB.prepare(
-      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason=? WHERE id=?"
-    ).bind(t, minutes, leave_only ? "leave" : "finished", openSeg.id).run();
-  }
-
-  // 2. Decrement active_worker_count
-  await env.DB.prepare(
-    "UPDATE v2_ops_jobs SET active_worker_count=MAX(0, active_worker_count-1), updated_at=? WHERE id=?"
-  ).bind(t, job_id).run();
+  // 1. 自愈：关闭该 worker 全部 open segments + 重算 count
+  await closeAllOpenSegs(env, job_id, worker_id, t, leave_only ? 'leave' : 'finished');
+  const realCount = await recalcActiveCount(env, job_id, t);
 
   // 3. If leave_only → done, no result validation
   if (leave_only) {
@@ -914,13 +923,12 @@ route("v2_unload_job_finish", async (body, env) => {
 
   // 4. complete_job logic
   if (complete_job) {
-    // Re-read job to get updated active_worker_count
     const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
     if (!job) return err("job not found", 404);
 
-    // 4a. Check if others still working
-    if (job.active_worker_count > 0) {
-      return json({ ok: false, error: "others_still_working", active_count: job.active_worker_count });
+    // 4a. Check if others still working — 基于 realCount
+    if (realCount > 0) {
+      return json({ ok: false, error: "others_still_working", active_count: realCount });
     }
 
     // 4b. Validate result_lines: at least one actual_qty > 0
@@ -1037,6 +1045,9 @@ route("v2_inbound_job_start", async (body, env) => {
   let job_id, is_new_job = false;
   if (job) {
     job_id = job.id;
+    // 防重：同一 worker 已有 open segment 则直接返回
+    const dup = await findOpenSeg(env, job_id, worker_id);
+    if (dup) return json({ ok: true, job_id, worker_seg_id: dup.id, is_new_job: false, already_joined: true });
     await env.DB.prepare(
       "UPDATE v2_ops_jobs SET active_worker_count=active_worker_count+1, updated_at=?, status='working' WHERE id=?"
     ).bind(t, job_id).run();
@@ -1069,19 +1080,9 @@ route("v2_inbound_job_finish", async (body, env) => {
   const t = now();
   const remark = String(body.remark || "");
 
-  const openSeg = await env.DB.prepare(
-    "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
-  ).bind(job_id, worker_id).first();
-  if (openSeg) {
-    const minutes = Math.round((Date.now() - new Date(openSeg.joined_at).getTime()) / 60000 * 10) / 10;
-    await env.DB.prepare(
-      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason='finished' WHERE id=?"
-    ).bind(t, minutes, openSeg.id).run();
-  }
-
-  await env.DB.prepare(
-    "UPDATE v2_ops_jobs SET active_worker_count=MAX(0, active_worker_count-1), updated_at=? WHERE id=?"
-  ).bind(t, job_id).run();
+  // 自愈：关闭该 worker 全部 open segments + 重算 count
+  await closeAllOpenSegs(env, job_id, worker_id, t, 'finished');
+  const realCount = await recalcActiveCount(env, job_id, t);
 
   if (remark) {
     const resultJson = JSON.stringify({ remark });
@@ -1091,12 +1092,12 @@ route("v2_inbound_job_finish", async (body, env) => {
   }
 
   if (complete_job) {
-    const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
-    if (job && job.active_worker_count <= 0) {
+    if (realCount <= 0) {
       await env.DB.prepare(
         "UPDATE v2_ops_jobs SET status='completed', updated_at=? WHERE id=?"
       ).bind(t, job_id).run();
-      if (job.related_doc_id) {
+      const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
+      if (job && job.related_doc_id) {
         await env.DB.prepare(
           "UPDATE v2_inbound_plans SET status='completed', updated_at=? WHERE id=?"
         ).bind(t, job.related_doc_id).run();
@@ -1138,6 +1139,9 @@ route("v2_ops_job_start", async (body, env) => {
   let job_id, is_new_job = false;
   if (job) {
     job_id = job.id;
+    // 防重：同一 worker 已有 open segment 则直接返回
+    const dup = await findOpenSeg(env, job_id, worker_id);
+    if (dup) return json({ ok: true, job_id, worker_seg_id: dup.id, is_new_job: false, already_joined: true });
     await env.DB.prepare(
       "UPDATE v2_ops_jobs SET active_worker_count=active_worker_count+1, updated_at=?, status='working' WHERE id=?"
     ).bind(t, job_id).run();
@@ -1152,21 +1156,10 @@ route("v2_ops_job_start", async (body, env) => {
         parent_job_id, is_temporary_interrupt, interrupt_type, worker_id, t, t).run();
   }
 
-  // If this is an interrupt, pause the parent job for this worker
+  // If this is an interrupt, pause the parent job for this worker — 自愈式关闭
   if (is_temporary_interrupt && parent_job_id) {
-    // Close current worker segment on parent
-    const parentSeg = await env.DB.prepare(
-      "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
-    ).bind(parent_job_id, worker_id).first();
-    if (parentSeg) {
-      const minutes = Math.round((Date.now() - new Date(parentSeg.joined_at).getTime()) / 60000 * 10) / 10;
-      await env.DB.prepare(
-        "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason='interrupted' WHERE id=?"
-      ).bind(t, minutes, parentSeg.id).run();
-    }
-    await env.DB.prepare(
-      "UPDATE v2_ops_jobs SET active_worker_count=MAX(0, active_worker_count-1), updated_at=? WHERE id=?"
-    ).bind(t, parent_job_id).run();
+    await closeAllOpenSegs(env, parent_job_id, worker_id, t, 'interrupted');
+    await recalcActiveCount(env, parent_job_id, t);
   }
 
   const seg_id = "WS-" + uid();
@@ -1185,26 +1178,18 @@ route("v2_ops_job_leave", async (body, env) => {
   if (!job_id || !worker_id) return err("missing job_id or worker_id");
 
   const t = now();
-  const openSeg = await env.DB.prepare(
-    "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
-  ).bind(job_id, worker_id).first();
-  if (openSeg) {
-    const minutes = Math.round((Date.now() - new Date(openSeg.joined_at).getTime()) / 60000 * 10) / 10;
-    await env.DB.prepare(
-      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason=? WHERE id=?"
-    ).bind(t, minutes, String(body.leave_reason || "leave"), openSeg.id).run();
-  }
+  // 自愈：关闭该 worker 全部 open segments + 重算 count
+  await closeAllOpenSegs(env, job_id, worker_id, t, String(body.leave_reason || 'leave'));
+  const realCount = await recalcActiveCount(env, job_id, t);
 
-  await env.DB.prepare(
-    "UPDATE v2_ops_jobs SET active_worker_count=MAX(0, active_worker_count-1), updated_at=? WHERE id=?"
-  ).bind(t, job_id).run();
-
-  // Check if job should go to awaiting_close
-  const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
-  if (job && job.active_worker_count <= 0 && job.status === "working") {
-    await env.DB.prepare(
-      "UPDATE v2_ops_jobs SET status='awaiting_close', updated_at=? WHERE id=?"
-    ).bind(t, job_id).run();
+  // Check if job should go to awaiting_close — 基于 realCount
+  if (realCount <= 0) {
+    const job = await env.DB.prepare("SELECT status FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
+    if (job && job.status === "working") {
+      await env.DB.prepare(
+        "UPDATE v2_ops_jobs SET status='awaiting_close', updated_at=? WHERE id=?"
+      ).bind(t, job_id).run();
+    }
   }
 
   return json({ ok: true });
@@ -1218,16 +1203,8 @@ route("v2_ops_job_finish", async (body, env) => {
 
   const t = now();
 
-  // Close open worker segments
-  const openSeg = await env.DB.prepare(
-    "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
-  ).bind(job_id, worker_id).first();
-  if (openSeg) {
-    const minutes = Math.round((Date.now() - new Date(openSeg.joined_at).getTime()) / 60000 * 10) / 10;
-    await env.DB.prepare(
-      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason='finished' WHERE id=?"
-    ).bind(t, minutes, openSeg.id).run();
-  }
+  // 自愈：关闭该 worker 全部 open segments
+  await closeAllOpenSegs(env, job_id, worker_id, t, 'finished');
 
   // Save shared result
   const shared = body.shared_result || {};
@@ -1247,12 +1224,10 @@ route("v2_ops_job_finish", async (body, env) => {
         String(body.remark || ""), JSON.stringify(shared), worker_id, t).run();
   }
 
-  // Complete the job
+  // Complete the job — 关闭所有剩余 open segments + 重算归零
   await env.DB.prepare(
     "UPDATE v2_ops_jobs SET status='completed', active_worker_count=0, updated_at=? WHERE id=?"
   ).bind(t, job_id).run();
-
-  // Close all remaining open worker segments
   await env.DB.prepare(
     "UPDATE v2_ops_job_workers SET left_at=?, leave_reason='job_completed' WHERE job_id=? AND left_at=''"
   ).bind(t, job_id).run();
@@ -1310,19 +1285,33 @@ route("v2_ops_job_resume", async (body, env) => {
   const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(parent_job_id).first();
   if (!job) return err("parent job not found", 404);
 
-  // Create new worker segment on parent
+  // 防重：同一 worker 已有 open segment 则不重复插入
+  const dup = await findOpenSeg(env, parent_job_id, worker_id);
+  if (dup) {
+    // 仍需确保 status 从 awaiting_close 恢复
+    if (job.status === "awaiting_close") {
+      await recalcActiveCount(env, parent_job_id, t);
+      const rc = await env.DB.prepare("SELECT active_worker_count as c FROM v2_ops_jobs WHERE id=?").bind(parent_job_id).first();
+      if (rc && rc.c > 0) {
+        await env.DB.prepare("UPDATE v2_ops_jobs SET status='working', resumed_at=?, updated_at=? WHERE id=?").bind(t, t, parent_job_id).run();
+      }
+    }
+    return json({ ok: true, worker_seg_id: dup.id, already_joined: true });
+  }
+
   const seg_id = "WS-" + uid();
   await env.DB.prepare(`
     INSERT INTO v2_ops_job_workers(id, job_id, worker_id, worker_name, joined_at)
     VALUES(?,?,?,?,?)
   `).bind(seg_id, parent_job_id, worker_id, worker_name, t).run();
 
-  // Update parent job
-  let newStatus = job.status;
-  if (job.status === "awaiting_close") newStatus = "working";
-  await env.DB.prepare(
-    "UPDATE v2_ops_jobs SET active_worker_count=active_worker_count+1, status=?, resumed_at=?, updated_at=? WHERE id=?"
-  ).bind(newStatus, t, t, parent_job_id).run();
+  // 重算 count + 恢复 status
+  const realCount = await recalcActiveCount(env, parent_job_id, t);
+  if (job.status === "awaiting_close" && realCount > 0) {
+    await env.DB.prepare(
+      "UPDATE v2_ops_jobs SET status='working', resumed_at=?, updated_at=? WHERE id=?"
+    ).bind(t, t, parent_job_id).run();
+  }
 
   return json({ ok: true, worker_seg_id: seg_id });
 });

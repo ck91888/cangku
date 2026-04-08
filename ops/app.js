@@ -815,9 +815,16 @@ function renderWorkers(containerId, workers) {
     return;
   }
   var activeW = workers.filter(function(w) { return !w.left_at; });
-  var html = '<div style="font-size:12px;color:#666;margin-bottom:6px;">' +
-    '在岗/참여중: ' + activeW.length + '人/명</div>';
+  // UI 去重兜底（止血）— 根修复在后端 findOpenSeg 防重 + closeAllOpenSegs 自愈
+  var seen = {};
+  var deduped = [];
   activeW.forEach(function(w) {
+    var wid = w.worker_id || w.id;
+    if (!seen[wid]) { seen[wid] = true; deduped.push(w); }
+  });
+  var html = '<div style="font-size:12px;color:#666;margin-bottom:6px;">' +
+    '在岗/참여중: ' + deduped.length + '人/명</div>';
+  deduped.forEach(function(w) {
     html += '<span class="worker-tag">' + esc(w.worker_name || w.worker_id) + '</span>';
   });
   el.innerHTML = html;
