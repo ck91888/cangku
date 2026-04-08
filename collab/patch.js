@@ -1,18 +1,69 @@
 (function(){
-  function pad3(n){ n=Number(n)||0; return String(n).padStart(3,'0'); }
+  // ===== Pretty No helpers =====
+  function pad3(n){ return String(Number(n)||0).padStart(3,'0'); }
+
+  var _prettyCache = {};
+
   async function buildPrettyMapForDate(planDate){
+    if(_prettyCache[planDate]) return _prettyCache[planDate];
     var res=await api({action:'v2_inbound_plan_list',start_date:planDate,end_date:planDate,status:''});
     var items=(res&&res.ok&&res.items)?res.items.slice():[];
-    items.sort(function(a,b){ var ta=String(a.created_at||''); var tb=String(b.created_at||''); if(ta===tb) return String(a.id||'').localeCompare(String(b.id||'')); return ta.localeCompare(tb); });
-    var map={}; items.forEach(function(it,idx){ map[it.id]='RU-'+String(planDate||'').replace(/-/g,'')+'-'+pad3(idx+1); });
+    items.sort(function(a,b){
+      var ta=String(a.created_at||''); var tb=String(b.created_at||'');
+      if(ta===tb) return String(a.id||'').localeCompare(String(b.id||''));
+      return ta.localeCompare(tb);
+    });
+    var map={};
+    items.forEach(function(it,idx){ map[it.id]='RU-'+String(planDate||'').replace(/-/g,'')+'-'+pad3(idx+1); });
+    _prettyCache[planDate]=map;
     return map;
   }
+
   async function prettyInboundNo(plan){
     if(!plan||!plan.id||!plan.plan_date) return plan&&plan.id?plan.id:'';
     try{ var map=await buildPrettyMapForDate(plan.plan_date); return map[plan.id]||plan.id; }catch(e){ return plan.id; }
   }
+
   function unitLabelSafe(key){ if(typeof unitTypeLabel==='function') return unitTypeLabel(key); return key; }
-  function collectInboundLinesStrict(){ var lines=typeof getIbcLines==='function'?getIbcLines():[]; return (lines||[]).filter(function(ln){ return ln&&Number(ln.planned_qty||0)>0; }); }
+
+  function collectInboundLinesStrict(){
+    var lines=typeof getIbcLines==='function'?getIbcLines():[];
+    return (lines||[]).filter(function(ln){ return ln&&Number(ln.planned_qty||0)>0; });
+  }
+
+  // ===== QR to printable image helper =====
+  function getQrImageSrc(qrEl){
+    if(!qrEl) return '';
+    // 1. Try canvas → dataURL
+    var canvas=qrEl.querySelector('canvas');
+    if(canvas){
+      try{ return canvas.toDataURL('image/png'); }catch(e){}
+    }
+    // 2. Try existing img
+    var img=qrEl.querySelector('img');
+    if(img&&img.src) return img.src;
+    return '';
+  }
+
+  // Generate a fresh QR as dataURL (fallback)
+  function generateQrDataUrl(text, size){
+    size=size||220;
+    var tempDiv=document.createElement('div');
+    tempDiv.style.cssText='position:absolute;left:-9999px;top:-9999px;';
+    document.body.appendChild(tempDiv);
+    try{
+      new QRCode(tempDiv,{text:text,width:size,height:size});
+      var c=tempDiv.querySelector('canvas');
+      if(c) return c.toDataURL('image/png');
+      var i=tempDiv.querySelector('img');
+      if(i&&i.src) return i.src;
+    }catch(e){}finally{
+      document.body.removeChild(tempDiv);
+    }
+    return '';
+  }
+
+  // ===== Override submitInbound =====
   window.submitInbound = async function(){
     var date=document.getElementById('ibc-date').value||kstToday();
     var customer=document.getElementById('ibc-customer').value.trim();
@@ -29,22 +80,62 @@
     var payload={ action:'v2_inbound_plan_create', plan_date:date, customer:customer, biz_class:biz, cargo_summary:cargo, expected_arrival:arrival, purpose:purpose, remark:remark, lines:lines, created_by:getUser() };
     if(autoOb){ payload.auto_create_outbound=true; payload.ob_operation_mode=(document.getElementById('ibc-ob-opmode')||{}).value||''; payload.ob_outbound_mode=(document.getElementById('ibc-ob-outmode')||{}).value||''; payload.ob_instruction=(document.getElementById('ibc-ob-instruction')||{}).value||''; }
     var res=await api(payload);
-    if(res&&res.ok){ var pretty=await prettyInboundNo({id:res.id,plan_date:date}); var msg=L('success')+': '+pretty; if(res.outbound_id) msg+='\n'+L('auto_create_outbound')+': '+res.outbound_id; alert(msg); document.getElementById('ibc-customer').value=''; document.getElementById('ibc-cargo').value=''; document.getElementById('ibc-arrival').value=''; document.getElementById('ibc-purpose').value=''; document.getElementById('ibc-remark').value=''; document.getElementById('ibcLinesBody').innerHTML=''; document.getElementById('ibc-auto-ob').checked=false; document.getElementById('ibcAutoObFields').style.display='none'; if(typeof addIbcLine==='function') addIbcLine(); goTab('inbound'); }
-    else { alert(L('error')+': '+(res?res.error:'unknown')); }
+    if(res&&res.ok){
+      // Invalidate pretty cache for that date
+      delete _prettyCache[date];
+      var pretty=await prettyInboundNo({id:res.id,plan_date:date});
+      var msg=L('success')+': '+pretty;
+      if(res.outbound_id) msg+='\n'+L('auto_create_outbound')+': '+res.outbound_id;
+      alert(msg);
+      document.getElementById('ibc-customer').value='';
+      document.getElementById('ibc-cargo').value='';
+      document.getElementById('ibc-arrival').value='';
+      document.getElementById('ibc-purpose').value='';
+      document.getElementById('ibc-remark').value='';
+      document.getElementById('ibcLinesBody').innerHTML='';
+      document.getElementById('ibc-auto-ob').checked=false;
+      document.getElementById('ibcAutoObFields').style.display='none';
+      if(typeof addIbcLine==='function') addIbcLine();
+      goTab('inbound');
+    } else {
+      alert(L('error')+': '+(res?res.error:'unknown'));
+    }
   };
+
+  // ===== Override loadInboundList =====
   window.loadInboundList = async function(){
-    var body=document.getElementById('inboundListBody'); if(!body) return; body.innerHTML='<div class="card muted">'+L('loading')+'</div>';
-    var start=document.getElementById('ibFilterStart').value; var end=document.getElementById('ibFilterEnd').value; var status=document.getElementById('ibFilterStatus').value;
+    var body=document.getElementById('inboundListBody'); if(!body) return;
+    body.innerHTML='<div class="card muted">'+L('loading')+'</div>';
+    var start=document.getElementById('ibFilterStart').value;
+    var end=document.getElementById('ibFilterEnd').value;
+    var status=document.getElementById('ibFilterStatus').value;
     var res=await api({action:'v2_inbound_plan_list',start_date:start,end_date:end,status:status});
     if(!res||!res.ok){ body.innerHTML='<div class="card muted">'+L('error')+'</div>'; return; }
-    var items=res.items||[]; if(items.length===0){ body.innerHTML='<div class="card muted">'+L('no_data')+'</div>'; return; }
-    var byDate={}; items.forEach(function(p){ var d=p.plan_date||''; if(!byDate[d]) byDate[d]=[]; byDate[d].push(p); });
-    Object.keys(byDate).forEach(function(d){ byDate[d].sort(function(a,b){ var ta=String(a.created_at||''); var tb=String(b.created_at||''); if(ta===tb) return String(a.id||'').localeCompare(String(b.id||'')); return ta.localeCompare(tb); }); byDate[d].forEach(function(p,idx){ p._pretty_no='RU-'+String(d||'').replace(/-/g,'')+'-'+pad3(idx+1); }); });
-    items.sort(function(a,b){ var da=String(a.plan_date||''); var db=String(b.plan_date||''); if(da!==db) return db.localeCompare(da); return String(b.created_at||'').localeCompare(String(a.created_at||'')); });
+    var items=res.items||[];
+    if(items.length===0){ body.innerHTML='<div class="card muted">'+L('no_data')+'</div>'; return; }
+    var byDate={};
+    items.forEach(function(p){ var d=p.plan_date||''; if(!byDate[d]) byDate[d]=[]; byDate[d].push(p); });
+    Object.keys(byDate).forEach(function(d){
+      byDate[d].sort(function(a,b){
+        var ta=String(a.created_at||''); var tb=String(b.created_at||'');
+        if(ta===tb) return String(a.id||'').localeCompare(String(b.id||''));
+        return ta.localeCompare(tb);
+      });
+      byDate[d].forEach(function(p,idx){ p._pretty_no='RU-'+String(d||'').replace(/-/g,'')+'-'+pad3(idx+1); });
+    });
+    items.sort(function(a,b){
+      var da=String(a.plan_date||''); var db=String(b.plan_date||'');
+      if(da!==db) return db.localeCompare(da);
+      return String(b.created_at||'').localeCompare(String(a.created_at||''));
+    });
     var html='<div class="card">';
-    items.forEach(function(p){ html+='<div class="list-item" onclick="openInboundDetail(\''+esc(p.id)+'\')"><div class="item-title"><span class="st st-'+esc(p.status)+'">'+esc(stLabel(p.status))+'</span> <span class="biz-tag biz-'+esc(p.biz_class)+'">'+esc(bizLabel(p.biz_class))+'</span> '+esc(p._pretty_no||p.id)+' · '+esc(p.customer||'--')+'</div><div class="item-meta">'+esc(p.plan_date||'')+' · '+esc(p.cargo_summary||'')+' · '+esc(fmtTime(p.created_at))+'</div></div>'; });
+    items.forEach(function(p){
+      html+='<div class="list-item" onclick="openInboundDetail(\''+esc(p.id)+'\')"><div class="item-title"><span class="st st-'+esc(p.status)+'">'+esc(stLabel(p.status))+'</span> <span class="biz-tag biz-'+esc(p.biz_class)+'">'+esc(bizLabel(p.biz_class))+'</span> '+esc(p._pretty_no||p.id)+' · '+esc(p.customer||'--')+'</div><div class="item-meta">'+esc(p.plan_date||'')+' · '+esc(p.cargo_summary||'')+' · '+esc(fmtTime(p.created_at))+'</div></div>';
+    });
     html+='</div>'; body.innerHTML=html;
   };
+
+  // ===== Override loadInboundDetail =====
   var _origLoadInboundDetail=window.loadInboundDetail;
   window.loadInboundDetail=async function(){
     await _origLoadInboundDetail();
@@ -58,23 +149,64 @@
     var titleEl=body.querySelector('.card div[style*="font-size:16px"]');
     if(titleEl) titleEl.textContent=pretty;
   };
+
+  // ===== Override printIbQr: use img instead of raw DOM =====
   window.printIbQr=function(){
-    var body=document.getElementById('inboundDetailBody'); if(!body) return;
     var title=window._currentInboundPretty||_currentInboundId||'';
-    var qrEl=document.getElementById('ibDetailQr');
-    var qrHtml=qrEl?qrEl.innerHTML:'';
-    var tables=body.querySelectorAll('table.line-table');
-    var linesHtml=tables.length?tables[0].outerHTML:'';
+    var planId=_currentInboundId||'';
     var plan=window._currentInboundPlanCache||{};
+
+    // Get QR image: try existing element first, then generate fresh
+    var qrEl=document.getElementById('ibDetailQr');
+    var qrSrc=getQrImageSrc(qrEl);
+    if(!qrSrc){
+      // Fallback: generate a fresh QR with the raw plan.id
+      qrSrc=generateQrDataUrl(planId, 220);
+    }
+
+    var qrImgHtml=qrSrc?'<img src="'+qrSrc+'" style="width:220px;height:220px;">':'<div style="color:red;">QR 生成失败</div>';
+
+    // Plan lines table
+    var body=document.getElementById('inboundDetailBody');
+    var tables=body?body.querySelectorAll('table.line-table'):[];
+    var linesHtml=tables.length?tables[0].outerHTML:'';
+
     var metaHtml='<div><b>'+esc(title)+'</b></div>'+
       '<div>计划日期: '+esc(plan.plan_date||'')+'</div>'+
       '<div>客户: '+esc(plan.customer||'')+'</div>'+
       '<div>货物摘要: '+esc(plan.cargo_summary||'')+'</div>'+
       (plan.remark?'<div>备注: '+esc(plan.remark)+'</div>':'');
+
     var win=window.open('','_blank');
-    var html='<html><head><title>'+esc(title)+'</title><style>body{font-family:Arial,Helvetica,sans-serif;padding:24px;color:#111;}h1{font-size:28px;margin:0 0 8px;text-align:center;}.meta{margin:12px 0 18px;font-size:14px;line-height:1.8;} .qr{text-align:center;margin:16px 0;} .qr img,.qr canvas{width:220px !important;height:220px !important;} table{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px;} th,td{border:1px solid #bbb;padding:8px;text-align:left;} .small{font-size:12px;color:#666;text-align:center;margin-top:8px;}</style></head><body><h1>'+esc(title)+'</h1><div class="qr">'+qrHtml+'</div><div class="meta">'+metaHtml+'</div>'+linesHtml+'<div class="small">Printed from CK Warehouse V2</div><script>window.print();<\/script></body></html>';
-    win.document.write(html); win.document.close();
+    var html='<html><head><title>'+esc(title)+'</title>'+
+      '<style>body{font-family:Arial,Helvetica,sans-serif;padding:24px;color:#111;}'+
+      'h1{font-size:28px;margin:0 0 8px;text-align:center;}'+
+      '.meta{margin:12px 0 18px;font-size:14px;line-height:1.8;}'+
+      '.qr{text-align:center;margin:16px 0;}'+
+      'table{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px;}'+
+      'th,td{border:1px solid #bbb;padding:8px;text-align:left;}'+
+      '.small{font-size:12px;color:#666;text-align:center;margin-top:8px;}</style>'+
+      '</head><body>'+
+      '<h1>'+esc(title)+'</h1>'+
+      '<div class="qr">'+qrImgHtml+'</div>'+
+      '<div class="small">扫码内容: '+esc(planId)+'</div>'+
+      '<div class="meta">'+metaHtml+'</div>'+
+      linesHtml+
+      '<div class="small">Printed from CK Warehouse V2</div>'+
+      '<script>window.onload=function(){window.print();}<\/script>'+
+      '</body></html>';
+    win.document.write(html);
+    win.document.close();
   };
-  function ensureOneLine(){ var tbody=document.getElementById('ibcLinesBody'); if(tbody&&!tbody.children.length&&typeof addIbcLine==='function') addIbcLine(); }
-  document.addEventListener('DOMContentLoaded',function(){ ensureOneLine(); var btn=document.getElementById('btnNewInbound'); if(btn){ btn.addEventListener('click',function(){ setTimeout(ensureOneLine,30); }); } });
+
+  // ===== Auto add first line =====
+  function ensureOneLine(){
+    var tbody=document.getElementById('ibcLinesBody');
+    if(tbody&&!tbody.children.length&&typeof addIbcLine==='function') addIbcLine();
+  }
+  document.addEventListener('DOMContentLoaded',function(){
+    ensureOneLine();
+    var btn=document.getElementById('btnNewInbound');
+    if(btn){ btn.addEventListener('click',function(){ setTimeout(ensureOneLine,30); }); }
+  });
 })();
