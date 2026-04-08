@@ -71,6 +71,8 @@ var LANG = {
     status_issued: "已下发",
     status_working: "作业中",
     status_arrived: "已到货",
+    status_field_working: "现场卸货中",
+    status_unloaded_pending_info: "已卸货·待补充",
     // Biz class
     biz_direct_ship: "代发",
     biz_bulk: "大货",
@@ -181,6 +183,8 @@ var LANG = {
     status_issued: "배정됨",
     status_working: "작업중",
     status_arrived: "도착",
+    status_field_working: "현장 하차중",
+    status_unloaded_pending_info: "하차완료·정보보완",
     biz_direct_ship: "직배송",
     biz_bulk: "대량화물",
     biz_return: "반품",

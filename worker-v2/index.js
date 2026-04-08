@@ -334,6 +334,10 @@ const MIGRATIONS = [
   // ---- display_no for inbound plans ----
   `ALTER TABLE v2_inbound_plans ADD COLUMN display_no TEXT DEFAULT ''`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_inbound_display_no ON v2_inbound_plans(display_no) WHERE display_no != ''`,
+
+  // ---- source_type for dynamic plans ----
+  `ALTER TABLE v2_inbound_plans ADD COLUMN source_type TEXT DEFAULT 'manual'`,
+  `ALTER TABLE v2_inbound_plans ADD COLUMN needs_info_update INTEGER DEFAULT 0`,
 ];
 
 let _migrated = false;
@@ -907,9 +911,85 @@ route("v2_inbound_plan_update_status", async (body, env) => {
   return json({ ok: true });
 });
 
+// ===== Dynamic plan finalize: fill info and convert to formal inbound =====
+route("v2_inbound_dynamic_finalize", async (body, env) => {
+  if (!isAuth(body, env)) return err("unauthorized", 401);
+  const id = String(body.id || "").trim();
+  if (!id) return err("missing id");
+  const plan = await env.DB.prepare("SELECT * FROM v2_inbound_plans WHERE id=?").bind(id).first();
+  if (!plan) return err("not found", 404);
+  if (plan.source_type !== "field_dynamic") return err("not a dynamic plan");
+  if (plan.status !== "unloaded_pending_info") return err("status must be unloaded_pending_info, current: " + plan.status);
+
+  const t = now();
+  const customer = String(body.customer || plan.customer || "").trim();
+  const biz_class = String(body.biz_class || plan.biz_class || "").trim();
+  const cargo_summary = String(body.cargo_summary || plan.cargo_summary || "").trim();
+  const expected_arrival = String(body.expected_arrival || plan.expected_arrival || "").trim();
+  const purpose = String(body.purpose || plan.purpose || "").trim();
+  const remark = String(body.remark || plan.remark || "").trim();
+
+  await env.DB.prepare(`
+    UPDATE v2_inbound_plans SET customer=?, biz_class=?, cargo_summary=?,
+      expected_arrival=?, purpose=?, remark=?, status='completed',
+      needs_info_update=0, updated_at=? WHERE id=?
+  `).bind(customer, biz_class, cargo_summary, expected_arrival, purpose, remark, t, id).run();
+
+  // Update lines if provided
+  const newLines = body.lines || [];
+  if (newLines.length > 0) {
+    await env.DB.prepare("DELETE FROM v2_inbound_plan_lines WHERE plan_id=?").bind(id).run();
+    for (let i = 0; i < newLines.length; i++) {
+      const ln = newLines[i];
+      await env.DB.prepare(
+        "INSERT INTO v2_inbound_plan_lines(id, plan_id, line_no, unit_type, planned_qty, actual_qty, remark) VALUES(?,?,?,?,?,?,?)"
+      ).bind("IPL-" + uid(), id, i + 1, String(ln.unit_type || ""), Number(ln.planned_qty || 0), Number(ln.actual_qty || 0), String(ln.remark || "")).run();
+    }
+  }
+
+  return json({ ok: true, id, display_no: plan.display_no });
+});
+
 // =====================================================
 // UNLOAD / INBOUND JOBS — Ops side
 // =====================================================
+// ===== Dynamic no-doc unload: create plan + job in one shot =====
+route("v2_unload_dynamic_start", async (body, env) => {
+  if (!isOpsAuth(body, env)) return err("unauthorized", 401);
+  const worker_id = String(body.worker_id || "").trim();
+  const worker_name = String(body.worker_name || "").trim();
+  if (!worker_id) return err("missing worker_id");
+
+  const t = now();
+  const plan_date = kstToday();
+  const plan_id = "IB-" + uid();
+  const display_no = await nextDisplayNo(env, plan_date);
+
+  // 1. Create dynamic inbound plan
+  await env.DB.prepare(`
+    INSERT INTO v2_inbound_plans(id, plan_date, customer, biz_class, cargo_summary,
+      expected_arrival, purpose, remark, status, created_by, created_at, updated_at, display_no, source_type, needs_info_update)
+    VALUES(?,?,'待补充','','现场无单卸货','','','','field_working',?,?,?,?,'field_dynamic',1)
+  `).bind(plan_id, plan_date, worker_name || worker_id, t, t, display_no).run();
+
+  // 2. Create unload job bound to this plan
+  const job_id = "JOB-" + uid();
+  await env.DB.prepare(`
+    INSERT INTO v2_ops_jobs(id, flow_stage, biz_class, job_type, related_doc_type, related_doc_id,
+      status, created_by, created_at, updated_at, active_worker_count)
+    VALUES(?, 'unload', '', 'unload', 'inbound_plan', ?, 'working', ?, ?, ?, 1)
+  `).bind(job_id, plan_id, worker_id, t, t).run();
+
+  // 3. Create worker segment
+  const seg_id = "WS-" + uid();
+  await env.DB.prepare(`
+    INSERT INTO v2_ops_job_workers(id, job_id, worker_id, worker_name, joined_at)
+    VALUES(?,?,?,?,?)
+  `).bind(seg_id, job_id, worker_id, worker_name, t).run();
+
+  return json({ ok: true, plan_id, display_no, job_id, worker_seg_id: seg_id });
+});
+
 route("v2_unload_job_start", async (body, env) => {
   if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const plan_id = String(body.plan_id || "").trim();
@@ -1060,12 +1140,40 @@ route("v2_unload_job_finish", async (body, env) => {
 
     // Update inbound plan status
     if (plan_id) {
-      await env.DB.prepare(
-        "UPDATE v2_inbound_plans SET status='completed', updated_at=? WHERE id=?"
-      ).bind(t, plan_id).run();
+      const planRow = await env.DB.prepare("SELECT source_type FROM v2_inbound_plans WHERE id=?").bind(plan_id).first();
+      if (planRow && planRow.source_type === "field_dynamic") {
+        // Dynamic plan: set to unloaded_pending_info, auto-create lines from result
+        const existingLines = await env.DB.prepare(
+          "SELECT COUNT(*) as c FROM v2_inbound_plan_lines WHERE plan_id=?"
+        ).bind(plan_id).first();
+        if (!existingLines || existingLines.c === 0) {
+          for (let i = 0; i < result_lines.length; i++) {
+            const rl = result_lines[i];
+            await env.DB.prepare(
+              "INSERT INTO v2_inbound_plan_lines(id, plan_id, line_no, unit_type, planned_qty, actual_qty) VALUES(?,?,?,?,?,?)"
+            ).bind("IPL-" + uid(), plan_id, i + 1, String(rl.unit_type || ""), Number(rl.actual_qty || 0), Number(rl.actual_qty || 0)).run();
+          }
+        } else {
+          for (const rl of result_lines) {
+            await env.DB.prepare(
+              "UPDATE v2_inbound_plan_lines SET actual_qty=? WHERE plan_id=? AND unit_type=?"
+            ).bind(Number(rl.actual_qty || 0), plan_id, String(rl.unit_type || "")).run();
+          }
+        }
+        // Build cargo summary from result
+        const cargoSummary = result_lines.map(rl => (rl.unit_type || "") + " " + (rl.actual_qty || 0)).join(" / ");
+        await env.DB.prepare(
+          "UPDATE v2_inbound_plans SET status='unloaded_pending_info', cargo_summary=?, updated_at=? WHERE id=?"
+        ).bind(cargoSummary || "现场无单卸货", t, plan_id).run();
+        return json({ ok: true, result_id, dynamic_plan: true, plan_id });
+      } else {
+        await env.DB.prepare(
+          "UPDATE v2_inbound_plans SET status='completed', updated_at=? WHERE id=?"
+        ).bind(t, plan_id).run();
+      }
     }
 
-    // 4g. No-doc unload → auto-create feedback
+    // 4g. No-doc unload (legacy: no plan_id at all) → auto-create feedback
     if (!plan_id || plan_id === "") {
       const fb_id = "FB-" + uid();
       await env.DB.prepare(`

@@ -178,7 +178,7 @@
     }
     var remark=((document.getElementById('unloadRemark')||{}).value||'').trim();
     var res=await api({action:'v2_unload_job_finish',job_id:_activeJobId,worker_id:getWorkerId(),result_lines:resultLines,diff_note:diffNote,remark:remark,complete_job:true});
-    if(res&&res.ok){ var msg='卸货已完成 / 하차 완료'; if(res.no_doc) msg+='\n（无单卸货已自动生成反馈 / 서류 없는 하차 피드백 자동 생성됨）'; alert(msg); clearActiveJob(); _unloadPlanData=null; goPage('home'); }
+    if(res&&res.ok){ var msg='卸货已完成 / 하차 완료'; if(res.dynamic_plan) msg+='\n（动态单已转为待补充状态，请协同中心补全信息 / 동적 하차단 정보보완 필요）'; else if(res.no_doc) msg+='\n（无单卸货已自动生成反馈 / 서류 없는 하차 피드백 자동 생성됨）'; alert(msg); clearActiveJob(); _unloadPlanData=null; goPage('home'); }
     else if(res&&res.error==='others_still_working'){ alert('还有'+res.active_count+'人参与中，无法完成 / 아직 '+res.active_count+'명 참여 중, 완료 불가'); }
     else if(res&&res.error==='empty_result'){ alert(res.message||'至少填写一项实际数量'); }
     else if(res&&res.error==='diff_note_required'){ alert('系统仍要求差异备注，已记录默认说明后请重试'); }
@@ -192,6 +192,65 @@
     var lbl=diffArea.querySelector('label');
     if(lbl) lbl.textContent='差异备注（可选） / 차이 메모(선택)';
   }
+
+  // ===== Override startUnloadNoPlan: use dynamic start API =====
+  window.startUnloadNoPlan = async function(){
+    if(_startInflight) return;
+    _startInflight=true;
+    try{
+      var res=await api({
+        action:'v2_unload_dynamic_start',
+        worker_id:getWorkerId(),
+        worker_name:getWorkerName()
+      });
+      if(res&&res.ok){
+        saveActiveJob(res.job_id, res.worker_seg_id);
+        stopUnloadScan();
+        // Load plan data for the newly created dynamic plan
+        _unloadPlanData=null;
+        var planRes=await api({action:'v2_inbound_plan_detail',id:res.plan_id});
+        if(planRes&&planRes.ok) _unloadPlanData=planRes;
+        alert('已创建动态卸货单: '+(res.display_no||res.plan_id)+' / 동적 하차단 생성됨');
+        var jobRes=await api({action:'v2_ops_job_detail',job_id:res.job_id});
+        if(jobRes&&jobRes.ok) showUnloadWorking(jobRes.job);
+        startJobPoll('unload');
+      } else {
+        alert('失败/실패: '+(res?res.error:'unknown'));
+      }
+    }finally{ _startInflight=false; }
+  };
+
+  // ===== Override loadInboundPlans: tag dynamic + field_working plans =====
+  var _origLoadInboundPlans = window.loadInboundPlans;
+  window.loadInboundPlans = async function(selectId){
+    var sel=document.getElementById(selectId);
+    if(!sel) return;
+    var current=sel.value||'';
+    var res=await api({action:'v2_inbound_plan_list',start_date:'',end_date:'',status:''});
+    var items=(res&&res.ok&&res.items)?res.items.slice():[];
+
+    var opts='<option value="">-- 选择入库计划/입고계획 선택 --</option>';
+    var byDate={};
+    items.forEach(function(p){
+      if(p.status==='completed'||p.status==='cancelled') return;
+      var d=p.plan_date||'';
+      if(!byDate[d]) byDate[d]=[];
+      byDate[d].push(p);
+    });
+    Object.keys(byDate).sort().reverse().forEach(function(d){
+      byDate[d].sort(function(a,b){ return String(a.created_at||'').localeCompare(String(b.created_at||'')); });
+      byDate[d].forEach(function(p){
+        var no=p.display_no||p.id;
+        var tag = (p.source_type==='field_dynamic') ? '[现场动态] ' : '';
+        if(p.status==='unloaded_pending_info') tag='[待补充] ';
+        opts+='<option value="'+esc(p.id)+'" data-display-no="'+esc(no)+'">'+tag+'['+esc(no)+'] '+esc(p.customer||'')+' - '+esc(p.cargo_summary||'')+'</option>';
+      });
+    });
+    sel.innerHTML=opts;
+    if(current) sel.value=current;
+
+    if(selectId==='unloadPlanSelect') previewSelectedPlan();
+  };
 
   // ===== Bind dropdown change event =====
   document.addEventListener('DOMContentLoaded', function(){

@@ -121,6 +121,8 @@ var I18N = {
   status_draft: { zh: "草稿", ko: "초안" },
   status_issued: { zh: "已下发", ko: "배정됨" },
   status_arrived: { zh: "已到货", ko: "도착" },
+  status_field_working: { zh: "现场卸货中", ko: "현장 하차중" },
+  status_unloaded_pending_info: { zh: "已卸货·待补充", ko: "하차완료·정보보완" },
   status_awaiting_close: { zh: "待收尾", ko: "마감대기" },
 
   // -- Interrupt --

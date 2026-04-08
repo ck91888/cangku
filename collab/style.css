@@ -150,6 +150,8 @@ body {
 .st-draft { background: #95a5a6; }
 .st-issued { background: #e67e22; }
 .st-arrived { background: #3498db; }
+.st-field_working { background: #e74c3c; }
+.st-unloaded_pending_info { background: #ff9800; }
 
 .biz-tag {
   display: inline-block;

@@ -267,7 +267,7 @@ async function loadDashboard() {
 
   var pendingIssues = issueItems.filter(function(i) { return i.status === "pending" || i.status === "processing"; });
   var pendingOb = obItems.filter(function(o) { return o.status === "draft" || o.status === "issued" || o.status === "working"; });
-  var pendingIb = ibItems.filter(function(p) { return p.status === "pending" || p.status === "arrived" || p.status === "processing"; });
+  var pendingIb = ibItems.filter(function(p) { return p.status === "pending" || p.status === "arrived" || p.status === "processing" || p.status === "field_working" || p.status === "unloaded_pending_info"; });
   var respondedIssues = issueItems.filter(function(i) { return i.status === "responded"; });
 
   var html = '';
@@ -926,8 +926,11 @@ async function loadInboundDetail() {
   var atts = res.attachments || [];
 
   // --- Basic info: two-column grid ---
+  var isDynamic = (p.source_type === 'field_dynamic');
   var html = '<div class="card">';
-  html += '<div style="font-size:16px;font-weight:700;margin-bottom:10px;">' + esc(p.display_no || p.id) + '</div>';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:10px;">';
+  if (isDynamic) html += '<span style="background:#ff9800;color:#fff;font-size:11px;padding:2px 6px;border-radius:3px;margin-right:6px;">现场动态单</span>';
+  html += esc(p.display_no || p.id) + '</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:13px;">';
   html += '<div><b>' + L("status") + ':</b> <span class="st st-' + esc(p.status) + '">' + esc(stLabel(p.status)) + '</span></div>';
   html += '<div><b>' + L("biz_class") + ':</b> <span class="biz-tag biz-' + esc(p.biz_class) + '">' + esc(bizLabel(p.biz_class)) + '</span></div>';
@@ -992,6 +995,21 @@ async function loadInboundDetail() {
     html += '</div></div>';
   }
 
+  // --- Finalize form for dynamic plans awaiting info ---
+  if (isDynamic && p.status === 'unloaded_pending_info') {
+    html += '<div class="card"><div class="card-title">补充信息并转正</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">';
+    html += '<div><label><b>' + L("customer") + '</b></label><input id="dynCustomer" class="input" value="' + esc(p.customer === '待补充' ? '' : p.customer) + '" placeholder="客户名称"></div>';
+    html += '<div><label><b>' + L("biz_class") + '</b></label><select id="dynBiz" class="input"><option value="">--</option><option value="direct_ship"' + (p.biz_class === 'direct_ship' ? ' selected' : '') + '>' + bizLabel('direct_ship') + '</option><option value="bulk"' + (p.biz_class === 'bulk' ? ' selected' : '') + '>' + bizLabel('bulk') + '</option><option value="return"' + (p.biz_class === 'return' ? ' selected' : '') + '>' + bizLabel('return') + '</option><option value="import"' + (p.biz_class === 'import' ? ' selected' : '') + '>' + bizLabel('import') + '</option></select></div>';
+    html += '<div style="grid-column:1/-1;"><label><b>' + L("cargo_summary") + '</b></label><input id="dynCargo" class="input" value="' + esc(p.cargo_summary) + '"></div>';
+    html += '<div><label><b>' + L("expected_arrival") + '</b></label><input id="dynArrival" class="input" value="' + esc(p.expected_arrival) + '"></div>';
+    html += '<div><label><b>' + L("purpose") + '</b></label><input id="dynPurpose" class="input" value="' + esc(p.purpose) + '"></div>';
+    html += '<div style="grid-column:1/-1;"><label><b>' + L("remark") + '</b></label><input id="dynRemark" class="input" value="' + esc(p.remark) + '"></div>';
+    html += '</div>';
+    html += '<div style="margin-top:10px;"><button class="btn btn-success" onclick="finalizeDynamicPlan()">确认转正为入库单</button></div>';
+    html += '</div>';
+  }
+
   // --- Actions: print + status buttons in one row ---
   html += '<div class="card">';
   html += '<button class="btn btn-outline btn-sm" onclick="printIbQr()">' + L("print") + '</button> ';
@@ -1002,7 +1020,9 @@ async function loadInboundDetail() {
     if (p.status === "arrived" || p.status === "processing") {
       html += '<button class="btn btn-success" onclick="updateIbStatus(\'completed\')">' + L("status_completed") + '</button> ';
     }
-    html += '<button class="btn btn-danger" onclick="updateIbStatus(\'cancelled\')">' + L("status_cancelled") + '</button>';
+    if (p.status !== "field_working" && p.status !== "unloaded_pending_info") {
+      html += '<button class="btn btn-danger" onclick="updateIbStatus(\'cancelled\')">' + L("status_cancelled") + '</button>';
+    }
   }
   html += '</div>';
 
@@ -1031,6 +1051,28 @@ async function updateIbStatus(status) {
   if (!confirm(L("confirm") + "?")) return;
   var res = await api({ action: "v2_inbound_plan_update_status", id: _currentInboundId, status: status });
   if (res && res.ok) {
+    loadInboundDetail();
+  } else {
+    alert("失败: " + (res ? res.error : "unknown"));
+  }
+}
+
+async function finalizeDynamicPlan() {
+  var customer = (document.getElementById("dynCustomer") || {}).value || "";
+  if (!customer.trim()) { alert("请填写客户名称"); return; }
+  if (!confirm("确认将此动态单转正为正式入库单？")) return;
+  var res = await api({
+    action: "v2_inbound_dynamic_finalize",
+    id: _currentInboundId,
+    customer: customer.trim(),
+    biz_class: (document.getElementById("dynBiz") || {}).value || "",
+    cargo_summary: (document.getElementById("dynCargo") || {}).value || "",
+    expected_arrival: (document.getElementById("dynArrival") || {}).value || "",
+    purpose: (document.getElementById("dynPurpose") || {}).value || "",
+    remark: (document.getElementById("dynRemark") || {}).value || ""
+  });
+  if (res && res.ok) {
+    alert("已转正为入库单: " + (res.display_no || res.id));
     loadInboundDetail();
   } else {
     alert("失败: " + (res ? res.error : "unknown"));
