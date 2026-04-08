@@ -1,66 +1,11 @@
 (function(){
-  // ===== Pretty No helpers =====
-  function pad3(n){ return String(Number(n)||0).padStart(3,'0'); }
-
-  var _prettyCache = {};
-
-  async function buildPrettyMapForDate(planDate){
-    if(_prettyCache[planDate]) return _prettyCache[planDate];
-    var res=await api({action:'v2_inbound_plan_list',start_date:planDate,end_date:planDate,status:''});
-    var items=(res&&res.ok&&res.items)?res.items.slice():[];
-    items.sort(function(a,b){
-      var ta=String(a.created_at||''); var tb=String(b.created_at||'');
-      if(ta===tb) return String(a.id||'').localeCompare(String(b.id||''));
-      return ta.localeCompare(tb);
-    });
-    var map={};
-    items.forEach(function(it,idx){ map[it.id]='RU-'+String(planDate||'').replace(/-/g,'')+'-'+pad3(idx+1); });
-    _prettyCache[planDate]=map;
-    return map;
-  }
-
-  async function prettyInboundNo(plan){
-    if(!plan||!plan.id||!plan.plan_date) return plan&&plan.id?plan.id:'';
-    try{ var map=await buildPrettyMapForDate(plan.plan_date); return map[plan.id]||plan.id; }catch(e){ return plan.id; }
-  }
-
+  // ===== Helper: display name for plan =====
+  function planNo(plan){ return (plan && (plan.display_no || plan.id)) || ''; }
   function unitLabelSafe(key){ if(typeof unitTypeLabel==='function') return unitTypeLabel(key); return key; }
 
   function collectInboundLinesStrict(){
     var lines=typeof getIbcLines==='function'?getIbcLines():[];
     return (lines||[]).filter(function(ln){ return ln&&Number(ln.planned_qty||0)>0; });
-  }
-
-  // ===== QR to printable image helper =====
-  function getQrImageSrc(qrEl){
-    if(!qrEl) return '';
-    // 1. Try canvas → dataURL
-    var canvas=qrEl.querySelector('canvas');
-    if(canvas){
-      try{ return canvas.toDataURL('image/png'); }catch(e){}
-    }
-    // 2. Try existing img
-    var img=qrEl.querySelector('img');
-    if(img&&img.src) return img.src;
-    return '';
-  }
-
-  // Generate a fresh QR as dataURL (fallback)
-  function generateQrDataUrl(text, size){
-    size=size||220;
-    var tempDiv=document.createElement('div');
-    tempDiv.style.cssText='position:absolute;left:-9999px;top:-9999px;';
-    document.body.appendChild(tempDiv);
-    try{
-      new QRCode(tempDiv,{text:text,width:size,height:size});
-      var c=tempDiv.querySelector('canvas');
-      if(c) return c.toDataURL('image/png');
-      var i=tempDiv.querySelector('img');
-      if(i&&i.src) return i.src;
-    }catch(e){}finally{
-      document.body.removeChild(tempDiv);
-    }
-    return '';
   }
 
   // ===== Override submitInbound =====
@@ -81,10 +26,7 @@
     if(autoOb){ payload.auto_create_outbound=true; payload.ob_operation_mode=(document.getElementById('ibc-ob-opmode')||{}).value||''; payload.ob_outbound_mode=(document.getElementById('ibc-ob-outmode')||{}).value||''; payload.ob_instruction=(document.getElementById('ibc-ob-instruction')||{}).value||''; }
     var res=await api(payload);
     if(res&&res.ok){
-      // Invalidate pretty cache for that date
-      delete _prettyCache[date];
-      var pretty=await prettyInboundNo({id:res.id,plan_date:date});
-      var msg=L('success')+': '+pretty;
+      var msg=L('success')+': '+(res.display_no||res.id);
       if(res.outbound_id) msg+='\n'+L('auto_create_outbound')+': '+res.outbound_id;
       alert(msg);
       document.getElementById('ibc-customer').value='';
@@ -113,16 +55,6 @@
     if(!res||!res.ok){ body.innerHTML='<div class="card muted">'+L('error')+'</div>'; return; }
     var items=res.items||[];
     if(items.length===0){ body.innerHTML='<div class="card muted">'+L('no_data')+'</div>'; return; }
-    var byDate={};
-    items.forEach(function(p){ var d=p.plan_date||''; if(!byDate[d]) byDate[d]=[]; byDate[d].push(p); });
-    Object.keys(byDate).forEach(function(d){
-      byDate[d].sort(function(a,b){
-        var ta=String(a.created_at||''); var tb=String(b.created_at||'');
-        if(ta===tb) return String(a.id||'').localeCompare(String(b.id||''));
-        return ta.localeCompare(tb);
-      });
-      byDate[d].forEach(function(p,idx){ p._pretty_no='RU-'+String(d||'').replace(/-/g,'')+'-'+pad3(idx+1); });
-    });
     items.sort(function(a,b){
       var da=String(a.plan_date||''); var db=String(b.plan_date||'');
       if(da!==db) return db.localeCompare(da);
@@ -130,7 +62,7 @@
     });
     var html='<div class="card">';
     items.forEach(function(p){
-      html+='<div class="list-item" onclick="openInboundDetail(\''+esc(p.id)+'\')"><div class="item-title"><span class="st st-'+esc(p.status)+'">'+esc(stLabel(p.status))+'</span> <span class="biz-tag biz-'+esc(p.biz_class)+'">'+esc(bizLabel(p.biz_class))+'</span> '+esc(p._pretty_no||p.id)+' · '+esc(p.customer||'--')+'</div><div class="item-meta">'+esc(p.plan_date||'')+' · '+esc(p.cargo_summary||'')+' · '+esc(fmtTime(p.created_at))+'</div></div>';
+      html+='<div class="list-item" onclick="openInboundDetail(\''+esc(p.id)+'\')"><div class="item-title"><span class="st st-'+esc(p.status)+'">'+esc(stLabel(p.status))+'</span> <span class="biz-tag biz-'+esc(p.biz_class)+'">'+esc(bizLabel(p.biz_class))+'</span> '+esc(p.display_no||p.id)+' · '+esc(p.customer||'--')+'</div><div class="item-meta">'+esc(p.plan_date||'')+' · '+esc(p.cargo_summary||'')+' · '+esc(fmtTime(p.created_at))+'</div></div>';
     });
     html+='</div>'; body.innerHTML=html;
   };
@@ -142,7 +74,7 @@
     if(!_currentInboundId) return;
     var res=await api({action:'v2_inbound_plan_detail',id:_currentInboundId});
     if(!res||!res.ok||!res.plan) return;
-    var pretty=await prettyInboundNo(res.plan);
+    var pretty=planNo(res.plan);
     window._currentInboundPretty=pretty;
     window._currentInboundPlanCache=res.plan;
     var body=document.getElementById('inboundDetailBody'); if(!body) return;
@@ -150,23 +82,16 @@
     if(titleEl) titleEl.textContent=pretty;
   };
 
-  // ===== Override printIbQr: use img instead of raw DOM =====
+  // ===== Override printIbQr: generate QR inside print window =====
+  var _qrLibUrl = (function(){
+    try { return new URL('../b2b/qrcode.min.js', location.href).href; } catch(e) { return ''; }
+  })();
+
   window.printIbQr=function(){
     var title=window._currentInboundPretty||_currentInboundId||'';
     var planId=_currentInboundId||'';
     var plan=window._currentInboundPlanCache||{};
 
-    // Get QR image: try existing element first, then generate fresh
-    var qrEl=document.getElementById('ibDetailQr');
-    var qrSrc=getQrImageSrc(qrEl);
-    if(!qrSrc){
-      // Fallback: generate a fresh QR with the raw plan.id
-      qrSrc=generateQrDataUrl(planId, 220);
-    }
-
-    var qrImgHtml=qrSrc?'<img src="'+qrSrc+'" style="width:220px;height:220px;">':'<div style="color:red;">QR 生成失败</div>';
-
-    // Plan lines table
     var body=document.getElementById('inboundDetailBody');
     var tables=body?body.querySelectorAll('table.line-table'):[];
     var linesHtml=tables.length?tables[0].outerHTML:'';
@@ -188,12 +113,22 @@
       '.small{font-size:12px;color:#666;text-align:center;margin-top:8px;}</style>'+
       '</head><body>'+
       '<h1>'+esc(title)+'</h1>'+
-      '<div class="qr">'+qrImgHtml+'</div>'+
+      '<div class="qr"><div id="printQr"></div></div>'+
       '<div class="small">扫码内容: '+esc(planId)+'</div>'+
       '<div class="meta">'+metaHtml+'</div>'+
       linesHtml+
       '<div class="small">Printed from CK Warehouse V2</div>'+
-      '<script>window.onload=function(){window.print();}<\/script>'+
+      '<script src="'+esc(_qrLibUrl)+'"><\/script>'+
+      '<script>'+
+      'function tryQr(n){'+
+        'if(typeof QRCode!=="undefined"){'+
+          'try{new QRCode(document.getElementById("printQr"),{text:"'+planId.replace(/"/g,'\\"')+'",width:220,height:220});'+
+          'setTimeout(function(){window.print();},300);}catch(e){document.getElementById("printQr").textContent="QR error: "+e.message;window.print();}'+
+        '}else if(n<20){setTimeout(function(){tryQr(n+1);},150);}'+
+        'else{document.getElementById("printQr").textContent="QR lib load failed";window.print();}'+
+      '}'+
+      'if(document.readyState==="complete")tryQr(0);else window.onload=function(){tryQr(0);};'+
+      '<\/script>'+
       '</body></html>';
     win.document.write(html);
     win.document.close();

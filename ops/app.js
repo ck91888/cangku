@@ -533,7 +533,7 @@ function showUnloadWorking(job) {
     var lines = _unloadPlanData.lines || [];
     document.getElementById("unloadPlanCard").style.display = "";
     document.getElementById("unloadPlanInfo").innerHTML =
-      '<div><b>' + esc(p.id) + '</b> | ' + esc(p.plan_date) + ' | ' + esc(p.customer) + '</div>' +
+      '<div><b>' + esc(p.display_no || p.id) + '</b> | ' + esc(p.plan_date) + ' | ' + esc(p.customer) + '</div>' +
       '<div class="muted">' + esc(p.cargo_summary) + (p.remark ? ' — ' + esc(p.remark) : '') + '</div>';
 
     if (lines.length > 0) {
@@ -640,7 +640,7 @@ async function loadInboundPlans(selectId) {
   if (res && res.ok && res.items) {
     res.items.forEach(function(p) {
       if (p.status === "completed" || p.status === "cancelled") return;
-      opts += '<option value="' + esc(p.id) + '">[' + esc(p.plan_date) + '] ' + esc(p.customer) + ' - ' + esc(p.cargo_summary) + '</option>';
+      opts += '<option value="' + esc(p.id) + '">[' + esc(p.display_no || p.id) + '] ' + esc(p.customer) + ' - ' + esc(p.cargo_summary) + '</option>';
     });
   }
   sel.innerHTML = opts;

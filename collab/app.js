@@ -793,7 +793,7 @@ async function loadInboundList() {
     html += '<div class="item-title">';
     html += '<span class="st st-' + esc(p.status) + '">' + esc(stLabel(p.status)) + '</span> ';
     html += '<span class="biz-tag biz-' + esc(p.biz_class) + '">' + esc(bizLabel(p.biz_class)) + '</span> ';
-    html += esc(p.customer || "--") + ' · ' + esc(p.cargo_summary || "");
+    html += esc(p.display_no || p.id) + ' · ' + esc(p.customer || "--") + ' · ' + esc(p.cargo_summary || "");
     html += '</div>';
     html += '<div class="item-meta">' + esc(p.plan_date || "") + ' · ' + esc(p.expected_arrival || "") + ' · ' + esc(fmtTime(p.created_at)) + '</div>';
     html += '</div>';
@@ -926,7 +926,7 @@ async function loadInboundDetail() {
   var atts = res.attachments || [];
 
   var html = '<div class="card">';
-  html += '<div style="font-size:16px;font-weight:700;margin-bottom:8px;">' + esc(p.id) + '</div>';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:8px;">' + esc(p.display_no || p.id) + '</div>';
   html += '<div class="detail-field"><b>' + L("status") + ':</b> <span class="st st-' + esc(p.status) + '">' + esc(stLabel(p.status)) + '</span></div>';
   html += '<div class="detail-field"><b>' + L("plan_date") + ':</b> ' + esc(p.plan_date) + '</div>';
   html += '<div class="detail-field"><b>' + L("customer") + ':</b> ' + esc(p.customer) + '</div>';
@@ -1013,7 +1013,11 @@ async function loadInboundDetail() {
       width: 160,
       height: 160
     });
-  } catch(e) {}
+  } catch(e) {
+    console.error('QR render failed:', e);
+    var qrFail = document.getElementById("ibDetailQr");
+    if (qrFail) qrFail.innerHTML = '<div style="color:red;font-size:13px;">QR 渲染失败</div>';
+  }
 }
 
 function printIbQr() {

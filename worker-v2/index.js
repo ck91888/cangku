@@ -98,6 +98,32 @@ async function recalcActiveCount(env, jobId, t) {
   return real;
 }
 
+// ===== Display No helper =====
+// 查当日最大序号 +1，唯一索引兜底重试
+async function nextDisplayNo(env, planDate) {
+  const dateStr = String(planDate || kstToday()).replace(/-/g, '');
+  const prefix = 'RU-' + dateStr + '-';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const row = await env.DB.prepare(
+      "SELECT display_no FROM v2_inbound_plans WHERE plan_date=? AND display_no LIKE ? ORDER BY display_no DESC LIMIT 1"
+    ).bind(planDate, prefix + '%').first();
+    let seq = 1;
+    if (row && row.display_no) {
+      const tail = row.display_no.split('-').pop();
+      seq = (parseInt(tail, 10) || 0) + 1;
+    }
+    const no = prefix + String(seq).padStart(3, '0');
+    // 验证唯一：如果后续 INSERT 因唯一索引失败会重试
+    const dup = await env.DB.prepare(
+      "SELECT 1 FROM v2_inbound_plans WHERE display_no=? LIMIT 1"
+    ).bind(no).first();
+    if (!dup) return no;
+    // 有冲突，下一轮循环会重查最大值
+  }
+  // 极端情况：3 次都冲突，用时间戳兜底
+  return 'RU-' + dateStr + '-' + Date.now().toString(36).slice(-4);
+}
+
 // ===== Auto-migration =====
 const MIGRATIONS = [
   // v2_inbound_plans
@@ -304,6 +330,10 @@ const MIGRATIONS = [
   `ALTER TABLE v2_outbound_orders ADD COLUMN source_inbound_plan_id TEXT DEFAULT ''`,
   `ALTER TABLE v2_ops_job_results ADD COLUMN diff_note TEXT DEFAULT ''`,
   `ALTER TABLE v2_ops_job_results ADD COLUMN result_lines_json TEXT DEFAULT '[]'`,
+
+  // ---- display_no for inbound plans ----
+  `ALTER TABLE v2_inbound_plans ADD COLUMN display_no TEXT DEFAULT ''`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_inbound_display_no ON v2_inbound_plans(display_no) WHERE display_no != ''`,
 ];
 
 let _migrated = false;
@@ -720,23 +750,24 @@ route("v2_inbound_plan_create", async (body, env) => {
   if (!isAuth(body, env)) return err("unauthorized", 401);
   const id = "IB-" + uid();
   const t = now();
+  const plan_date = String(body.plan_date || kstToday());
   const customer = String(body.customer || "");
   const biz_class = String(body.biz_class || "");
   const created_by = String(body.created_by || "");
+  const display_no = await nextDisplayNo(env, plan_date);
 
   await env.DB.prepare(`
     INSERT INTO v2_inbound_plans(id, plan_date, customer, biz_class, cargo_summary,
-      expected_arrival, purpose, remark, status, created_by, created_at, updated_at)
-    VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?)
+      expected_arrival, purpose, remark, status, created_by, created_at, updated_at, display_no)
+    VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?)
   `).bind(
-    id,
-    String(body.plan_date || kstToday()),
+    id, plan_date,
     customer, biz_class,
     String(body.cargo_summary || ""),
     String(body.expected_arrival || ""),
     String(body.purpose || ""),
     String(body.remark || ""),
-    created_by, t, t
+    created_by, t, t, display_no
   ).run();
 
   // Insert plan lines
@@ -769,7 +800,7 @@ route("v2_inbound_plan_create", async (body, env) => {
     ).run();
   }
 
-  return json({ ok: true, id, outbound_id });
+  return json({ ok: true, id, display_no, outbound_id });
 });
 
 route("v2_inbound_plan_list", async (body, env) => {
@@ -1439,21 +1470,23 @@ route("v2_feedback_convert_to_inbound", async (body, env) => {
 
   const t = now();
   const id = "IB-" + uid();
+  const plan_date = kstToday();
   const customer = String(body.customer || "");
   const biz_class = String(body.biz_class || "");
   const created_by = String(body.created_by || "");
+  const display_no = await nextDisplayNo(env, plan_date);
 
   await env.DB.prepare(`
     INSERT INTO v2_inbound_plans(id, plan_date, customer, biz_class, cargo_summary,
-      expected_arrival, purpose, remark, status, source_feedback_id, created_by, created_at, updated_at)
-    VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?)
+      expected_arrival, purpose, remark, status, source_feedback_id, created_by, created_at, updated_at, display_no)
+    VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?,?)
   `).bind(
-    id, kstToday(), customer, biz_class,
+    id, plan_date, customer, biz_class,
     String(body.cargo_summary || fb.title || ""),
     String(body.expected_arrival || ""),
     String(body.purpose || ""),
     String(body.remark || fb.content || ""),
-    feedback_id, created_by, t, t
+    feedback_id, created_by, t, t, display_no
   ).run();
 
   // Insert lines if provided
@@ -1471,7 +1504,7 @@ route("v2_feedback_convert_to_inbound", async (body, env) => {
     "UPDATE v2_field_feedbacks SET status='converted', updated_at=? WHERE id=?"
   ).bind(t, feedback_id).run();
 
-  return json({ ok: true, inbound_plan_id: id });
+  return json({ ok: true, inbound_plan_id: id, display_no });
 });
 
 // =====================================================
