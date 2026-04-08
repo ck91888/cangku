@@ -236,6 +236,7 @@ function goTab(tab, btn) {
   if (tab === "issue") loadIssueList();
   if (tab === "outbound") loadOutboundList();
   if (tab === "inbound") loadInboundList();
+  if (tab === "feedback") loadFeedbackList();
 }
 
 function goView(name) {
@@ -253,10 +254,11 @@ async function loadDashboard() {
   grid.innerHTML = '<div class="dash-card"><span class="muted">' + L("loading") + '</span></div>';
 
   // Parallel fetch
-  var [issues, outbounds, inbounds] = await Promise.all([
+  var [issues, outbounds, inbounds, upcoming] = await Promise.all([
     api({ action: "v2_issue_list", status: "" }),
     api({ action: "v2_outbound_order_list", start_date: "", end_date: "" }),
-    api({ action: "v2_inbound_plan_list", start_date: "", end_date: "" })
+    api({ action: "v2_inbound_plan_list", start_date: "", end_date: "" }),
+    api({ action: "v2_inbound_plan_list_upcoming" })
   ]);
 
   var issueItems = (issues && issues.items) || [];
@@ -324,6 +326,34 @@ async function loadDashboard() {
       html += '<div style="font-size:12px;padding:2px 0;">' +
         '<span class="st st-responded">' + esc(stLabel("responded")) + '</span> ' +
         esc(i.issue_summary || i.customer || "--") + '</div>';
+    });
+  } else {
+    html += '<div class="d-empty">' + L("no_data") + '</div>';
+  }
+  html += '</div>';
+
+  // Upcoming inbound card (next 3 working days)
+  var upcomingItems = (upcoming && upcoming.items) || [];
+  var upcomingDates = (upcoming && upcoming.dates) || [];
+  html += '<div class="dash-card" onclick="goTab(\'inbound\')">';
+  html += '<div class="d-title">📅 ' + L("upcoming_inbound") + '</div>';
+  if (upcomingItems.length > 0) {
+    html += '<div class="d-count">' + upcomingItems.length + '</div>';
+    // Group by date
+    var byDate = {};
+    upcomingItems.forEach(function(p) {
+      var d = p.plan_date || "?";
+      if (!byDate[d]) byDate[d] = [];
+      byDate[d].push(p);
+    });
+    upcomingDates.forEach(function(d) {
+      if (!byDate[d]) return;
+      html += '<div style="font-size:11px;font-weight:700;margin-top:4px;">' + esc(d) + '</div>';
+      byDate[d].forEach(function(p) {
+        html += '<div style="font-size:12px;padding:2px 0;">' +
+          '<span class="st st-' + esc(p.status) + '">' + esc(stLabel(p.status)) + '</span> ' +
+          esc(p.customer || "--") + ' ' + esc(p.cargo_summary || "") + '</div>';
+      });
     });
   } else {
     html += '<div class="d-empty">' + L("no_data") + '</div>';
@@ -773,6 +803,40 @@ async function loadInboundList() {
 }
 
 // ===== Inbound Create =====
+// Plan line helpers
+function addIbcLine() {
+  var tbody = document.getElementById("ibcLinesBody");
+  var tr = document.createElement("tr");
+  tr.innerHTML = '<td><select class="ibc-line-type">' +
+    '<option value="container_large">' + L("unit_container_large") + '</option>' +
+    '<option value="container_small">' + L("unit_container_small") + '</option>' +
+    '<option value="pallet">' + L("unit_pallet") + '</option>' +
+    '<option value="carton">' + L("unit_carton") + '</option>' +
+    '<option value="cbm">' + L("unit_cbm") + '</option>' +
+    '</select></td>' +
+    '<td><input type="number" class="ibc-line-qty" value="0" min="0" step="0.1" style="width:70px;"></td>' +
+    '<td><input type="text" class="ibc-line-remark" style="width:100px;"></td>' +
+    '<td><button class="btn btn-outline btn-sm" onclick="this.closest(\'tr\').remove()">×</button></td>';
+  tbody.appendChild(tr);
+}
+
+function getIbcLines() {
+  var rows = document.querySelectorAll("#ibcLinesBody tr");
+  var lines = [];
+  for (var i = 0; i < rows.length; i++) {
+    var type = rows[i].querySelector(".ibc-line-type").value;
+    var qty = parseFloat(rows[i].querySelector(".ibc-line-qty").value) || 0;
+    var remark = rows[i].querySelector(".ibc-line-remark").value.trim();
+    if (qty > 0) lines.push({ unit_type: type, planned_qty: qty, remark: remark });
+  }
+  return lines;
+}
+
+function toggleIbcAutoOb() {
+  var checked = document.getElementById("ibc-auto-ob").checked;
+  document.getElementById("ibcAutoObFields").style.display = checked ? "" : "none";
+}
+
 async function submitInbound() {
   var date = document.getElementById("ibc-date").value || kstToday();
   var customer = document.getElementById("ibc-customer").value.trim();
@@ -781,10 +845,12 @@ async function submitInbound() {
   var arrival = document.getElementById("ibc-arrival").value.trim();
   var purpose = document.getElementById("ibc-purpose").value.trim();
   var remark = document.getElementById("ibc-remark").value.trim();
+  var lines = getIbcLines();
+  var autoOb = document.getElementById("ibc-auto-ob").checked;
 
-  if (!customer) { alert("请填写客户名"); return; }
+  if (!customer) { alert(L("customer") + " " + L("required") + "!"); return; }
 
-  var res = await api({
+  var payload = {
     action: "v2_inbound_plan_create",
     plan_date: date,
     customer: customer,
@@ -793,19 +859,34 @@ async function submitInbound() {
     expected_arrival: arrival,
     purpose: purpose,
     remark: remark,
+    lines: lines,
     created_by: getUser()
-  });
+  };
+
+  if (autoOb) {
+    payload.auto_create_outbound = true;
+    payload.ob_operation_mode = (document.getElementById("ibc-ob-opmode") || {}).value || "";
+    payload.ob_outbound_mode = (document.getElementById("ibc-ob-outmode") || {}).value || "";
+    payload.ob_instruction = (document.getElementById("ibc-ob-instruction") || {}).value || "";
+  }
+
+  var res = await api(payload);
 
   if (res && res.ok) {
-    alert("已创建: " + res.id);
+    var msg = L("success") + ": " + res.id;
+    if (res.outbound_id) msg += "\n" + L("auto_create_outbound") + ": " + res.outbound_id;
+    alert(msg);
     document.getElementById("ibc-customer").value = "";
     document.getElementById("ibc-cargo").value = "";
     document.getElementById("ibc-arrival").value = "";
     document.getElementById("ibc-purpose").value = "";
     document.getElementById("ibc-remark").value = "";
+    document.getElementById("ibcLinesBody").innerHTML = "";
+    document.getElementById("ibc-auto-ob").checked = false;
+    document.getElementById("ibcAutoObFields").style.display = "none";
     goTab("inbound");
   } else {
-    alert("失败: " + (res ? res.error : "unknown"));
+    alert(L("error") + ": " + (res ? res.error : "unknown"));
   }
 }
 
@@ -816,6 +897,18 @@ function openInboundDetail(id) {
   loadInboundDetail();
 }
 
+var UNIT_TYPE_LABELS = {
+  container_large: "unit_container_large",
+  container_small: "unit_container_small",
+  pallet: "unit_pallet",
+  carton: "unit_carton",
+  cbm: "unit_cbm"
+};
+
+function unitTypeLabel(key) {
+  return L(UNIT_TYPE_LABELS[key] || key);
+}
+
 async function loadInboundDetail() {
   var body = document.getElementById("inboundDetailBody");
   if (!body || !_currentInboundId) return;
@@ -823,11 +916,12 @@ async function loadInboundDetail() {
 
   var res = await api({ action: "v2_inbound_plan_detail", id: _currentInboundId });
   if (!res || !res.ok || !res.plan) {
-    body.innerHTML = '<div class="card muted">加载失败</div>';
+    body.innerHTML = '<div class="card muted">' + L("error") + '</div>';
     return;
   }
 
   var p = res.plan;
+  var lines = res.lines || [];
   var jobs = res.jobs || [];
   var atts = res.attachments || [];
 
@@ -844,6 +938,25 @@ async function loadInboundDetail() {
   html += '<div class="detail-field"><b>' + L("submitted_by") + ':</b> ' + esc(p.created_by) + ' · ' + esc(fmtTime(p.created_at)) + '</div>';
   html += '</div>';
 
+  // Plan lines
+  if (lines.length > 0) {
+    html += '<div class="card"><div class="card-title">' + L("plan_lines") + '</div>';
+    html += '<table class="line-table"><thead><tr><th>' + L("biz_class") + '</th><th>' + L("planned_qty") + '</th><th>' + L("actual_qty") + '</th><th>' + L("diff") + '</th></tr></thead><tbody>';
+    lines.forEach(function(ln) {
+      var diff = (ln.actual_qty || 0) - (ln.planned_qty || 0);
+      var diffStr = diff === 0 ? "-" : (diff > 0 ? "+" + diff : "" + diff);
+      var diffClass = diff !== 0 ? ' style="color:#e74c3c;font-weight:700;"' : '';
+      html += '<tr><td>' + esc(unitTypeLabel(ln.unit_type)) + '</td><td>' + ln.planned_qty + '</td><td>' + (ln.actual_qty || 0) + '</td><td' + diffClass + '>' + diffStr + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // QR code for field scanning
+  html += '<div class="card"><div class="card-title">' + L("qr_code") + '</div>';
+  html += '<div id="ibDetailQr" style="text-align:center;"></div>';
+  html += '<div style="text-align:center;margin-top:8px;"><button class="btn btn-outline btn-sm" onclick="printIbQr()">' + L("print") + '</button></div>';
+  html += '</div>';
+
   // Jobs
   if (jobs.length > 0) {
     html += '<div class="card"><div class="card-title">现场执行记录</div>';
@@ -853,9 +966,14 @@ async function loadInboundDetail() {
       html += '<div style="border-bottom:1px solid #f0f0f0;padding:8px 0;font-size:13px;">';
       html += '<span class="st st-' + esc(j.status) + '">' + esc(stLabel(j.status)) + '</span> ';
       html += esc(j.job_type) + ' · ' + esc(j.created_by) + ' · ' + esc(fmtTime(j.created_at));
-      html += ' · 参与:' + (j.active_worker_count || 0) + '人';
-      if (result.box_count) html += ' · 箱:' + result.box_count;
-      if (result.pallet_count) html += ' · 托:' + result.pallet_count;
+      html += ' · ' + (j.active_worker_count || 0) + L("minutes");
+      if (result.result_lines) {
+        try {
+          var rl = typeof result.result_lines === "string" ? JSON.parse(result.result_lines) : result.result_lines;
+          rl.forEach(function(r) { html += ' · ' + unitTypeLabel(r.unit_type) + ':' + r.actual_qty; });
+        } catch(e) {}
+      }
+      if (result.diff_note) html += ' · ' + L("diff_note") + ':' + esc(result.diff_note);
       html += '</div>';
     });
     html += '</div>';
@@ -887,6 +1005,25 @@ async function loadInboundDetail() {
   }
 
   body.innerHTML = html;
+
+  // Render QR
+  try {
+    new QRCode(document.getElementById("ibDetailQr"), {
+      text: p.id,
+      width: 160,
+      height: 160
+    });
+  } catch(e) {}
+}
+
+function printIbQr() {
+  var qrEl = document.getElementById("ibDetailQr");
+  if (!qrEl) return;
+  var win = window.open("", "_blank");
+  win.document.write('<html><head><title>' + _currentInboundId + '</title></head><body style="text-align:center;padding:40px;">' +
+    '<h2>' + esc(_currentInboundId) + '</h2>' + qrEl.innerHTML +
+    '<script>window.print();<\/script></body></html>');
+  win.document.close();
 }
 
 async function updateIbStatus(status) {
@@ -896,6 +1033,127 @@ async function updateIbStatus(status) {
     loadInboundDetail();
   } else {
     alert("失败: " + (res ? res.error : "unknown"));
+  }
+}
+
+// ===== Feedback Module =====
+var _currentFeedbackId = null;
+
+async function loadFeedbackList() {
+  var body = document.getElementById("feedbackListBody");
+  if (!body) return;
+  body.innerHTML = '<div class="card muted">' + L("loading") + '</div>';
+
+  var fbType = (document.getElementById("fbFilterType") || {}).value || "";
+  var fbStatus = (document.getElementById("fbFilterStatus") || {}).value || "";
+  var res = await api({ action: "v2_feedback_list", feedback_type: fbType, status: fbStatus });
+
+  if (!res || !res.ok) {
+    body.innerHTML = '<div class="card muted">' + L("error") + '</div>';
+    return;
+  }
+
+  var items = res.items || [];
+  if (items.length === 0) {
+    body.innerHTML = '<div class="card muted">' + L("no_data") + '</div>';
+    return;
+  }
+
+  var html = '<div class="card">';
+  items.forEach(function(fb) {
+    var typeLabel = fb.feedback_type === "unload_no_doc" ? L("feedback_unload_no_doc") : (fb.feedback_type || L("feedback_general"));
+    html += '<div class="list-item" onclick="openFeedbackDetail(\'' + esc(fb.id) + '\')">';
+    html += '<div class="item-title">';
+    html += '<span class="st st-' + esc(fb.status) + '">' + esc(fb.status === "open" ? L("status_open") : fb.status === "converted" ? L("status_converted") : stLabel(fb.status)) + '</span> ';
+    html += '<span class="biz-tag">' + esc(typeLabel) + '</span> ';
+    html += esc(fb.title || "(无标题)");
+    html += '</div>';
+    html += '<div class="item-meta">' + esc(fb.submitted_by || "") + ' · ' + esc(fmtTime(fb.created_at)) + '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+function openFeedbackDetail(id) {
+  _currentFeedbackId = id;
+  goView("feedback_detail");
+  loadFeedbackDetail();
+}
+
+async function loadFeedbackDetail() {
+  var body = document.getElementById("feedbackDetailBody");
+  if (!body || !_currentFeedbackId) return;
+  body.innerHTML = '<div class="card muted">' + L("loading") + '</div>';
+
+  var res = await api({ action: "v2_feedback_detail", id: _currentFeedbackId });
+  if (!res || !res.ok || !res.feedback) {
+    body.innerHTML = '<div class="card muted">' + L("error") + '</div>';
+    return;
+  }
+
+  var fb = res.feedback;
+  var jobResults = res.job_results || [];
+  var typeLabel = fb.feedback_type === "unload_no_doc" ? L("feedback_unload_no_doc") : (fb.feedback_type || L("feedback_general"));
+
+  var html = '<div class="card">';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:8px;">' + esc(fb.id) + '</div>';
+  html += '<div class="detail-field"><b>' + L("status") + ':</b> <span class="st st-' + esc(fb.status) + '">' + esc(fb.status === "open" ? L("status_open") : fb.status === "converted" ? L("status_converted") : stLabel(fb.status)) + '</span></div>';
+  html += '<div class="detail-field"><b>' + L("feedback_type") + ':</b> ' + esc(typeLabel) + '</div>';
+  html += '<div class="detail-field"><b>标题:</b> ' + esc(fb.title) + '</div>';
+  html += '<div class="detail-field"><b>内容:</b> ' + esc(fb.content) + '</div>';
+  html += '<div class="detail-field"><b>' + L("submitted_by") + ':</b> ' + esc(fb.submitted_by) + ' · ' + esc(fmtTime(fb.created_at)) + '</div>';
+  html += '</div>';
+
+  // Job results
+  if (jobResults.length > 0) {
+    html += '<div class="card"><div class="card-title">卸货结果</div>';
+    jobResults.forEach(function(jr) {
+      html += '<div style="font-size:13px;padding:4px 0;">';
+      try {
+        var rl = JSON.parse(jr.result_lines_json || "[]");
+        rl.forEach(function(r) { html += unitTypeLabel(r.unit_type) + ': ' + r.actual_qty + ' '; });
+      } catch(e) {}
+      if (jr.diff_note) html += '<br>' + L("diff_note") + ': ' + esc(jr.diff_note);
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // Convert action (only for open unload_no_doc)
+  if (fb.status === "open" && fb.feedback_type === "unload_no_doc") {
+    html += '<div class="card"><div class="card-title">' + L("convert_to_inbound") + '</div>';
+    html += '<div class="form-group"><label>' + L("customer") + '</label><input id="fb-conv-customer" type="text"></div>';
+    html += '<div class="form-group"><label>' + L("biz_class") + '</label>';
+    html += '<select id="fb-conv-biz"><option value="direct_ship">' + L("biz_direct_ship") + '</option><option value="bulk">' + L("biz_bulk") + '</option><option value="return">' + L("biz_return") + '</option><option value="import">' + L("biz_import") + '</option></select></div>';
+    html += '<div class="form-group"><label>' + L("cargo_summary") + '</label><input id="fb-conv-cargo" type="text" value="' + esc(fb.title || "") + '"></div>';
+    html += '<button class="btn btn-primary" onclick="convertFeedbackToInbound()">' + L("convert_to_inbound") + '</button>';
+    html += '</div>';
+  }
+
+  body.innerHTML = html;
+}
+
+async function convertFeedbackToInbound() {
+  var customer = (document.getElementById("fb-conv-customer") || {}).value || "";
+  var biz = (document.getElementById("fb-conv-biz") || {}).value || "";
+  var cargo = (document.getElementById("fb-conv-cargo") || {}).value || "";
+  if (!customer.trim()) { alert(L("customer") + " " + L("required") + "!"); return; }
+
+  var res = await api({
+    action: "v2_feedback_convert_to_inbound",
+    feedback_id: _currentFeedbackId,
+    customer: customer.trim(),
+    biz_class: biz,
+    cargo_summary: cargo.trim(),
+    created_by: getUser()
+  });
+
+  if (res && res.ok) {
+    alert(L("success") + ": " + res.inbound_plan_id);
+    goTab("feedback");
+  } else {
+    alert(L("error") + ": " + (res ? res.error : "unknown"));
   }
 }
 

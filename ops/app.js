@@ -13,6 +13,8 @@ var _activeSegId = null;    // my current worker segment
 var _pollTimer = null;
 var _issueFilter = "pending";
 var _currentIssueId = null;
+var _unloadPlanData = null;   // loaded plan detail (plan + lines)
+var _unloadScanner = null;
 var _currentRunId = null;
 var _photoUploadCtx = {};  // { related_doc_type, attachment_category, related_doc_id }
 var _badgeScanner = null;  // Html5Qrcode instance for badge scan
@@ -399,7 +401,16 @@ async function checkMyActiveJob() {
 
 function goMyTask() {
   if (!_activeJobId) return;
-  goPage("job_active", { job_id: _activeJobId });
+  // Get job info from checkMyActiveJob's last result to determine page
+  api({ action: "v2_ops_job_detail", job_id: _activeJobId }).then(function(res) {
+    if (!res || !res.ok || !res.job) { goPage("home"); return; }
+    var jt = res.job.job_type || "";
+    if (jt === "unload") goPage("unload");
+    else if (jt.indexOf("inbound") === 0) goPage("inbound", { job_type: jt, biz_class: res.job.biz_class || "" });
+    else if (jt === "load_outbound") goPage("outbound_load");
+    else if (jt === "issue_handle") goPage("issue_detail");
+    else goPage("generic_job");
+  });
 }
 
 var JOB_TYPE_LABEL = {
@@ -449,9 +460,158 @@ var PRIORITY_LABEL = {
 };
 
 // ===== Unload =====
+var UNIT_TYPES = [
+  { key: "container_large", zh: "大柜", ko: "대형 컨테이너" },
+  { key: "container_small", zh: "小柜", ko: "소형 컨테이너" },
+  { key: "pallet", zh: "托", ko: "팔레트" },
+  { key: "carton", zh: "箱", ko: "박스" },
+  { key: "cbm", zh: "方(CBM)", ko: "CBM" }
+];
+
+function unitLabel(key) {
+  var u = UNIT_TYPES.find(function(t) { return t.key === key; });
+  return u ? u.zh + "/" + u.ko : key;
+}
+
 async function initUnload() {
+  _unloadPlanData = null;
+  stopUnloadScan();
+
+  // If we have an active unload job, jump to working state
+  if (_activeJobId) {
+    var res = await api({ action: "v2_ops_job_detail", job_id: _activeJobId });
+    if (res && res.ok && res.job && res.job.job_type === "unload" && res.job.status === "working") {
+      var planId = res.job.related_doc_id || "";
+      if (planId) {
+        var planRes = await api({ action: "v2_inbound_plan_detail", id: planId });
+        if (planRes && planRes.ok) _unloadPlanData = planRes;
+      }
+      showUnloadWorking(res.job);
+      startJobPoll("unload");
+      return;
+    }
+  }
+
+  // Show entry state
+  showUnloadEntry();
+}
+
+async function showUnloadEntry() {
+  document.getElementById("unloadEntryCard").style.display = "";
+  document.getElementById("unloadPlanCard").style.display = "none";
+  document.getElementById("unloadWorkersCard").style.display = "none";
+  document.getElementById("unloadResultCard").style.display = "none";
   await loadInboundPlans("unloadPlanSelect");
-  startJobPoll("unload");
+}
+
+function showUnloadWorking(job) {
+  document.getElementById("unloadEntryCard").style.display = "none";
+  document.getElementById("unloadWorkersCard").style.display = "";
+  document.getElementById("unloadResultCard").style.display = "";
+
+  // Show plan info if available
+  if (_unloadPlanData && _unloadPlanData.plan) {
+    var p = _unloadPlanData.plan;
+    var lines = _unloadPlanData.lines || [];
+    document.getElementById("unloadPlanCard").style.display = "";
+    document.getElementById("unloadPlanInfo").innerHTML =
+      '<div><b>' + esc(p.id) + '</b> | ' + esc(p.plan_date) + ' | ' + esc(p.customer) + '</div>' +
+      '<div class="muted">' + esc(p.cargo_summary) + (p.remark ? ' — ' + esc(p.remark) : '') + '</div>';
+
+    if (lines.length > 0) {
+      var tbl = '<table class="mini-table"><tr><th>类型/유형</th><th>计划/계획</th></tr>';
+      lines.forEach(function(ln) {
+        tbl += '<tr><td>' + unitLabel(ln.unit_type) + '</td><td>' + ln.planned_qty + '</td></tr>';
+      });
+      tbl += '</table>';
+      document.getElementById("unloadPlanLinesArea").innerHTML = tbl;
+    } else {
+      document.getElementById("unloadPlanLinesArea").innerHTML = '<span class="muted">无明细 / 명세 없음</span>';
+    }
+  } else {
+    document.getElementById("unloadPlanCard").style.display = "none";
+  }
+
+  // Build result lines form
+  buildUnloadResultForm();
+  refreshUnloadWorkers();
+}
+
+function buildUnloadResultForm() {
+  var container = document.getElementById("unloadResultLines");
+  var planLines = (_unloadPlanData && _unloadPlanData.lines) || [];
+
+  if (planLines.length > 0) {
+    // Build form based on plan lines
+    var html = '<table class="mini-table"><tr><th>类型/유형</th><th>计划/계획</th><th>实际/실제</th></tr>';
+    planLines.forEach(function(ln) {
+      html += '<tr><td>' + unitLabel(ln.unit_type) + '</td><td>' + ln.planned_qty + '</td>' +
+        '<td><input type="number" class="unload-actual-input" data-unit="' + esc(ln.unit_type) + '" ' +
+        'value="0" min="0" step="0.1" style="width:70px;" onchange="checkUnloadDiff()"></td></tr>';
+    });
+    html += '</table>';
+    container.innerHTML = html;
+  } else {
+    // No plan — free form with all unit types
+    var html = '<table class="mini-table"><tr><th>类型/유형</th><th>实际数量/실제 수량</th></tr>';
+    UNIT_TYPES.forEach(function(u) {
+      html += '<tr><td>' + u.zh + '/' + u.ko + '</td>' +
+        '<td><input type="number" class="unload-actual-input" data-unit="' + u.key + '" ' +
+        'value="0" min="0" step="0.1" style="width:70px;" onchange="checkUnloadDiff()"></td></tr>';
+    });
+    html += '</table>';
+    container.innerHTML = html;
+  }
+
+  checkUnloadDiff();
+  updateUnloadActions();
+}
+
+function getUnloadResultLines() {
+  var inputs = document.querySelectorAll(".unload-actual-input");
+  var lines = [];
+  for (var i = 0; i < inputs.length; i++) {
+    var qty = parseFloat(inputs[i].value) || 0;
+    if (qty > 0) {
+      lines.push({ unit_type: inputs[i].getAttribute("data-unit"), actual_qty: qty });
+    }
+  }
+  return lines;
+}
+
+function checkUnloadDiff() {
+  var planLines = (_unloadPlanData && _unloadPlanData.lines) || [];
+  var diffArea = document.getElementById("unloadDiffArea");
+  if (planLines.length === 0) { diffArea.style.display = "none"; return; }
+
+  var hasDiff = false;
+  var inputs = document.querySelectorAll(".unload-actual-input");
+  var actualMap = {};
+  for (var i = 0; i < inputs.length; i++) {
+    actualMap[inputs[i].getAttribute("data-unit")] = parseFloat(inputs[i].value) || 0;
+  }
+  planLines.forEach(function(ln) {
+    if ((actualMap[ln.unit_type] || 0) !== (ln.planned_qty || 0)) hasDiff = true;
+  });
+
+  diffArea.style.display = hasDiff ? "" : "none";
+}
+
+async function updateUnloadActions() {
+  var actionsDiv = document.getElementById("unloadActions");
+  if (!_activeJobId) { actionsDiv.innerHTML = ""; return; }
+
+  var res = await api({ action: "v2_ops_job_detail", job_id: _activeJobId });
+  var workerCount = (res && res.ok && res.job) ? res.job.active_worker_count : 1;
+
+  var html = '<button class="btn btn-outline" onclick="unloadLeave()">暂时离开 / 일시 퇴장</button>';
+  if (workerCount <= 1) {
+    html = '<button class="btn btn-success" onclick="unloadComplete()">完成卸货 / 하차 완료</button>' +
+      '<div style="height:8px"></div>' + html;
+  } else {
+    html = '<div class="muted" style="margin-bottom:8px;">还有其他人参与中(' + workerCount + '人/명)，无法完成 / 다른 참여자 있음</div>' + html;
+  }
+  actionsDiv.innerHTML = html;
 }
 
 async function loadInboundPlans(selectId) {
@@ -462,7 +622,7 @@ async function loadInboundPlans(selectId) {
   if (res && res.ok && res.items) {
     res.items.forEach(function(p) {
       if (p.status === "completed" || p.status === "cancelled") return;
-      opts += '<option value="' + esc(p.id) + '">[' + esc(p.status) + '] ' + esc(p.plan_date) + ' ' + esc(p.customer) + ' - ' + esc(p.cargo_summary) + '</option>';
+      opts += '<option value="' + esc(p.id) + '">[' + esc(p.plan_date) + '] ' + esc(p.customer) + ' - ' + esc(p.cargo_summary) + '</option>';
     });
   }
   sel.innerHTML = opts;
@@ -479,9 +639,17 @@ async function startUnload() {
   });
   if (res && res.ok) {
     saveActiveJob(res.job_id, res.worker_seg_id);
+    stopUnloadScan();
+    // Load plan data if planId
+    _unloadPlanData = null;
+    if (planId) {
+      var planRes = await api({ action: "v2_inbound_plan_detail", id: planId });
+      if (planRes && planRes.ok) _unloadPlanData = planRes;
+    }
     alert(res.is_new_job ? "已创建卸货任务 / 하차 작업 생성됨" : "已加入卸货任务 / 하차 작업 참여됨");
-    document.getElementById("unloadResultCard").style.display = "";
-    refreshUnloadWorkers();
+    var jobRes = await api({ action: "v2_ops_job_detail", job_id: res.job_id });
+    if (jobRes && jobRes.ok) showUnloadWorking(jobRes.job);
+    startJobPoll("unload");
   } else {
     alert("失败/실패: " + (res ? res.error : "unknown"));
   }
@@ -492,32 +660,132 @@ function startUnloadNoPlan() {
   startUnload();
 }
 
-async function finishUnload() {
-  if (!_activeJobId) { alert("没有进行中的任务 / 진행 중인 작업 없음"); return; }
-  var box = parseInt(document.getElementById("unloadBoxCount").value) || 0;
-  var pallet = parseInt(document.getElementById("unloadPalletCount").value) || 0;
-  var remark = document.getElementById("unloadRemark").value.trim();
+function startUnloadScan() {
+  if (_unloadScanner) { stopUnloadScan(); return; }
+  var readerEl = document.getElementById("unloadScanReader");
+  readerEl.innerHTML = "";
+  try {
+    _unloadScanner = new Html5Qrcode("unloadScanReader");
+    _unloadScanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 150 } },
+      function(decoded) {
+        stopUnloadScan();
+        // Try to find matching plan
+        var sel = document.getElementById("unloadPlanSelect");
+        var found = false;
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === decoded) {
+            sel.value = decoded;
+            found = true;
+            break;
+          }
+        }
+        if (found) {
+          startUnload();
+        } else {
+          alert("未找到匹配入库计划 / 일치하는 입고계획 없음: " + decoded);
+        }
+      },
+      function() {} // ignore scan errors
+    ).catch(function(e) {
+      alert("摄像头启动失败 / 카메라 시작 실패: " + e);
+      _unloadScanner = null;
+    });
+  } catch(e) {
+    alert("扫码不可用 / 스캔 불가: " + e.message);
+  }
+}
 
+function stopUnloadScan() {
+  if (_unloadScanner) {
+    try { _unloadScanner.stop(); } catch(e) {}
+    _unloadScanner = null;
+    var el = document.getElementById("unloadScanReader");
+    if (el) el.innerHTML = "";
+  }
+}
+
+async function unloadLeave() {
+  if (!_activeJobId) return;
+  if (!confirm("确认暂时离开？/ 일시 퇴장하시겠습니까?")) return;
   var res = await api({
     action: "v2_unload_job_finish",
     job_id: _activeJobId,
     worker_id: getWorkerId(),
-    box_count: box,
-    pallet_count: pallet,
-    remark: remark,
-    complete_job: true
+    leave_only: true
   });
   if (res && res.ok) {
-    alert("卸货已完成 / 하차 완료");
     clearActiveJob();
+    _unloadPlanData = null;
     goPage("home");
   } else {
     alert("失败/실패: " + (res ? res.error : "unknown"));
   }
 }
 
-async function saveUnloadResult() {
-  await finishUnload();
+async function unloadComplete() {
+  if (!_activeJobId) return;
+  var resultLines = getUnloadResultLines();
+  if (resultLines.length === 0) {
+    alert("请至少填写一项实际数量 / 실제 수량을 최소 1건 입력하세요");
+    return;
+  }
+
+  // Check diff note
+  var planLines = (_unloadPlanData && _unloadPlanData.lines) || [];
+  var diffNote = (document.getElementById("unloadDiffNote") || {}).value || "";
+  diffNote = diffNote.trim();
+  if (planLines.length > 0) {
+    var hasDiff = false;
+    var actualMap = {};
+    resultLines.forEach(function(r) { actualMap[r.unit_type] = r.actual_qty; });
+    planLines.forEach(function(ln) {
+      if ((actualMap[ln.unit_type] || 0) !== (ln.planned_qty || 0)) hasDiff = true;
+    });
+    if (hasDiff && !diffNote) {
+      alert("计划与实际有差异，请填写差异说明 / 계획과 실제에 차이가 있어 차이 설명을 입력해주세요");
+      return;
+    }
+  }
+
+  var remark = (document.getElementById("unloadRemark") || {}).value || "";
+  var res = await api({
+    action: "v2_unload_job_finish",
+    job_id: _activeJobId,
+    worker_id: getWorkerId(),
+    result_lines: resultLines,
+    diff_note: diffNote,
+    remark: remark.trim(),
+    complete_job: true
+  });
+
+  if (res && res.ok) {
+    var msg = "卸货已完成 / 하차 완료";
+    if (res.no_doc) msg += "\n（无单卸货已自动生成反馈 / 서류 없는 하차 피드백 자동 생성됨）";
+    alert(msg);
+    clearActiveJob();
+    _unloadPlanData = null;
+    goPage("home");
+  } else if (res && res.error === "others_still_working") {
+    alert("还有" + res.active_count + "人参与��，无法完成 / 아직 " + res.active_count + "명 참여 중, 완료 불가");
+  } else if (res && res.error === "empty_result") {
+    alert(res.message || "至少填写一项实际数量");
+  } else if (res && res.error === "diff_note_required") {
+    alert(res.message || "请填写差异说明");
+  } else {
+    alert("失败/실패: " + (res ? res.error : "unknown"));
+  }
+}
+
+function unloadGoBack() {
+  if (_activeJobId) {
+    if (confirm("离开将暂停当前任务 / 퇴장 시 현재 작업이 일시정지됩니다. 确认？/ 확인?")) {
+      unloadLeave();
+    }
+  } else {
+    goPage("home");
+  }
 }
 
 async function refreshUnloadWorkers() {
@@ -525,6 +793,7 @@ async function refreshUnloadWorkers() {
   var res = await api({ action: "v2_ops_job_detail", job_id: _activeJobId });
   if (res && res.ok) {
     renderWorkers("unloadWorkers", res.workers);
+    updateUnloadActions();
   }
 }
 

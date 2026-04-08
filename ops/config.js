@@ -144,6 +144,21 @@ var I18N = {
   badge_format_hint: { zh: "格式: EMP-001|张三 / DA-20260407-01|名字 / DAF-01|名字", ko: "형식: EMP-001|이름 / DA-20260407-01|이름 / DAF-01|이름" },
   badge_ok: { zh: "工牌已识别", ko: "명찰 인식됨" },
   worker_setup: { zh: "设置操作员", ko: "작업자 설정" },
+
+  // -- Unit types --
+  unit_container_large: { zh: "大柜", ko: "대형 컨테이너" },
+  unit_container_small: { zh: "小柜", ko: "소형 컨테이너" },
+  unit_pallet: { zh: "托", ko: "팔레트" },
+  unit_carton: { zh: "箱", ko: "박스" },
+  unit_cbm: { zh: "方(CBM)", ko: "CBM" },
+  planned_qty: { zh: "计划数量", ko: "계획 수량" },
+  actual_qty: { zh: "实际数量", ko: "실제 수량" },
+  diff: { zh: "差异", ko: "차이" },
+  diff_note: { zh: "差异说明", ko: "차이 설명" },
+  complete_unload: { zh: "完成卸货", ko: "하차 완료" },
+  leave_temp: { zh: "暂时离开", ko: "일시 퇴장" },
+  no_doc_unload: { zh: "无单临时卸货", ko: "서류 없이 임시 하차" },
+  scan_plan: { zh: "扫码选单", ko: "QR 스캔" },
 };
 
 // ===== Bilingual display helper =====

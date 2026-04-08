@@ -250,13 +250,37 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_v2_outbound_date ON v2_outbound_orders(order_date)`,
   `CREATE INDEX IF NOT EXISTS idx_v2_scan_batch_items_batch ON v2_scan_batch_items(batch_id)`,
   `CREATE INDEX IF NOT EXISTS idx_v2_outbound_lines_order ON v2_outbound_order_lines(order_id)`,
+
+  // ---- Round 2 migrations ----
+  // v2_inbound_plan_lines
+  `CREATE TABLE IF NOT EXISTS v2_inbound_plan_lines (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT,
+    line_no INTEGER DEFAULT 0,
+    unit_type TEXT DEFAULT '',
+    planned_qty REAL DEFAULT 0,
+    actual_qty REAL DEFAULT 0,
+    remark TEXT DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_v2_ipl_plan ON v2_inbound_plan_lines(plan_id)`,
+
+  // ALTER — each wrapped in try-catch by ensureMigrated
+  `ALTER TABLE v2_inbound_plans ADD COLUMN source_feedback_id TEXT DEFAULT ''`,
+  `ALTER TABLE v2_outbound_orders ADD COLUMN source_inbound_plan_id TEXT DEFAULT ''`,
+  `ALTER TABLE v2_ops_job_results ADD COLUMN diff_note TEXT DEFAULT ''`,
+  `ALTER TABLE v2_ops_job_results ADD COLUMN result_lines_json TEXT DEFAULT '[]'`,
 ];
 
 let _migrated = false;
 async function ensureMigrated(db) {
   if (_migrated) return;
   for (const sql of MIGRATIONS) {
-    await db.prepare(sql).run();
+    try {
+      await db.prepare(sql).run();
+    } catch (e) {
+      // ALTER TABLE may fail if column already exists — ignore
+      if (!sql.trim().toUpperCase().startsWith("ALTER")) throw e;
+    }
   }
   _migrated = true;
 }
@@ -677,6 +701,10 @@ route("v2_inbound_plan_create", async (body, env) => {
   if (!isAuth(body, env)) return err("unauthorized", 401);
   const id = "IB-" + uid();
   const t = now();
+  const customer = String(body.customer || "");
+  const biz_class = String(body.biz_class || "");
+  const created_by = String(body.created_by || "");
+
   await env.DB.prepare(`
     INSERT INTO v2_inbound_plans(id, plan_date, customer, biz_class, cargo_summary,
       expected_arrival, purpose, remark, status, created_by, created_at, updated_at)
@@ -684,16 +712,45 @@ route("v2_inbound_plan_create", async (body, env) => {
   `).bind(
     id,
     String(body.plan_date || kstToday()),
-    String(body.customer || ""),
-    String(body.biz_class || ""),
+    customer, biz_class,
     String(body.cargo_summary || ""),
     String(body.expected_arrival || ""),
     String(body.purpose || ""),
     String(body.remark || ""),
-    String(body.created_by || ""),
-    t, t
+    created_by, t, t
   ).run();
-  return json({ ok: true, id });
+
+  // Insert plan lines
+  const lines = body.lines || [];
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    await env.DB.prepare(`
+      INSERT INTO v2_inbound_plan_lines(id, plan_id, line_no, unit_type, planned_qty, remark)
+      VALUES(?,?,?,?,?,?)
+    `).bind("IPL-" + uid(), id, i + 1, String(ln.unit_type || ""), Number(ln.planned_qty || 0), String(ln.remark || "")).run();
+  }
+
+  // Auto-create outbound order if requested
+  let outbound_id = null;
+  if (body.auto_create_outbound) {
+    outbound_id = "OB-" + uid();
+    await env.DB.prepare(`
+      INSERT INTO v2_outbound_orders(id, order_date, customer, biz_class, operation_mode,
+        outbound_mode, instruction, remark, status, source_inbound_plan_id, created_by, created_at, updated_at)
+      VALUES(?,?,?,?,?,?,?,?,'draft',?,?,?,?)
+    `).bind(
+      outbound_id,
+      String(body.plan_date || kstToday()),
+      customer, biz_class,
+      String(body.ob_operation_mode || ""),
+      String(body.ob_outbound_mode || ""),
+      String(body.ob_instruction || ""),
+      String(body.ob_remark || ""),
+      id, created_by, t, t
+    ).run();
+  }
+
+  return json({ ok: true, id, outbound_id });
 });
 
 route("v2_inbound_plan_list", async (body, env) => {
@@ -718,6 +775,9 @@ route("v2_inbound_plan_detail", async (body, env) => {
   if (!id) return err("missing id");
   const row = await env.DB.prepare("SELECT * FROM v2_inbound_plans WHERE id=?").bind(id).first();
   if (!row) return err("not found", 404);
+  const planLines = await env.DB.prepare(
+    "SELECT * FROM v2_inbound_plan_lines WHERE plan_id=? ORDER BY line_no"
+  ).bind(id).all();
   const jobs = await env.DB.prepare(
     "SELECT * FROM v2_ops_jobs WHERE related_doc_type='inbound_plan' AND related_doc_id=? ORDER BY created_at DESC"
   ).bind(id).all();
@@ -727,9 +787,31 @@ route("v2_inbound_plan_detail", async (body, env) => {
   return json({
     ok: true,
     plan: row,
+    lines: planLines.results || [],
     jobs: jobs.results || [],
     attachments: atts.results || []
   });
+});
+
+// Upcoming inbound plans (next 3 working days, skip Sundays)
+route("v2_inbound_plan_list_upcoming", async (body, env) => {
+  if (!isAuth(body, env)) return err("unauthorized", 401);
+  const today = kstToday();
+  // Compute next 3 working days (skip Sundays)
+  const dates = [today];
+  let d = new Date(today + "T00:00:00+09:00");
+  while (dates.length < 4) {
+    d.setDate(d.getDate() + 1);
+    if (d.getDay() !== 0) { // 0=Sunday
+      dates.push(d.toISOString().slice(0, 10));
+    }
+  }
+  const first = dates[0];
+  const last = dates[dates.length - 1];
+  const rs = await env.DB.prepare(
+    "SELECT * FROM v2_inbound_plans WHERE plan_date>=? AND plan_date<=? AND status NOT IN ('completed','cancelled') ORDER BY plan_date ASC, created_at ASC"
+  ).bind(first, last).all();
+  return json({ ok: true, items: rs.results || [], dates });
 });
 
 route("v2_inbound_plan_update_status", async (body, env) => {
@@ -800,45 +882,136 @@ route("v2_unload_job_finish", async (body, env) => {
   if (!isOpsAuth(body, env)) return err("unauthorized", 401);
   const job_id = String(body.job_id || "").trim();
   const worker_id = String(body.worker_id || "").trim();
-  const complete_job = body.complete_job === true;
   if (!job_id) return err("missing job_id");
 
   const t = now();
-  const box_count = Number(body.box_count || 0);
-  const pallet_count = Number(body.pallet_count || 0);
+  const leave_only = body.leave_only === true;
+  const complete_job = body.complete_job === true;
+  const result_lines = body.result_lines || [];
+  const diff_note = String(body.diff_note || "").trim();
   const remark = String(body.remark || "");
 
-  // Close worker segment
+  // 1. Close this worker's participation segment
   const openSeg = await env.DB.prepare(
     "SELECT * FROM v2_ops_job_workers WHERE job_id=? AND worker_id=? AND left_at='' ORDER BY joined_at DESC LIMIT 1"
   ).bind(job_id, worker_id).first();
   if (openSeg) {
     const minutes = Math.round((Date.now() - new Date(openSeg.joined_at).getTime()) / 60000 * 10) / 10;
     await env.DB.prepare(
-      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason='finished' WHERE id=?"
-    ).bind(t, minutes, openSeg.id).run();
+      "UPDATE v2_ops_job_workers SET left_at=?, minutes_worked=?, leave_reason=? WHERE id=?"
+    ).bind(t, minutes, leave_only ? "leave" : "finished", openSeg.id).run();
   }
 
+  // 2. Decrement active_worker_count
   await env.DB.prepare(
     "UPDATE v2_ops_jobs SET active_worker_count=MAX(0, active_worker_count-1), updated_at=? WHERE id=?"
   ).bind(t, job_id).run();
 
-  if (box_count > 0 || pallet_count > 0 || remark) {
-    const resultJson = JSON.stringify({ box_count, pallet_count, remark });
-    await env.DB.prepare(
-      "UPDATE v2_ops_jobs SET shared_result_json=?, updated_at=? WHERE id=?"
-    ).bind(resultJson, t, job_id).run();
+  // 3. If leave_only → done, no result validation
+  if (leave_only) {
+    return json({ ok: true, left: true });
   }
 
+  // 4. complete_job logic
   if (complete_job) {
+    // Re-read job to get updated active_worker_count
     const job = await env.DB.prepare("SELECT * FROM v2_ops_jobs WHERE id=?").bind(job_id).first();
-    if (job && job.active_worker_count <= 0) {
-      await env.DB.prepare(
-        "UPDATE v2_ops_jobs SET status='completed', updated_at=? WHERE id=?"
-      ).bind(t, job_id).run();
+    if (!job) return err("job not found", 404);
+
+    // 4a. Check if others still working
+    if (job.active_worker_count > 0) {
+      return json({ ok: false, error: "others_still_working", active_count: job.active_worker_count });
     }
+
+    // 4b. Validate result_lines: at least one actual_qty > 0
+    const hasAnyQty = result_lines.some(ln => Number(ln.actual_qty || 0) > 0);
+    if (!hasAnyQty) {
+      return json({ ok: false, error: "empty_result", message: "至少填写一项实际数量" });
+    }
+
+    // 4c. Check diff vs plan and require diff_note
+    const plan_id = job.related_doc_id || "";
+    let hasDiff = false;
+    if (plan_id) {
+      const planLines = await env.DB.prepare(
+        "SELECT * FROM v2_inbound_plan_lines WHERE plan_id=? ORDER BY line_no"
+      ).bind(plan_id).all();
+      const plMap = {};
+      for (const pl of (planLines.results || [])) {
+        plMap[pl.unit_type] = pl.planned_qty || 0;
+      }
+      for (const rl of result_lines) {
+        const planned = plMap[rl.unit_type] || 0;
+        const actual = Number(rl.actual_qty || 0);
+        if (actual !== planned) { hasDiff = true; break; }
+      }
+      // Also check if plan has types not in result
+      for (const pl of (planLines.results || [])) {
+        const found = result_lines.find(r => r.unit_type === pl.unit_type);
+        if (!found && (pl.planned_qty || 0) > 0) { hasDiff = true; break; }
+      }
+    }
+
+    if (hasDiff && !diff_note) {
+      return json({ ok: false, error: "diff_note_required", message: "计划与实际有差异，请填写差异说明" });
+    }
+
+    // 4d. Write result record
+    const result_id = "RES-" + uid();
+    const box_count = Number(body.box_count || 0);
+    const pallet_count = Number(body.pallet_count || 0);
+    await env.DB.prepare(`
+      INSERT INTO v2_ops_job_results(id, job_id, box_count, pallet_count, remark, result_json, result_lines_json, diff_note, created_by, created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)
+    `).bind(result_id, job_id, box_count, pallet_count, remark,
+        JSON.stringify({ box_count, pallet_count, remark }),
+        JSON.stringify(result_lines), diff_note, worker_id, t).run();
+
+    // 4e. Write back actual_qty to plan lines
+    if (plan_id) {
+      for (const rl of result_lines) {
+        await env.DB.prepare(
+          "UPDATE v2_inbound_plan_lines SET actual_qty=? WHERE plan_id=? AND unit_type=?"
+        ).bind(Number(rl.actual_qty || 0), plan_id, String(rl.unit_type || "")).run();
+      }
+    }
+
+    // 4f. Complete job
+    const sharedResult = JSON.stringify({ box_count, pallet_count, remark, result_lines, diff_note });
+    await env.DB.prepare(
+      "UPDATE v2_ops_jobs SET status='completed', shared_result_json=?, updated_at=? WHERE id=?"
+    ).bind(sharedResult, t, job_id).run();
+
+    // Close any remaining open worker segments
+    await env.DB.prepare(
+      "UPDATE v2_ops_job_workers SET left_at=?, leave_reason='job_completed' WHERE job_id=? AND left_at=''"
+    ).bind(t, job_id).run();
+
+    // Update inbound plan status
+    if (plan_id) {
+      await env.DB.prepare(
+        "UPDATE v2_inbound_plans SET status='completed', updated_at=? WHERE id=?"
+      ).bind(t, plan_id).run();
+    }
+
+    // 4g. No-doc unload → auto-create feedback
+    if (!plan_id || plan_id === "") {
+      const fb_id = "FB-" + uid();
+      await env.DB.prepare(`
+        INSERT INTO v2_field_feedbacks(id, feedback_type, related_doc_type, related_doc_id,
+          title, content, submitted_by, status, created_at, updated_at)
+        VALUES(?,?,?,?,?,?,?,'open',?,?)
+      `).bind(fb_id, "unload_no_doc", "ops_job", job_id,
+          "无单卸货结果待转正",
+          "卸货数量: " + JSON.stringify(result_lines) + (diff_note ? " | 备注: " + diff_note : ""),
+          worker_id, t, t).run();
+      return json({ ok: true, result_id, feedback_id: fb_id, no_doc: true });
+    }
+
+    return json({ ok: true, result_id });
   }
 
+  // Neither leave_only nor complete_job — just left
   return json({ ok: true });
 });
 
@@ -1233,10 +1406,78 @@ route("v2_feedback_create", async (body, env) => {
 
 route("v2_feedback_list", async (body, env) => {
   if (!isOpsAuth(body, env)) return err("unauthorized", 401);
-  const rs = await env.DB.prepare(
-    "SELECT * FROM v2_field_feedbacks ORDER BY created_at DESC LIMIT 200"
-  ).all();
+  const feedback_type = String(body.feedback_type || "").trim();
+  const status = String(body.status || "").trim();
+  let sql = "SELECT * FROM v2_field_feedbacks WHERE 1=1";
+  const binds = [];
+  if (feedback_type) { sql += " AND feedback_type=?"; binds.push(feedback_type); }
+  if (status) { sql += " AND status=?"; binds.push(status); }
+  sql += " ORDER BY created_at DESC LIMIT 200";
+  const stmt = env.DB.prepare(sql);
+  const rs = binds.length > 0 ? await stmt.bind(...binds).all() : await stmt.all();
   return json({ ok: true, items: rs.results || [] });
+});
+
+route("v2_feedback_detail", async (body, env) => {
+  if (!isAuth(body, env)) return err("unauthorized", 401);
+  const id = String(body.id || "").trim();
+  if (!id) return err("missing id");
+  const row = await env.DB.prepare("SELECT * FROM v2_field_feedbacks WHERE id=?").bind(id).first();
+  if (!row) return err("not found", 404);
+  // Get related job results if linked to a job
+  let jobResults = [];
+  if (row.related_doc_type === "ops_job" && row.related_doc_id) {
+    const jr = await env.DB.prepare(
+      "SELECT * FROM v2_ops_job_results WHERE job_id=? ORDER BY created_at DESC"
+    ).bind(row.related_doc_id).all();
+    jobResults = jr.results || [];
+  }
+  return json({ ok: true, feedback: row, job_results: jobResults });
+});
+
+route("v2_feedback_convert_to_inbound", async (body, env) => {
+  if (!isAuth(body, env)) return err("unauthorized", 401);
+  const feedback_id = String(body.feedback_id || "").trim();
+  if (!feedback_id) return err("missing feedback_id");
+
+  const fb = await env.DB.prepare("SELECT * FROM v2_field_feedbacks WHERE id=?").bind(feedback_id).first();
+  if (!fb) return err("feedback not found", 404);
+
+  const t = now();
+  const id = "IB-" + uid();
+  const customer = String(body.customer || "");
+  const biz_class = String(body.biz_class || "");
+  const created_by = String(body.created_by || "");
+
+  await env.DB.prepare(`
+    INSERT INTO v2_inbound_plans(id, plan_date, customer, biz_class, cargo_summary,
+      expected_arrival, purpose, remark, status, source_feedback_id, created_by, created_at, updated_at)
+    VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?)
+  `).bind(
+    id, kstToday(), customer, biz_class,
+    String(body.cargo_summary || fb.title || ""),
+    String(body.expected_arrival || ""),
+    String(body.purpose || ""),
+    String(body.remark || fb.content || ""),
+    feedback_id, created_by, t, t
+  ).run();
+
+  // Insert lines if provided
+  const lines = body.lines || [];
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    await env.DB.prepare(`
+      INSERT INTO v2_inbound_plan_lines(id, plan_id, line_no, unit_type, planned_qty, remark)
+      VALUES(?,?,?,?,?,?)
+    `).bind("IPL-" + uid(), id, i + 1, String(ln.unit_type || ""), Number(ln.planned_qty || 0), String(ln.remark || "")).run();
+  }
+
+  // Update feedback status to converted
+  await env.DB.prepare(
+    "UPDATE v2_field_feedbacks SET status='converted', updated_at=? WHERE id=?"
+  ).bind(t, feedback_id).run();
+
+  return json({ ok: true, inbound_plan_id: id });
 });
 
 // =====================================================
