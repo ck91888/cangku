@@ -7,7 +7,7 @@
 // ✅ PACK-like tasks auto create session + auto end after last leave: PACK/退件入库/质检/废弃处理
 // ✅ NEW: 批量出库（流程同入库理货）：start + 扫出库单号(去重计数) + join/leave + end
 
-var LOCK_URL = "https://ck-warehouse-api.ck91888.workers.dev";
+var LOCK_URL = "https://apiold.ck91888.cn";
 
 /** ===== Router ===== */
 var pages = [

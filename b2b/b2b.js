@@ -1,5 +1,5 @@
 // ===== B2B 计划与作业单 =====
-var API_URL = "https://api.ck91888.cn";
+var API_URL = "https://apiold.ck91888.cn";
 var KEY_STORAGE = "b2b_plan_k_v1";
 var B2B_EARLIEST_DAY = "2020-01-01";
 

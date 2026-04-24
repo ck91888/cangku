@@ -8,7 +8,7 @@
 |------|------|------|
 | 前端 (GitHub Pages) | https://ck91888.github.io/cangku | SPA，hash 路由，纯静态 |
 | 管理看板 | https://ck91888.github.io/cangku/leader/ | 只读看板：全局在岗 + 工时汇总 |
-| 后端 API (Cloudflare Worker) | https://ck-warehouse-api.ck91888.workers.dev | 同时绑定自定义域 `api.ck91888.cn` |
+| 后端 API (Cloudflare Worker) | https://apiold.ck91888.cn | 旧域统一入口 |
 | 数据库 | Cloudflare D1 (`ck_warehouse`) | SQLite，存事件/Session/任务状态 |
 | 分布式锁 | Cloudflare Durable Object (`LocksDO`) | 全局单例，工牌并发锁 |
 | 代码仓库 | https://github.com/ck91888/cangku | 前后端同仓 |
